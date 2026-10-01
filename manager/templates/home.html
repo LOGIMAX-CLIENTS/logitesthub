@@ -1,0 +1,129 @@
+{% extends 'base.html' %}
+{% block title %}Home{% endblock %}
+{% block content %}
+<h1 class="h4 mb-1">Home</h1>
+<div class="text-secondary small mb-3">Welcome, {{ me.name }}</div>
+
+<div class="tiles mb-4">
+  <a class="tile" href="{{ url_for('projects') }}"><span class="n">{{ counts.projects }}</span><span>Projects</span></a>
+  <a class="tile" href="{{ cases_url }}"><span class="n">{{ counts.cases }}</span><span>Test cases</span></a>
+  <a class="tile" href="{{ url_for('runs_list') }}"><span class="n">{{ counts.runs }}</span><span>Runs</span></a>
+  <a class="tile" href="{{ url_for('runs_list', status='PASSED') }}"><span class="n t-pass">{{ counts.passed }}</span><span>Passed</span></a>
+  <a class="tile" href="{{ url_for('runs_list', status='FAILED') }}"><span class="n t-fail">{{ counts.failed }}</span><span>Failed</span></a>
+  <a class="tile" href="{{ url_for('runs_list', status='other') }}"><span class="n t-ai">{{ counts.other }}</span><span>Partial / error</span></a>
+</div>
+
+{% if ai_daily %}
+<section class="panel mb-4 uc" id="usageChart" aria-labelledby="ucTitle">
+  <div class="uc-head">
+    <h2 class="uc-title" id="ucTitle">Daily AI Usage</h2>
+    <div class="uc-seg" role="group" aria-label="Measure">
+      <button type="button" class="on" data-m="cost" aria-pressed="true">Cost</button>
+      <button type="button" data-m="tokens" aria-pressed="false">Tokens</button>
+      <button type="button" data-m="calls" aria-pressed="false">Calls</button>
+    </div>
+    <div class="uc-legend">
+      <span><i class="uc-sw-bar"></i>Daily usage</span>
+      <span><i class="uc-sw-avg"></i><b id="ucAvg">-</b> avg / day</span>
+      <a href="{{ url_for('ai_usage') }}">View all usage →</a>
+    </div>
+  </div>
+  <div class="uc-plot" id="ucPlot"></div>
+  <div class="uc-tip" id="ucTip" role="status" hidden></div>
+  <details class="uc-table"><summary>Show as table</summary>
+    <table class="table table-sm mb-0"><thead><tr><th class="text-start">Day</th><th class="text-end">Cost (USD)</th><th class="text-end">Cost (₹)</th><th class="text-end">Tokens</th><th class="text-end">AI calls</th></tr></thead>
+      <tbody>{% for d in ai_daily.days|reverse if d.calls or d.cost %}<tr><td class="text-start">{{ d.day }}</td><td class="text-end">{{ d.cost|usd }}</td><td class="text-end">{{ d.cost|inr(ai_daily.inr) }}</td><td class="text-end">{{ '{:,}'.format(d.tokens) }}</td><td class="text-end">{{ d.calls }}</td></tr>{% else %}<tr><td colspan="5" class="text-secondary text-center">No AI usage in the last 30 days.</td></tr>{% endfor %}</tbody></table>
+  </details>
+  <script type="application/json" id="ucData">{{ ai_daily|tojson }}</script>
+</section>
+{% endif %}
+
+<div class="d-flex justify-content-between align-items-center mb-2">
+  <h2 class="h6 mb-0">Recent runs</h2>
+  <a class="small" href="{{ url_for('projects') }}">Open Test Cases &rarr;</a>
+</div>
+<div class="list">
+  {% for r in recent %}
+  <a class="list-row case-row" href="{{ url_for('case', cid=r.case_id, run=r.id) }}">
+    <span class="badge st-{{ r.status|lower }}">{{ r.status }}</span>
+    <div class="flex-grow-1 min-w-0">
+      <div class="fw-semibold text-truncate">{{ r.title }}</div>
+      <div class="small text-secondary">{{ r.project_name }} · TC-{{ r.tc_no }} · Run #{{ r.id }} by {{ r.run_by or '-' }} · {{ r.started_at }}</div>
+    </div>
+    <div class="small text-secondary text-end">{% if r.total %}{{ r.passed }}/{{ r.total }} passed{% endif %}</div>
+  </a>
+  {% else %}
+  <div class="panel text-secondary">No runs yet. Open a test case and press ▶ Run test.</div>
+  {% endfor %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {   // Daily AI usage: one series of bars + dashed average line, hover tooltip, responsive SVG
+  var box = document.getElementById('usageChart');
+  if (!box) return;
+  var data = JSON.parse(document.getElementById('ucData').textContent), days = data.days, inr = data.inr;
+  var plot = document.getElementById('ucPlot'), tip = document.getElementById('ucTip'), avgEl = document.getElementById('ucAvg');
+  var metric = 'cost', NS = 'http://www.w3.org/2000/svg', MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  function fmt(v, m, long) {
+    v = Number(v) || 0;
+    if (m === 'cost') return '$' + (v >= 1 ? v.toFixed(2) : v >= 0.01 ? v.toFixed(3) : v === 0 ? '0' : v.toFixed(4));
+    if (!long && v >= 1e6) return (v / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+    if (!long && v >= 1e3) return (v / 1e3).toFixed(1).replace(/\.0$/, '') + 'K';
+    return Math.round(v).toLocaleString('en-IN');
+  }
+  function label(d) { var p = d.split('-'); return p[2] + ' ' + MON[+p[1] - 1]; }
+  function niceMax(v) { if (v <= 0) return 1; var e = Math.pow(10, Math.floor(Math.log10(v))), n = v / e; return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 4 ? 4 : n <= 8 ? 8 : 10) * e; }
+  function el(tag, attrs, parent) { var n = document.createElementNS(NS, tag); for (var k in attrs) n.setAttribute(k, attrs[k]); if (parent) parent.appendChild(n); return n; }
+  function draw() {
+    var W = Math.max(plot.clientWidth, 320), H = 240, L = 48, R = 12, T = 12, B = 28, iw = W - L - R, ih = H - T - B;
+    var vals = days.map(function (d) { return d[metric]; }), sum = vals.reduce(function (a, b) { return a + b; }, 0);
+    var avg = sum / days.length, max = niceMax(Math.max.apply(null, vals.concat([avg])));
+    avgEl.textContent = fmt(avg, metric);
+    plot.innerHTML = '';
+    var svg = el('svg', { width: W, height: H, viewBox: '0 0 ' + W + ' ' + H, role: 'img',
+      'aria-label': 'Daily AI ' + metric + ' for the last 30 days; average ' + fmt(avg, metric) + ' per day' }, plot);
+    for (var i = 0; i <= 4; i++) {   // recessive grid + y labels (4 even steps of a nice max)
+      var gv = max * i / 4, gy = T + ih - ih * i / 4;
+      el('line', { x1: L, x2: W - R, y1: gy, y2: gy, class: 'uc-grid' }, svg);
+      el('text', { x: L - 8, y: gy + 4, class: 'uc-axis', 'text-anchor': 'end' }, svg).textContent = fmt(gv, metric);
+    }
+    var step = iw / days.length, bw = Math.max(3, Math.min(22, step - 6)), every = Math.max(1, Math.ceil(46 / step));   // ~46px per date label
+    days.forEach(function (d, i) {
+      var v = d[metric], h = v > 0 ? Math.max(2, ih * v / max) : 0, x = L + i * step + (step - bw) / 2, y = T + ih - h;
+      if (h) {   // 4px rounded top, square at the baseline
+        var r = Math.min(4, bw / 2, h);
+        el('path', { class: 'uc-bar', d: 'M' + x + ',' + (T + ih) + 'V' + (y + r) + 'Q' + x + ',' + y + ' ' + (x + r) + ',' + y +
+          'H' + (x + bw - r) + 'Q' + (x + bw) + ',' + y + ' ' + (x + bw) + ',' + (y + r) + 'V' + (T + ih) + 'Z' }, svg);
+      }
+      var hit = el('rect', { x: L + i * step, y: T, width: step, height: ih, class: 'uc-hit', tabindex: 0,
+        'aria-label': label(d.day) + ': ' + fmt(v, metric, true) }, svg);
+      var show = function () {
+        svg.querySelectorAll('.uc-hit.on').forEach(function (n) { n.classList.remove('on'); }); hit.classList.add('on');
+        tip.innerHTML = '<b>' + label(d.day) + '</b><span>Cost <em>' + fmt(d.cost, 'cost') + ' · ₹' + (d.cost * inr).toFixed(2) +
+          '</em></span><span>Tokens <em>' + fmt(d.tokens, 'tokens', true) + '</em></span><span>AI calls <em>' + d.calls + '</em></span>';
+        tip.hidden = false;
+        var bx = box.getBoundingClientRect(), px = plot.getBoundingClientRect(), cx = px.left - bx.left + L + (i + 0.5) * step;
+        tip.style.left = Math.min(Math.max(cx - tip.offsetWidth / 2, 8), bx.width - tip.offsetWidth - 8) + 'px';
+        tip.style.top = (px.top - bx.top + Math.max(T, y) - tip.offsetHeight - 10) + 'px';
+      };
+      hit.addEventListener('mouseenter', show); hit.addEventListener('focus', show);
+      if (i % every === 0) el('text', { x: L + (i + 0.5) * step, y: H - 8, class: 'uc-axis', 'text-anchor': 'middle' }, svg).textContent = label(d.day);
+    });
+    if (avg > 0) { var ay = T + ih - ih * avg / max; el('line', { x1: L, x2: W - R, y1: ay, y2: ay, class: 'uc-avg' }, svg); }
+    el('line', { x1: L, x2: W - R, y1: T + ih, y2: T + ih, class: 'uc-base' }, svg);
+    if (!sum) el('text', { x: L + iw / 2, y: T + ih / 2, class: 'uc-empty', 'text-anchor': 'middle' }, svg).textContent = 'No AI usage in the last 30 days';
+    svg.addEventListener('mouseleave', function () { tip.hidden = true; svg.querySelectorAll('.uc-hit.on').forEach(function (n) { n.classList.remove('on'); }); });
+  }
+  box.querySelectorAll('.uc-seg button').forEach(function (b) {
+    b.addEventListener('click', function () {
+      metric = b.dataset.m; tip.hidden = true;
+      box.querySelectorAll('.uc-seg button').forEach(function (x) { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); });
+      draw();
+    });
+  });
+  var t; window.addEventListener('resize', function () { clearTimeout(t); t = setTimeout(draw, 120); });
+  draw();
+})();
+</script>
+{% endblock %}

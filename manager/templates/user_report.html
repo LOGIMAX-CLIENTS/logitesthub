@@ -1,0 +1,153 @@
+{% extends 'base.html' %}
+{% macro link(extra={}) -%}
+{{ url_for('reports.users', **dict({'from': d_from, 'to': d_to, 'project': pid or None}, **extra)) }}
+{%- endmacro %}
+{% set who = '(not recorded)' if user == no_user else user %}
+{% block title %}User Report{% endblock %}
+{% block bodyclass %}rep-page{% endblock %}
+{% block crumbs %}<span class="tm-crumbs"><b>User Report</b> <span>/</span> Admin{% if detail %} <span>/</span> {{ who }}{% endif %}</span>{% endblock %}
+{% block content %}
+<div class="rep-head">
+  <div class="rep-title">
+    {% if detail %}<a class="small" href="{{ link() }}">&larr; All users</a>
+    <h1 class="h5 mb-0">{{ who }} · {{ 'Test cases created' if detail == 'cases' else 'Test runs' }}{% if status %} · {{ status|capitalize }}{% endif %}</h1>
+    <span class="text-secondary small">{{ rows|length }} {{ 'test case' if detail == 'cases' else 'run' }}{{ 's' if rows|length != 1 }} from {{ d_from }} to {{ d_to }}{% if rows|length >= 1000 %} (first 1000){% endif %}</span>
+    {% else %}<h1 class="h5 mb-0">User Report</h1>
+    <span class="text-secondary small">Test cases created, test runs and AI tokens per user. Click a number to see the list.</span>
+    {% endif %}
+  </div>
+  <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('reports.users', **dict(request.args, format='csv')) }}">Export CSV</a>
+</div>
+
+<form class="rep-bar panel" method="get" action="{{ url_for('reports.users') }}">
+  {% if detail %}<input type="hidden" name="detail" value="{{ detail }}"><input type="hidden" name="user" value="{{ user }}">{% if status %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
+  <div class="btn-group btn-group-sm" role="group" aria-label="Switch list">
+    <a class="btn btn-outline-secondary {{ 'active' if detail == 'cases' }}" href="{{ link({'detail': 'cases', 'user': user}) }}">Test cases</a>
+    <a class="btn btn-outline-secondary {{ 'active' if detail == 'runs' and not status }}" href="{{ link({'detail': 'runs', 'user': user}) }}">Test runs</a>
+  </div>
+  {% if detail == 'runs' %}
+  <div class="btn-group btn-group-sm flex-wrap" role="group" aria-label="Filter by result">
+    {% for s in statuses %}<a class="btn btn-outline-secondary {{ 'active' if status == s }}" href="{{ link({'detail': 'runs', 'user': user, 'status': s}) }}">{{ s|capitalize }}</a>{% endfor %}
+  </div>
+  {% endif %}{% endif %}
+  <div class="rep-filters">
+    <label for="f1">From</label><input class="form-control form-control-sm" id="f1" type="date" name="from" value="{{ d_from }}" max="{{ d_to }}" required>
+    <label for="f2">To</label><input class="form-control form-control-sm" id="f2" type="date" name="to" value="{{ d_to }}" min="{{ d_from }}" max="{{ today }}" required>
+    <label for="f3">Project</label><select class="form-select form-select-sm" id="f3" name="project"><option value="">All</option>{% for p in projects %}<option value="{{ p.id }}" {{ 'selected' if pid == p.id }}>{{ p.name }}</option>{% endfor %}</select>
+    <button class="btn btn-primary btn-sm">Apply</button><a class="btn btn-link btn-sm px-1" href="{{ url_for('reports.users', detail=detail or None, user=user or None) }}">Reset</a>
+  </div>
+</form>
+
+{% if not detail %}
+<div class="tiles rep-tiles">
+  <div class="tile"><span class="n">{{ total.cases }}</span><span>Test cases created</span></div>
+  <div class="tile"><span class="n">{{ total.runs }}</span><span>Test runs · {{ total.passed }} passed · {{ total.failed }} failed</span></div>
+  <div class="tile"><span class="n">{{ (total.tin + total.tout)|tok }}</span><span>AI tokens · {{ total.calls }} calls</span></div>
+  <div class="tile"><span class="n">{{ total.cost|usd }}</span><span>Estimated AI cost · {{ total.cost|inr(inr) }}</span></div>
+</div>
+
+<div class="panel p-0 mb-0">
+  <div class="au-head"><b>By user</b><span class="small text-secondary">Cases by who created them · runs by who ran them · tokens by who used them · cost is an estimate</span></div>
+  <div class="table-responsive rep-scroll">
+    <table class="table table-sm align-middle mb-0 au-table">
+      <thead><tr><th class="text-start">User</th><th class="text-end">Test cases created</th><th class="text-end">Test runs</th><th class="text-end">Passed</th><th class="text-end">Failed</th><th class="text-end">Other</th><th class="text-end">AI calls</th><th class="text-end">Input tokens</th><th class="text-end">Output tokens</th><th class="text-end">Total tokens</th><th class="text-end">Cost (USD)</th><th class="text-end">Cost (₹)</th></tr></thead>
+      <tbody>
+      {% for r in rows %}
+      <tr>
+        <td class="text-start">{% if r.username %}<b>{{ r.username }}</b>{% if r.name %} <span class="text-secondary">{{ r.name }}</span>{% endif %}{% if not r.is_user %} <span class="text-secondary small">(system)</span>{% endif %}{% else %}<span class="text-secondary">(not recorded)</span>{% endif %}</td>
+        <td class="text-end">{% if r.cases %}<a href="{{ link({'detail': 'cases', 'user': r.key}) }}"><b>{{ r.cases }}</b></a>{% else %}0{% endif %}</td>
+        <td class="text-end">{% if r.runs %}<a href="{{ link({'detail': 'runs', 'user': r.key}) }}"><b>{{ r.runs }}</b></a>{% else %}0{% endif %}</td>
+        <td class="text-end">{% if r.passed %}<a class="t-pass" href="{{ link({'detail': 'runs', 'user': r.key, 'status': 'PASSED'}) }}">{{ r.passed }}</a>{% else %}0{% endif %}</td>
+        <td class="text-end">{% if r.failed %}<a class="t-fail" href="{{ link({'detail': 'runs', 'user': r.key, 'status': 'FAILED'}) }}">{{ r.failed }}</a>{% else %}0{% endif %}</td>
+        <td class="text-end">{{ r.other }}</td>
+        <td class="text-end">{% if r.calls and r.username %}<a href="{{ url_for('ai_usage', **{'from': d_from, 'to': d_to, 'user': r.username, 'project': pid or None}) }}" title="Open in AI Usage">{{ r.calls }}</a>{% else %}{{ r.calls }}{% endif %}</td>
+        <td class="text-end">{{ '{:,}'.format(r.tin) }}</td>
+        <td class="text-end">{{ '{:,}'.format(r.tout) }}</td>
+        <td class="text-end"><b>{{ '{:,}'.format(r.tin + r.tout) }}</b></td>
+        <td class="text-end">{{ r.cost|usd }}</td>
+        <td class="text-end">{{ r.cost|inr(inr) }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="12" class="text-secondary text-center py-4">No users yet.</td></tr>
+      {% endfor %}
+      </tbody>
+      {% if rows %}<tfoot><tr><th class="text-start">Total</th><th class="text-end">{{ total.cases }}</th><th class="text-end">{{ total.runs }}</th><th class="text-end">{{ total.passed }}</th><th class="text-end">{{ total.failed }}</th><th class="text-end">{{ total.other }}</th><th class="text-end">{{ total.calls }}</th><th class="text-end">{{ '{:,}'.format(total.tin) }}</th><th class="text-end">{{ '{:,}'.format(total.tout) }}</th><th class="text-end">{{ '{:,}'.format(total.tin + total.tout) }}</th><th class="text-end">{{ total.cost|usd }}</th><th class="text-end">{{ total.cost|inr(inr) }}</th></tr></tfoot>{% endif %}
+    </table>
+  </div>
+</div>
+
+{% else %}
+<div class="panel p-0 mb-0">
+  <div class="table-responsive rep-scroll">
+    <table class="table table-sm align-middle mb-0 au-table">
+    {% if detail == 'cases' %}
+      <thead><tr><th class="text-start">Test case</th><th class="text-start">Project / folder</th><th class="text-start">Created</th><th class="text-end">Runs</th><th class="text-start">Last result</th><th class="text-end">AI calls</th><th class="text-end">AI tokens</th><th class="text-end">Cost (USD)</th></tr></thead>
+      <tbody>
+      {% for r in rows %}
+      <tr>
+        <td class="text-start"><a href="{{ url_for('case', cid=r.id) }}"><b>TC-{{ r.tc_no }}</b></a> {{ r.title|truncate(80, True, '…') }}</td>
+        <td class="text-start">{{ r.project }}{% if r.folder %} <span class="text-secondary">/ {{ r.folder }}</span>{% endif %}</td>
+        <td class="text-start text-nowrap">{{ r.created_at }}</td>
+        <td class="text-end">{{ r.runs }}</td>
+        <td class="text-start">{% if r.last_status %}<span class="badge st-{{ r.last_status|lower }}">{{ r.last_status }}</span> <span class="small text-secondary">{{ r.last_run|ago }}</span>{% else %}<span class="text-secondary">Never run</span>{% endif %}</td>
+        <td class="text-end">{{ r.calls }}</td>
+        <td class="text-end">{{ '{:,}'.format(r.tok) }}</td>
+        <td class="text-end">{{ r.cost|usd }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8" class="text-secondary text-center py-4">No test cases created by {{ who }} in this period.</td></tr>
+      {% endfor %}
+      </tbody>
+      {% if rows %}<tfoot><tr><th class="text-start" colspan="3">Total</th><th class="text-end">{{ rows|sum(attribute='runs') }}</th><th></th><th class="text-end">{{ rows|sum(attribute='calls') }}</th><th class="text-end">{{ '{:,}'.format(rows|sum(attribute='tok')) }}</th><th class="text-end">{{ (rows|sum(attribute='cost'))|usd }}</th></tr></tfoot>{% endif %}
+    {% else %}
+      <thead><tr><th class="text-end">Run</th><th class="text-start">Test case</th><th class="text-start">Project</th><th class="text-start">Result</th><th class="text-start">Started</th><th class="text-end">Steps passed</th><th class="text-end">Duration</th><th class="text-end">AI calls</th><th class="text-end">AI tokens</th><th class="text-end">Cost (USD)</th></tr></thead>
+      <tbody>
+      {% for r in rows %}
+      <tr>
+        <td class="text-end"><a href="{{ url_for('case', cid=r.case_id, run=r.id) }}"><b>#{{ r.id }}</b></a></td>
+        <td class="text-start"><a href="{{ url_for('case', cid=r.case_id, run=r.id) }}">TC-{{ r.tc_no }}</a> {{ r.title|truncate(70, True, '…') }}{% if r.error %}<div class="small t-fail">{{ r.error }}</div>{% endif %}</td>
+        <td class="text-start">{{ r.project }}</td>
+        <td class="text-start"><span class="badge st-{{ r.status|lower }}">{{ r.status }}</span></td>
+        <td class="text-start text-nowrap">{{ r.started_at }}</td>
+        <td class="text-end">{% if r.total %}{{ r.passed or 0 }}/{{ r.total }}{% else %}-{% endif %}</td>
+        <td class="text-end">{% if r.duration_ms %}{{ r.duration_ms|secs }}{% else %}-{% endif %}</td>
+        <td class="text-end">{{ r.calls }}</td>
+        <td class="text-end">{{ '{:,}'.format(r.tok) }}</td>
+        <td class="text-end">{{ r.cost|usd }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="10" class="text-secondary text-center py-4">No {{ status|lower ~ ' ' if status }}runs by {{ who }} in this period.</td></tr>
+      {% endfor %}
+      </tbody>
+      {% if rows %}<tfoot><tr><th class="text-start" colspan="7">Total</th><th class="text-end">{{ rows|sum(attribute='calls') }}</th><th class="text-end">{{ '{:,}'.format(rows|sum(attribute='tok')) }}</th><th class="text-end">{{ (rows|sum(attribute='cost'))|usd }}</th></tr></tfoot>{% endif %}
+    {% endif %}
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {   // From can't be after To, To can't be after today (the server enforces the same)
+  var f = document.getElementById('f1'), t = document.getElementById('f2');
+  if (!f || !t) return;
+  function sync() { f.max = t.value || t.max; t.min = f.value || ''; }
+  f.addEventListener('change', sync); t.addEventListener('change', sync); sync();
+})();
+(function () {   // table fills the rest of the window, so the heading, filters and tabs stay in view
+  var box = document.querySelector('.rep-scroll');
+  if (!box) return;
+  function fit() {
+    box.style.maxHeight = '';
+    var r = box.getBoundingClientRect(), main = box.closest('main');
+    var below = main ? main.getBoundingClientRect().bottom - r.bottom : 0;   // panel border + page padding under the table
+    var h = window.innerHeight - (r.top + window.scrollY) - below;
+    box.style.maxHeight = Math.max(Math.floor(h) - 1, 240) + 'px';   // very short windows: keep a usable table, the page scrolls instead
+  }
+  fit();
+  window.addEventListener('resize', fit);
+  window.addEventListener('load', fit);                          // web font loaded -> rows got taller
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(fit);
+})();
+</script>
+{% endblock %}

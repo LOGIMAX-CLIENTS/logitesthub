@@ -1,0 +1,26 @@
+# dependencies
+node_modules/
+
+# run output: videos, screenshots, reports (large, may show customer data)
+runs/
+generated/
+
+# LogiTestHub server data: keys, DB credentials, local DB, logs, temp files with passwords
+manager/data/
+*.vars.json
+*.log
+
+# secrets / local settings
+.env
+.env.*
+!.env.example
+*.key
+pm.env
+
+# editor / OS / Python
+*.code-workspace
+.vscode/
+__pycache__/
+*.pyc
+Thumbs.db
+.DS_Store

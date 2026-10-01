@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Logo Options · LogiTestHub</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root { --bg: #f5f6f8; --card: #fff; --ink: #0f1d24; --muted: #667085; --line: #e4e7ec;
+          --navy: #0f2a33; --teal: #0e7c86; --gold: #d4a93a; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: 'Plus Jakarta Sans', system-ui, sans-serif; padding: 32px 16px 48px; }
+  .wrap { max-width: 1180px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; font-weight: 800; letter-spacing: -.01em; }
+  .sub { color: var(--muted); margin: 0 0 28px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 540px), 1fr)); gap: 20px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+  .head { display: flex; align-items: baseline; gap: 10px; padding: 18px 20px 4px; }
+  .tag { font-weight: 800; color: var(--teal); }
+  .name { font-weight: 700; font-size: 17px; }
+  .why { color: var(--muted); font-size: 13.5px; padding: 0 20px 16px; margin: 0; }
+  .stage { display: grid; grid-template-columns: 120px 1fr; gap: 0; border-top: 1px solid var(--line); }
+  .hero { display: flex; align-items: center; justify-content: center; padding: 18px; border-right: 1px solid var(--line); background: #fbfbfc; }
+  .lockups > div { display: flex; align-items: center; gap: 12px; padding: 16px 20px; }
+  .lockups .dark { background: #0b1519; }
+  .word { font-size: 24px; letter-spacing: -.02em; line-height: 1; }
+  .word b { font-weight: 800; } .word span { font-weight: 600; }
+  .word small { display: block; font-size: 10px; letter-spacing: .22em; text-transform: uppercase; font-weight: 600; margin-top: 5px; }
+  .light .word { color: var(--ink); } .light .word span { color: var(--teal); } .light .word small { color: var(--muted); }
+  .dark .word { color: #fff; } .dark .word span { color: var(--gold); } .dark .word small { color: #9aa7ad; }
+  .sizes { display: flex; align-items: flex-end; gap: 18px; padding: 12px 20px 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+  .sizes div { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .tab { display: inline-flex; align-items: center; gap: 6px; background: #e9ecef; border-radius: 8px 8px 0 0; padding: 6px 10px; font-size: 12px; color: #333; }
+  @media (max-width: 560px) { .stage { grid-template-columns: 1fr; } .hero { border-right: 0; border-bottom: 1px solid var(--line); } .word { font-size: 20px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>LogiTestHub · logo options</h1>
+  <p class="sub">Four original marks in deep navy, teal and jewellery gold. Each is shown as an app icon, on light and dark, and at favicon sizes.</p>
+
+  <!-- Reusable symbols: one per option -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <linearGradient id="goldG" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f3d27a"/><stop offset=".55" stop-color="#d4a93a"/><stop offset="1" stop-color="#a97c1c"/></linearGradient>
+      <linearGradient id="navyG" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#16404b"/><stop offset="1" stop-color="#0a1e25"/></linearGradient>
+      <linearGradient id="tealG" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#18a3ad"/><stop offset="1" stop-color="#0b5f68"/></linearGradient>
+
+      <!-- A: Facet Hub - a cut gem drawn as a connected network -->
+      <symbol id="logoA" viewBox="0 0 64 64">
+        <rect width="64" height="64" rx="15" fill="url(#navyG)"/>
+        <g stroke="url(#goldG)" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" fill="none">
+          <path d="M20 20H44L53 30L32 52L11 30Z"/>
+          <path d="M11 30H53M20 20L26 30L32 52M44 20L38 30L32 52M26 30L32 20L38 30"/>
+        </g>
+        <g fill="#fff"><circle cx="20" cy="20" r="2.6"/><circle cx="44" cy="20" r="2.6"/><circle cx="11" cy="30" r="2.6"/><circle cx="53" cy="30" r="2.6"/><circle cx="32" cy="52" r="2.9"/></g>
+        <circle cx="32" cy="20" r="2.6" fill="url(#goldG)"/>
+      </symbol>
+
+      <!-- B: Verified Hex - a hub (hexagon) with a pass tick breaking out of it -->
+      <symbol id="logoB" viewBox="0 0 64 64">
+        <rect width="64" height="64" rx="15" fill="url(#navyG)"/>
+        <path d="M32 11 50.2 21.5V42.5L32 53 13.8 42.5V21.5Z" fill="none" stroke="url(#tealG)" stroke-width="4" stroke-linejoin="round"/>
+        <path d="M21.5 32.5 29 40 52 15" fill="none" stroke="#0a1e25" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M21.5 32.5 29 40 52 15" fill="none" stroke="url(#goldG)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+
+      <!-- C: LT Monogram - L and T sharing one stroke, gold crossbar -->
+      <symbol id="logoC" viewBox="0 0 64 64">
+        <rect width="64" height="64" rx="15" fill="url(#tealG)"/>
+        <path d="M20 15V47H36" fill="none" stroke="#fff" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M29 17H49M39 17V47" fill="none" stroke="url(#goldG)" stroke-width="6.5" stroke-linecap="round"/>
+        <circle cx="46.5" cy="46.5" r="3.4" fill="#fff"/>
+      </symbol>
+
+      <!-- D: Run Orbit - a play button inside an orbit of three connected nodes -->
+      <symbol id="logoD" viewBox="0 0 64 64">
+        <rect width="64" height="64" rx="15" fill="url(#navyG)"/>
+        <circle cx="32" cy="32" r="19" fill="none" stroke="url(#goldG)" stroke-width="2.4" stroke-dasharray="26 7.8" transform="rotate(-78 32 32)"/>
+        <path d="M27 23.5 42 32 27 40.5Z" fill="#fff" stroke="#fff" stroke-width="2.5" stroke-linejoin="round"/>
+        <circle cx="32" cy="13" r="3.6" fill="url(#tealG)" stroke="#0a1e25" stroke-width="1.5"/>
+        <circle cx="48.5" cy="41.5" r="3.6" fill="url(#tealG)" stroke="#0a1e25" stroke-width="1.5"/>
+        <circle cx="15.5" cy="41.5" r="3.6" fill="url(#tealG)" stroke="#0a1e25" stroke-width="1.5"/>
+      </symbol>
+    </defs>
+  </svg>
+
+  <div class="grid">
+    <div class="card">
+      <div class="head"><span class="tag">A</span><span class="name">Facet Hub</span></div>
+      <p class="why">A cut gem drawn as a connected network: jewellery (our domain) + hub (many tests, one place). Most premium, most "Logimax".</p>
+      <div class="stage">
+        <div class="hero"><svg width="88" height="88"><use href="#logoA"/></svg></div>
+        <div class="lockups">
+          <div class="light"><svg width="42" height="42"><use href="#logoA"/></svg><div class="word"><b>Logi</b><span>TestHub</span><small>by Logimax</small></div></div>
+          <div class="dark"><svg width="42" height="42"><use href="#logoA"/></svg><div class="word"><b>Logi</b><span>TestHub</span><small>by Logimax</small></div></div>
+        </div>
+      </div>
+      <div class="sizes"><div><svg width="48" height="48"><use href="#logoA"/></svg>48</div><div><svg width="32" height="32"><use href="#logoA"/></svg>32</div><div><svg width="16" height="16"><use href="#logoA"/></svg>16</div><div><span class="tab"><svg width="16" height="16"><use href="#logoA"/></svg>Home · LogiTestHub</span>browser tab</div></div>
+    </div>
+
+    <div class="card">
+      <div class="head"><span class="tag">B</span><span class="name">Verified Hex</span></div>
+      <p class="why">A hexagon hub with a gold pass tick breaking out of the frame: "tests pass, quality ships". Clear meaning, reads well small.</p>
+      <div class="stage">
+        <div class="hero"><svg width="88" height="88"><use href="#logoB"/></svg></div>
+        <div class="lockups">
+          <div class="light"><svg width="42" height="42"><use href="#logoB"/></svg><div class="word"><b>Logi</b><span>TestHub</span><small>by Logimax</small></div></div>
+          <div class="dark"><svg width="42" height="42"><use href="#logoB"/></svg><div class="word"><b>Logi</b><span>TestHub</span><small>by Logimax</small></div></div>
+        </div>
+      </div>
+      <div class="sizes"><div><svg width="48" height="48"><use href="#logoB"/></svg>48</div><div><svg width="32" height="32"><use href="#logoB"/></svg>32</div><div><svg width="16" height="16"><use href="#logoB"/></svg>16</div><div><span class="tab"><svg width="16" height="16"><use href="#logoB"/></svg>Home · LogiTestHub</span>browser tab</div></div>
+    </div>
+
+    <div class="card">
+      <div class="head"><span class="tag">C</span><span class="name">LT Monogram</span></div>
+      <p class="why">L and T locked together on a teal tile, gold crossbar. Simple, corporate, easy to put on documents and the login page.</p>
+      <div class="stage">
+        <div class="hero"><svg width="88" height="88"><use href="#logoC"/></svg></div>
+        <div class="lockups">
+          <div class="light"><svg width="42" height="42"><use href="#logoC"/></svg><div class="word"><b>Logi</b><span>TestHub</span><small>by Logimax</small></div></div>
+          <div class="dark"><svg width="42" height="42"><use href="#logoC"/></svg><div class="word"><b>Logi</b><span>TestHub</span><small>by Logimax</small></div></div>
+        </div>
+      </div>
+      <div class="sizes"><div><svg width="48" height="48"><use href="#logoC"/></svg>48</div><div><svg width="32" height="32"><use href="#logoC"/></svg>32</div><div><svg width="16" height="16"><use href="#logoC"/></svg>16</div><div><span class="tab"><svg width="16" height="16"><use href="#logoC"/></svg>Home · LogiTestHub</span>browser tab</div></div>
+    </div>
+
+    <div class="card">
+      <div class="head"><span class="tag">D</span><span class="name">Run Orbit</span></div>
+      <p class="why">A play button inside an orbit of three linked nodes: a test run moving through generate, execute and review.</p>
+      <div class="stage">
+        <div class="hero"><svg width="88" height="88"><use href="#logoD"/></svg></div>
+        <div class="lockups">
+          <div class="light"><svg width="42" height="42"><use href="#logoD"/></svg><div class="word"><b>Logi</b><span>TestHub</span><small>by Logimax</small></div></div>
+          <div class="dark"><svg width="42" height="42"><use href="#logoD"/></svg><div class="word"><b>Logi</b><span>TestHub</span><small>by Logimax</small></div></div>
+        </div>
+      </div>
+      <div class="sizes"><div><svg width="48" height="48"><use href="#logoD"/></svg>48</div><div><svg width="32" height="32"><use href="#logoD"/></svg>32</div><div><svg width="16" height="16"><use href="#logoD"/></svg>16</div><div><span class="tab"><svg width="16" height="16"><use href="#logoD"/></svg>Home · LogiTestHub</span>browser tab</div></div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

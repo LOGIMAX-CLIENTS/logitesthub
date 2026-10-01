@@ -1,0 +1,163 @@
+{% extends 'base.html' %}
+{% import '_tr_macros.html' as m with context %}
+{% block title %}Test Runs{% endblock %}
+{% block crumbs %}<span class="tm-crumbs"><b>Test Runs</b></span>{% endblock %}
+{% block content %}
+<div class="trh">
+  <h1 class="trh-title"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M8.5 6H15a3 3 0 0 1 0 6H9a3 3 0 0 0 0 6h6.5"/></svg>Test Runs</h1>
+  <p class="trh-sub">Group test cases and run them together on an environment, now or on a schedule. Each case keeps its own video and steps.</p>
+</div>
+
+<div class="tr-tabs">
+  <a class="{{ 'active' if tab == 'runs' }}" href="{{ url_for('testruns.index') }}">
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M8.5 6H15a3 3 0 0 1 0 6H9a3 3 0 0 0 0 6h6.5"/></svg>Test Runs</a>
+  <a class="{{ 'active' if tab == 'scheduled' }}" href="{{ url_for('testruns.index', tab='scheduled') }}">
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4M8 14h.01M12 14h.01M16 14h.01M8 17.5h.01M12 17.5h.01"/></svg>Scheduled Runs{% if scheds %} <span class="pill">{{ scheds|length }}</span>{% endif %}</a>
+  <a class="tr-tabs-side" href="{{ url_for('runs_list') }}">All single runs →</a>
+</div>
+
+{% if tab == 'runs' %}
+<div class="tb-filters mt-3">
+  <form method="get" class="tb-search">
+    {% if status %}<input type="hidden" name="status" value="{{ status }}">{% endif %}{% if by %}<input type="hidden" name="by" value="{{ by }}">{% endif %}
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+    <input name="q" value="{{ q }}" placeholder="Find a test run…" aria-label="Find a test run">
+  </form>
+  {% set chev %}<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M6 9h12l-6 7z"/></svg>{% endset %}
+  <div class="dropdown"><button class="tb-dd {{ 'set' if status }}" data-bs-toggle="dropdown">Status{% if status %}: {{ {'PASSED': 'Passed', 'FAILED': 'Failed', 'PARTIAL': 'Partial', 'running': 'Running', 'never': 'Never run'}[status] }}{% endif %} {{ chev }}</button>
+    <ul class="dropdown-menu"><li><a class="dropdown-item {{ 'active' if not status }}" href="{{ url_for('testruns.index', q=q or None, by=by or None) }}">All</a></li>
+      {% for k, v in (('PASSED', 'Passed'), ('FAILED', 'Failed'), ('PARTIAL', 'Partial'), ('running', 'Running'), ('never', 'Never run')) %}
+      <li><a class="dropdown-item {{ 'active' if status == k }}" href="{{ url_for('testruns.index', status=k, q=q or None, by=by or None) }}">{{ v }}</a></li>{% endfor %}</ul></div>
+  <div class="dropdown"><button class="tb-dd {{ 'set' if by }}" data-bs-toggle="dropdown">Creator{% if by %}: {{ by }}{% endif %} {{ chev }}</button>
+    <ul class="dropdown-menu"><li><a class="dropdown-item {{ 'active' if not by }}" href="{{ url_for('testruns.index', status=status or None, q=q or None) }}">Anyone</a></li>
+      {% for u in creators %}<li><a class="dropdown-item {{ 'active' if by == u }}" href="{{ url_for('testruns.index', by=u, status=status or None, q=q or None) }}">{{ u }}</a></li>{% endfor %}</ul></div>
+  <button class="btn btn-success tb-add" type="button" data-bs-toggle="modal" data-bs-target="#newRun">Create Test Run</button>
+</div>
+
+<div class="trl">
+  <div class="trl-head">{{ total }} test run{{ 's' if total != 1 }}</div>
+  {% for r in runs %}{% set s = summ.get(r.last_exec) %}
+  <div class="trl-row">
+    {{ m.status_icon(s.status if s else None) }}
+    <div class="trl-main">
+      <a class="trl-name" href="{{ url_for('testruns.detail', tid=r.id) }}">{{ r.name }}</a>
+      <div class="trl-meta">
+        <span>{{ r.project_name }}{% if r.mode == 'fixed' %} · fixed list{% elif r.folder_name %} · {{ r.folder_name }}{% else %} · all folders{% endif %}</span>
+        <span title="Test cases">{{ counts[r.id] }} case{{ 's' if counts[r.id] != 1 }}</span>
+        {% if r.only_ready %}<span class="qa-tag">Ready for QA only</span>{% endif %}
+        <span class="trl-env">{{ r.env_name or 'Default env' }}</span>
+        <span title="Executions">{{ r.n_execs }} run{{ 's' if r.n_execs != 1 }}</span>
+        {% if r.n_sched %}<span class="trl-sched" title="Has an active schedule">⏰ scheduled</span>{% endif %}
+        <span>Updated {{ r.updated_at|ago }} by {{ r.updated_by or r.created_by or '-' }}</span>
+      </div>
+    </div>
+    {{ m.result_bar(s) }}
+    <div class="dropdown">
+      <button class="tm-icon" type="button" data-bs-toggle="dropdown" aria-label="Actions for {{ r.name }}"><svg viewBox="0 0 24 24" width="16" height="16"><circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/></svg></button>
+      <ul class="dropdown-menu dropdown-menu-end">
+        <li><form method="post" action="{{ url_for('testruns.run_now', tid=r.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="dropdown-item">▶ Run now on {{ r.env_name or 'default env' }}</button></form></li>
+        <li><a class="dropdown-item" href="{{ url_for('testruns.detail', tid=r.id, schedule=1) }}">Schedule…</a></li>
+        <li><a class="dropdown-item" href="{{ url_for('testruns.detail', tid=r.id) }}">Open</a></li>
+        <li><hr class="dropdown-divider"></li>
+        <li><form method="post" action="{{ url_for('testruns.delete', tid=r.id) }}" onsubmit="return confirm('Delete Test Run {{ r.name }}? Its schedules stop; past case results stay.')"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="dropdown-item text-danger">Delete</button></form></li>
+      </ul>
+    </div>
+  </div>
+  {% else %}
+  <div class="tr-empty">
+    <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M8.5 6H15a3 3 0 0 1 0 6H9a3 3 0 0 0 0 6h6.5"/></svg>
+    <b>{{ 'No test runs match' if q or status or by else 'Create your first Test Run' }}</b>
+    <span>Group test cases (a folder, only Ready-for-QA cases, or ones you pick on the project page) and run them together.</span>
+    {% if not (q or status or by) %}<button class="btn btn-success btn-sm mt-2" data-bs-toggle="modal" data-bs-target="#newRun">Create Test Run</button>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+{% else %}
+<div class="tb-filters mt-3">
+  <form method="get" class="tb-search"><input type="hidden" name="tab" value="scheduled">
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+    <input name="q" value="{{ q }}" placeholder="Search schedule runs…" aria-label="Search scheduled runs">
+  </form>
+  <button class="btn btn-success tb-add" type="button" data-bs-toggle="modal" data-bs-target="#newSched" {{ 'disabled' if not all_runs }}>Create a Scheduled Run</button>
+</div>
+<div class="trl">
+  {% for s in scheds %}{% set ls = s_summ.get(s.last_exec_id) %}
+  <div class="trl-row {{ 'is-paused' if not s.active }}">
+    <span class="sc-ic {{ 'on' if s.active }}"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/><path d="m9 15 2 2 4-4"/></svg></span>
+    <div class="trl-main">
+      <a class="trl-name" href="{{ url_for('testruns.detail', tid=s.test_run_id) }}">{{ s.run_name }}</a>
+      <div class="trl-meta">
+        <span class="sc-when">{{ describe(s) }}</span>
+        <span class="trl-env">{{ s.env_name or 'Test Run env' }}</span>
+        {% if s.active and s.next_run_at %}<span>Next: <b>{{ s.next_run_at[:16] }}</b> ({{ s.next_run_at|until }})</span>
+        {% else %}<span class="sc-state">{{ 'Paused' if s.next_run_at else 'Finished' }}</span>{% endif %}
+        {% if s.last_run_at %}<span>Last: {{ s.last_run_at|ago }}</span>{% endif %}
+        {% if s.last_note %}<span class="text-secondary" title="{{ s.last_note }}">{{ s.last_note|truncate(60, True, '…') }}</span>{% endif %}
+        <span>by {{ s.created_by }}</span>
+      </div>
+    </div>
+    {% if ls %}<a class="text-decoration-none" href="{{ url_for('testruns.detail', tid=s.test_run_id, exec=s.last_exec_id) }}">{{ m.result_bar(ls) }}</a>{% else %}{{ m.result_bar(None) }}{% endif %}
+    <div class="d-flex gap-1">
+      {% if s.active or s.next_run_at %}<form method="post" action="{{ url_for('testruns.schedule_action', sid=s.id, action='pause' if s.active else 'resume') }}"><input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="btn btn-sm btn-outline-secondary">{{ 'Pause' if s.active else 'Resume' }}</button></form>{% endif %}
+      <form method="post" action="{{ url_for('testruns.schedule_action', sid=s.id, action='delete') }}" onsubmit="return confirm('Delete this schedule?')"><input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="btn btn-sm btn-link text-danger">Delete</button></form>
+    </div>
+  </div>
+  {% else %}
+  <div class="tr-empty">
+    <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/><path d="m9 15 2 2 4-4"/></svg>
+    <b>{{ 'No schedules match' if q else 'Create your first schedule' }}</b>
+    <span>{{ 'Create a Test Run first, then schedule it.' if not all_runs else 'Select a test run to set up automated execution based on your preferred schedule.' }}</span>
+    {% if all_runs and not q %}<button class="btn btn-success btn-sm mt-2" data-bs-toggle="modal" data-bs-target="#newSched">Create a Scheduled Run</button>
+    {% elif not all_runs %}<a class="btn btn-success btn-sm mt-2" href="{{ url_for('testruns.index') }}">Go to Test Runs</a>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<!-- Create Test Run -->
+<div class="modal fade" id="newRun" tabindex="-1" aria-labelledby="newRunTitle" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered"><form class="modal-content tb-modal" method="post" action="{{ url_for('testruns.create') }}">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="modal-header"><h2 class="modal-title h6" id="newRunTitle">Create Test Run</h2><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+    <div class="modal-body">
+      <label class="form-label" for="trName">Name</label>
+      <input class="form-control form-control-sm" id="trName" name="name" maxlength="160" required placeholder="Nightly QA - Retail">
+      <div class="row g-2 mt-1">
+        <div class="col-6"><label class="form-label" for="trProj">Project</label>
+          <select class="form-select form-select-sm" id="trProj" name="project_id" required onchange="trFolders(this.value)">{% for p in projects %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select></div>
+        <div class="col-6" id="trRule" hidden><label class="form-label" for="trFolder">Folder</label>
+          <select class="form-select form-select-sm" id="trFolder" name="folder_id"><option value="">All folders</option>{% for f in folders %}<option value="{{ f.id }}" data-project="{{ f.project_id }}">{{ f.name }}</option>{% endfor %}</select></div>
+      </div>
+      <div class="form-label mt-2">Which test cases</div>
+      <div class="cp-mode">
+        <label><input type="radio" name="selection" value="pick" checked onchange="document.getElementById('trRule').hidden=true"> <b>Pick test cases</b><span>from any folders, next step</span></label>
+        <label><input type="radio" name="selection" value="rule" onchange="document.getElementById('trRule').hidden=false"> <b>By folder</b><span>everything in a folder, picked each time it runs</span></label>
+      </div>
+      <label class="form-label mt-2" for="trEnv">Environment</label>
+      <select class="form-select form-select-sm" id="trEnv" name="env_id">{% for e in env_list %}<option value="{{ e.id }}">{{ e.name }} · {{ e.base_url }}</option>{% endfor %}</select>
+      <label class="form-check mt-3"><input class="form-check-input" type="checkbox" name="only_ready"> When it runs, skip cases not marked <b>Ready for QA</b></label>
+      <div class="small text-secondary mt-2">Cases run one after another in TC order; each one starts when the previous one finishes, pass or fail.</div>
+    </div>
+    <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary">Create</button></div>
+  </form></div>
+</div>
+
+<!-- Create schedule -->
+<div class="modal fade" id="newSched" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">{{ m.schedule_form(all_runs, env_list, days, today, back=url_for('testruns.index', tab='scheduled')) }}</div>
+</div>
+{% endblock %}
+{% block scripts %}
+{{ m.schedule_js() }}
+<script>
+function trFolders(pid) {
+  var sel = document.getElementById('trFolder');
+  sel.querySelectorAll('option[data-project]').forEach(function (o) { o.hidden = o.dataset.project !== String(pid); });
+  if (sel.selectedOptions[0] && sel.selectedOptions[0].hidden) sel.value = '';
+}
+var p = document.getElementById('trProj'); if (p) trFolders(p.value);
+</script>
+{% endblock %}

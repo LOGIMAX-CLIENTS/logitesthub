@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LogiTestHub Logo Options</title>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+:root { --bg:#f4f5f7; --card:#fff; --ink:#101828; --muted:#667085; --line:#e4e7ec; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#0b0f14; --card:#141a22; --ink:#eef1f5; --muted:#98a2b3; --line:#243040; } }
+:root[data-theme="dark"] { --bg:#0b0f14; --card:#141a22; --ink:#eef1f5; --muted:#98a2b3; --line:#243040; }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--ink); font-family:Manrope, system-ui, sans-serif; padding:32px 16px; }
+h1 { margin:0 0 4px; font-size:24px; } .sub { color:var(--muted); margin-bottom:24px; }
+.grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:18px; max-width:1200px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:16px; overflow:hidden; }
+.card h2 { font-size:15px; margin:0; padding:14px 18px 0; } .card p { color:var(--muted); font-size:13px; margin:4px 18px 14px; }
+.stage { display:flex; align-items:center; gap:14px; padding:26px 22px; }
+.stage.dark { background:#0d1b24; } .stage.light { background:#fbfaf7; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+.word { font-size:26px; letter-spacing:-.02em; line-height:1; }
+.word b { font-weight:800; } .word span { font-weight:400; }
+.dark .word { color:#f5efe0; } .dark .word b { background:linear-gradient(90deg,#e9cf85,#c9a227); -webkit-background-clip:text; background-clip:text; color:transparent; }
+.light .word { color:#10242d; } .light .word b { color:#0e5f67; }
+.tag { display:block; font-size:10.5px; letter-spacing:.22em; text-transform:uppercase; margin-top:6px; opacity:.7; font-weight:600; }
+.sizes { display:flex; align-items:end; gap:18px; padding:14px 22px 18px; color:var(--muted); font-size:11px; }
+.sizes div { display:flex; flex-direction:column; align-items:center; gap:6px; }
+.pick { display:inline-block; margin:0 18px 16px; font-size:12px; font-weight:700; color:#0e7c86; }
+</style>
+</head>
+<body>
+<h1>LogiTestHub · Logo options</h1>
+<div class="sub">4 original concepts · navy + champagne gold palette · shown on dark, light and at favicon sizes</div>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f3dc97"/><stop offset=".55" stop-color="#d4af37"/><stop offset="1" stop-color="#a8841c"/></linearGradient>
+    <linearGradient id="navy" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#17404d"/><stop offset="1" stop-color="#0a1c24"/></linearGradient>
+    <linearGradient id="teal" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#22b3a6"/><stop offset="1" stop-color="#0e6f7a"/></linearGradient>
+
+    <!-- A. Facet Check: a cut gem whose lower facets form a tick -->
+    <symbol id="markA" viewBox="0 0 64 64">
+      <rect width="64" height="64" rx="16" fill="url(#navy)"/>
+      <path d="M18 24 25 16h14l7 8-14 26Z" fill="none" stroke="url(#gold)" stroke-width="2.6" stroke-linejoin="round"/>
+      <path d="M18 24h28M25 16l-2 8 9 26M39 16l2 8" fill="none" stroke="url(#gold)" stroke-width="1.4" stroke-linejoin="round" opacity=".55"/>
+      <path d="M23 31.5 30.5 39 45 22" fill="none" stroke="#fff" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+
+    <!-- B. Hub Hexagon: hex frame, 3 test nodes wired into a centre that passes -->
+    <symbol id="markB" viewBox="0 0 64 64">
+      <path d="M32 4 56 18v28L32 60 8 46V18Z" fill="url(#navy)"/>
+      <path d="M32 10 50.5 21v22L32 54 13.5 43V21Z" fill="none" stroke="url(#gold)" stroke-width="2"/>
+      <g stroke="url(#gold)" stroke-width="1.6" opacity=".8"><path d="M32 32 32 15M32 32 47 41M32 32 17 41"/></g>
+      <circle cx="32" cy="15" r="3" fill="url(#gold)"/><circle cx="47" cy="41" r="3" fill="url(#gold)"/><circle cx="17" cy="41" r="3" fill="url(#gold)"/>
+      <circle cx="32" cy="32" r="9" fill="url(#teal)"/>
+      <path d="M28 32.2 31 35.2 36.5 29" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+
+    <!-- C. L-Tick monogram: the L of Logi drawn as one stroke that becomes a check -->
+    <symbol id="markC" viewBox="0 0 64 64">
+      <rect width="64" height="64" rx="18" fill="url(#navy)"/>
+      <path d="M20 14v30h9" fill="none" stroke="url(#gold)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M29 44 34 49 48 30" fill="none" stroke="url(#teal)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="48" cy="18" r="3.5" fill="url(#gold)"/>
+    </symbol>
+
+    <!-- D. Orbit Pass: a centre hub with a run orbiting it, one checkpoint lit -->
+    <symbol id="markD" viewBox="0 0 64 64">
+      <circle cx="32" cy="32" r="30" fill="url(#navy)"/>
+      <ellipse cx="32" cy="32" rx="21" ry="10" transform="rotate(-28 32 32)" fill="none" stroke="url(#gold)" stroke-width="1.8"/>
+      <ellipse cx="32" cy="32" rx="21" ry="10" transform="rotate(28 32 32)" fill="none" stroke="url(#gold)" stroke-width="1.8" opacity=".55"/>
+      <circle cx="32" cy="32" r="7.5" fill="url(#gold)"/>
+      <circle cx="49.5" cy="22" r="6" fill="url(#teal)"/>
+      <path d="M46.8 22.1 48.8 24.1 52.3 20.1" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+  </defs>
+</svg>
+
+<div class="grid">
+  <!-- template repeated per concept -->
+  <div class="card">
+    <h2>A · Facet Check <span class="pick">Recommended</span></h2>
+    <p>A cut gem whose lower facets carry a tick: jewellery ERP + "test passed" in one mark. Most premium, strongest brand story for Logimax's jewellery clients.</p>
+    <div class="stage dark"><svg width="56" height="56"><use href="#markA"/></svg><div class="word"><span>Logi</span><b>TestHub</b><span class="tag">Plan • Test • Track • Deliver</span></div></div>
+    <div class="stage light"><svg width="56" height="56"><use href="#markA"/></svg><div class="word"><span>Logi</span><b>TestHub</b></div></div>
+    <div class="sizes"><div><svg width="48" height="48"><use href="#markA"/></svg>48</div><div><svg width="32" height="32"><use href="#markA"/></svg>32</div><div><svg width="16" height="16"><use href="#markA"/></svg>16</div></div>
+  </div>
+
+  <div class="card">
+    <h2>B · Hub Hexagon</h2>
+    <p>Three test nodes wired into a centre that passes: literally a "hub" of tests. Techy, reads well as a platform icon.</p>
+    <div class="stage dark"><svg width="56" height="56"><use href="#markB"/></svg><div class="word"><span>Logi</span><b>TestHub</b><span class="tag">Plan • Test • Track • Deliver</span></div></div>
+    <div class="stage light"><svg width="56" height="56"><use href="#markB"/></svg><div class="word"><span>Logi</span><b>TestHub</b></div></div>
+    <div class="sizes"><div><svg width="48" height="48"><use href="#markB"/></svg>48</div><div><svg width="32" height="32"><use href="#markB"/></svg>32</div><div><svg width="16" height="16"><use href="#markB"/></svg>16</div></div>
+  </div>
+
+  <div class="card">
+    <h2>C · L-Tick Monogram</h2>
+    <p>The "L" of Logi flows into a check in one stroke. Simplest and clearest at small sizes (favicon, app icon).</p>
+    <div class="stage dark"><svg width="56" height="56"><use href="#markC"/></svg><div class="word"><span>Logi</span><b>TestHub</b><span class="tag">Plan • Test • Track • Deliver</span></div></div>
+    <div class="stage light"><svg width="56" height="56"><use href="#markC"/></svg><div class="word"><span>Logi</span><b>TestHub</b></div></div>
+    <div class="sizes"><div><svg width="48" height="48"><use href="#markC"/></svg>48</div><div><svg width="32" height="32"><use href="#markC"/></svg>32</div><div><svg width="16" height="16"><use href="#markC"/></svg>16</div></div>
+  </div>
+
+  <div class="card">
+    <h2>D · Orbit Pass</h2>
+    <p>A gold core with runs orbiting it and one checkpoint lit. Feels like an AI / automation product; weaker at 16 px.</p>
+    <div class="stage dark"><svg width="56" height="56"><use href="#markD"/></svg><div class="word"><span>Logi</span><b>TestHub</b><span class="tag">Plan • Test • Track • Deliver</span></div></div>
+    <div class="stage light"><svg width="56" height="56"><use href="#markD"/></svg><div class="word"><span>Logi</span><b>TestHub</b></div></div>
+    <div class="sizes"><div><svg width="48" height="48"><use href="#markD"/></svg>48</div><div><svg width="32" height="32"><use href="#markD"/></svg>32</div><div><svg width="16" height="16"><use href="#markD"/></svg>16</div></div>
+  </div>
+</div>
+</body>
+</html>

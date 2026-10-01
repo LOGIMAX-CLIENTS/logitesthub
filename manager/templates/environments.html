@@ -1,0 +1,72 @@
+{% extends 'base.html' %}
+{% block title %}Environments{% endblock %}
+{% block crumbs %}<span class="tm-crumbs"><b>Environments</b> <span>/</span> Admin</span>{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap gap-2 align-items-center justify-content-between mb-3">
+  <div><h1 class="h4 mb-0">Environments</h1>
+    <div class="text-secondary small">Where tests run. Test cases use <code>{{ '{{' }}base_url{{ '}}' }}</code>, <code>{{ '{{' }}username{{ '}}' }}</code>, <code>{{ '{{' }}password{{ '}}' }}</code>, <code>{{ '{{' }}branch{{ '}}' }}</code>; the environment picked for a run fills them in.</div></div>
+  <button class="btn btn-success" type="button" data-bs-toggle="collapse" data-bs-target="#newEnv" aria-expanded="false">+ Add Environment</button>
+</div>
+
+{% macro env_fields(e=None, pre='n') %}
+  <div class="row g-2">
+    <div class="col-md-3"><label class="form-label" for="{{ pre }}Name">Name</label>
+      <input class="form-control form-control-sm" id="{{ pre }}Name" name="name" value="{{ e.name if e else '' }}" maxlength="40" required placeholder="QA"></div>
+    <div class="col-md-9"><label class="form-label" for="{{ pre }}Url">Base URL</label>
+      <input class="form-control form-control-sm" id="{{ pre }}Url" name="base_url" value="{{ e.base_url if e else '' }}" required placeholder="https://qa.retail.logimaxindia.com/admin/"></div>
+    <div class="col-md-3"><label class="form-label" for="{{ pre }}User">Login username</label>
+      <input class="form-control form-control-sm" id="{{ pre }}User" name="username" value="{{ e.username or '' if e else '' }}" autocomplete="off"></div>
+    <div class="col-md-3"><label class="form-label" for="{{ pre }}Pw">Login password</label>
+      <input class="form-control form-control-sm" id="{{ pre }}Pw" name="password" type="password" autocomplete="new-password"
+             placeholder="{{ 'Saved - leave blank to keep' if e and e.has_password else 'Not set' }}"></div>
+    <div class="col-md-3"><label class="form-label" for="{{ pre }}Br">Branch</label>
+      <input class="form-control form-control-sm" id="{{ pre }}Br" name="branch" value="{{ e.branch or '' if e else '' }}" placeholder="All"></div>
+    <div class="col-md-3"><label class="form-label" for="{{ pre }}Note">Note</label>
+      <input class="form-control form-control-sm" id="{{ pre }}Note" name="note" value="{{ e.note or '' if e else '' }}" maxlength="255"></div>
+  </div>
+{% endmacro %}
+
+<div class="collapse mb-3" id="newEnv">
+  <form method="post" class="panel" autocomplete="off">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    {{ env_fields() }}
+    <div class="d-flex gap-2 mt-3"><button class="btn btn-primary btn-sm">Add environment</button>
+      <span class="small text-secondary align-self-center">The password is stored encrypted and never shown again.</span></div>
+  </form>
+</div>
+
+<div class="env-list">
+  {% for e in envs %}
+  <div class="env-card {{ 'is-default' if e.is_default }}">
+    <div class="env-head">
+      <span class="env-dot"></span>
+      <b class="env-name">{{ e.name }}</b>
+      {% if e.is_default %}<span class="env-badge">Default</span>{% endif %}
+      <a class="env-url" href="{{ e.base_url }}" target="_blank" rel="noopener">{{ e.base_url }}</a>
+      <div class="ms-auto d-flex gap-1">
+        <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#edit{{ e.id }}">Edit</button>
+        {% if not e.is_default %}
+        <form method="post" action="{{ url_for('environment_update', eid=e.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="default"><button class="btn btn-sm btn-outline-secondary">Make default</button></form>
+        <form method="post" action="{{ url_for('environment_update', eid=e.id) }}" onsubmit="return confirm('Delete environment {{ e.name }}? Past runs keep its name.')"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="delete"><button class="btn btn-sm btn-link text-danger">Delete</button></form>
+        {% endif %}
+      </div>
+    </div>
+    <div class="env-meta">
+      <span>User <b>{{ e.username or '-' }}</b></span><span>Password <b>{{ 'saved (encrypted)' if e.has_password else 'not set' }}</b></span>
+      <span>Branch <b>{{ e.branch or '-' }}</b></span>{% if e.note %}<span>{{ e.note }}</span>{% endif %}<span>Updated {{ e.updated_at|ago }}</span>
+    </div>
+    <div class="collapse" id="edit{{ e.id }}">
+      <form method="post" action="{{ url_for('environment_update', eid=e.id) }}" class="mt-3" autocomplete="off">
+        <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="save">
+        {{ env_fields(e, 'e' ~ e.id) }}
+        <div class="d-flex flex-wrap gap-3 align-items-center mt-3"><button class="btn btn-primary btn-sm">Save</button>
+          {% if e.has_password %}<label class="small"><input class="form-check-input me-1" type="checkbox" name="clear_password">Remove saved password</label>{% endif %}</div>
+      </form>
+    </div>
+  </div>
+  {% else %}
+  <div class="panel text-secondary">No environments yet. Add one: every run needs a base URL.</div>
+  {% endfor %}
+</div>
+<div class="small text-secondary mt-3">Scheduled runs happen on this server, so they can reach Dev / QA / Live URLs but not a developer's own <code>localhost</code>.</div>
+{% endblock %}

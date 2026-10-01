@@ -1,0 +1,27 @@
+{% extends 'base.html' %}
+{% block title %}Projects{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap gap-2 align-items-center justify-content-between mb-3">
+  <div><h1 class="h4 mb-0">Projects ({{ projects|length }})</h1><div class="text-secondary small">All your test cases, stored by project</div></div>
+  <button class="btn btn-success" data-bs-toggle="collapse" data-bs-target="#newProject">+ Create Project</button>
+</div>
+<div class="collapse mb-3" id="newProject">
+  <form method="post" action="{{ url_for('project_new') }}" class="panel row g-2 align-items-end">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="col-md-4"><label class="form-label">Name</label><input class="form-control" name="name" required></div>
+    <div class="col-md-6"><label class="form-label">Description</label><input class="form-control" name="description"></div>
+    <div class="col-md-2"><button class="btn btn-primary w-100">Create</button></div>
+  </form>
+</div>
+<div class="list">
+  {% for p in projects %}
+  <a class="list-row d-block" href="{{ url_for('project', pid=p.id) }}">
+    <div class="fw-semibold text-primary">{{ p.name }}</div>
+    {% if p.description %}<div class="small text-secondary">{{ p.description }}</div>{% endif %}
+    <div class="small text-secondary mt-1">{{ p.n_cases }} test cases · {{ p.n_runs }} runs{% if p.last_update %} · Updated {{ p.last_update[:10] }}{% endif %}</div>
+  </a>
+  {% else %}
+  <div class="panel text-secondary">No projects yet. Create one, or import existing tests with <code>python manage.py import-folder</code>.</div>
+  {% endfor %}
+</div>
+{% endblock %}

@@ -1,0 +1,191 @@
+{% extends 'base.html' %}
+{% block title %}AI Usage{% endblock %}
+{% block crumbs %}<span class="tm-crumbs"><b>AI Usage</b> <span>/</span> Admin</span>{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap gap-2 align-items-end justify-content-between mb-3">
+  <div>
+    <h1 class="h4 mb-0">AI Usage</h1>
+    <div class="text-secondary small">Claude tokens and estimated cost by test case, user and day. Visible to admins only.</div>
+  </div>
+  <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('ai_usage', **dict(request.args, format='csv')) }}">Export CSV</a>
+</div>
+
+{% set cr = bud.credits %}{% set pl = bud.plan %}
+<section class="panel mb-3 bd" id="budget" aria-labelledby="bdTitle">
+  <div class="d-flex flex-wrap justify-content-between align-items-baseline gap-2 mb-3">
+    <h2 class="h6 mb-0" id="bdTitle">Credits &amp; limits</h2>
+    <span class="small text-secondary">₹ at {{ '%.2f'|format(inr) }} per $ ({{ 'average of your purchases' if cr.entries|selectattr('rate_inr')|list else 'default until you record a purchase rate' }}) · this month {{ bud.month[0] }} to {{ bud.month[1] }} · estimates</span>
+  </div>
+
+  <div class="bd-flow">
+    <!-- 1. credits -->
+    <div class="bd-step">
+      <div class="bd-num">1</div>
+      <div class="bd-label">Anthropic credits</div>
+      {% if cr.entries %}
+      <div class="bd-big">{{ pl.balance_inr|inr(1) }}</div>
+      <div class="bd-sub">balance · {{ cr.remaining_usd|usd }} of {{ cr.added_usd|usd }} ({{ cr.added_usd|inr(inr) }}) added</div>
+      {% set pct = [100, (cr.used_usd / cr.added_usd * 100) if cr.added_usd else 100]|min %}
+      <div class="bd-meter" role="img" aria-label="{{ pct|round|int }}% of credits used"><span style="width: {{ pct }}%" class="{{ 'hot' if pct >= 80 }}"></span></div>
+      {% else %}
+      <div class="bd-big text-secondary">Not added</div>
+      <div class="bd-sub">Add what you bought in the Anthropic Console.</div>
+      {% endif %}
+      <form class="bd-add" method="post" action="{{ url_for('ai_credit_add') }}">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <div class="input-group input-group-sm"><span class="input-group-text">$</span>
+          <input class="form-control" id="crAmt" name="amount_usd" inputmode="decimal" placeholder="20" required aria-label="Credit amount in US dollars"></div>
+        <div class="input-group input-group-sm"><span class="input-group-text">₹ per $</span>
+          <input class="form-control" id="crRate" name="rate_inr" inputmode="decimal" value="{{ '%.2f'|format(inr) }}" required aria-label="Rupees paid for 1 US dollar"></div>
+        <div class="bd-conv" id="crConv" aria-live="polite">= ₹0.00</div>
+        <input class="form-control form-control-sm" type="date" name="date" value="{{ bud.today }}" required aria-label="Date bought">
+        <input class="form-control form-control-sm" name="note" maxlength="255" placeholder="Note (optional)" aria-label="Note">
+        <button class="btn btn-sm btn-primary">Add credits</button>
+      </form>
+      {% if cr.entries %}
+      <details class="bd-hist"><summary>{{ cr.entries|length }} credit entr{{ 'y' if cr.entries|length == 1 else 'ies' }}</summary>
+        {% for e in cr.entries %}<div class="bd-row"><span>{{ e.at[:10] }} · <b>{{ e.amount_usd|usd }}</b> {% if e.rate_inr %}@ ₹{{ '%g'|format(e.rate_inr) }} = {{ e.amount_usd|inr(e.rate_inr) }}{% else %}<span class="t-warn">rate not set</span>{% endif %}{% if e.note %} · {{ e.note }}{% endif %} · by {{ e.added_by }}</span>
+          {% if not e.rate_inr %}<form class="bd-rate" method="post" action="{{ url_for('ai_credit_rate', cid=e.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}">
+            <input class="form-control form-control-sm" name="rate_inr" inputmode="decimal" placeholder="₹ per $" required aria-label="Rupees paid for 1 dollar"><button class="btn btn-sm btn-outline-secondary">Save rate</button></form>{% endif %}
+          <form method="post" action="{{ url_for('ai_credit_delete', cid=e.id) }}" onsubmit="return confirm('Remove this credit entry?')"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn btn-link btn-sm text-danger p-0">Remove</button></form></div>{% endfor %}
+      </details>
+      {% endif %}
+    </div>
+
+    <!-- 2 + 3. limits -->
+    <form class="bd-step bd-limits" method="post" action="{{ url_for('ai_budget_save') }}">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="bd-num">2</div>
+      <label class="bd-label" for="bdOrg">Whole organisation · per month</label>
+      <div class="input-group input-group-sm mt-1"><span class="input-group-text">₹</span><input class="form-control" id="bdOrg" name="org" inputmode="decimal" value="{{ bud.org }}" placeholder="No limit"></div>
+      <div class="bd-sub">{{ pl.org_used_inr|inr(1) }} used this month{% if pl.extras_inr %} · +{{ pl.extras_inr|inr(1) }} extras given{% endif %}{% if pl.balance_inr is not none %} · credits cover up to {{ (pl.balance_inr + pl.org_used_inr - pl.extras_inr)|inr(1) }}{% endif %}</div>
+
+      <div class="bd-num mt-3">3</div>
+      <label class="bd-label" for="bdUser">Default per user · per month</label>
+      <div class="input-group input-group-sm mt-1"><span class="input-group-text">₹</span><input class="form-control" id="bdUser" name="user_default" inputmode="decimal" value="{{ bud.user_default }}" placeholder="No limit"></div>
+      <div class="bd-sub">{% if pl.default_inr is not none %}{{ pl.n_default_users }} user{{ 's' if pl.n_default_users != 1 }} on the default × {{ pl.default_inr|inr(1) }} = <b>{{ pl.default_total_inr|inr(1) }}</b>{% if pl.org_inr is not none %}{% if pl.default_total_inr > pl.org_inr %} · <span class="t-warn">more than the organisation limit: not everyone can use their full limit</span>{% else %} · fits the organisation limit{% endif %}.{% endif %}{% else %}Everyone without their own limit can use AI up to the organisation limit.{% endif %} Own limits: <a href="{{ url_for('users') }}">Users</a>.</div>
+      <button class="btn btn-sm btn-primary mt-3">Save limits</button>
+    </form>
+
+    <!-- 4. reserve -->
+    <div class="bd-step bd-reserve">
+      <div class="bd-num">4</div>
+      <div class="bd-label">Reserve · kept aside</div>
+      {% if pl.reserve_inr is not none %}
+      <div class="bd-big {{ 't-fail' if pl.reserve_inr <= 0 }}">{{ [pl.reserve_inr, 0]|max|inr(1) }}</div>
+      <div class="bd-calc">
+        <span>Credit balance</span><b>{{ pl.balance_inr|inr(1) }}</b>
+        <span>− Still available to the team this month</span><b>{{ pl.promised_left_inr|inr(1) }}</b>
+        <span class="bd-calc-total">= Reserve</span><b class="bd-calc-total">{{ pl.reserve_inr|inr(1) }}</b>
+      </div>
+      <div class="bd-sub">When a user reaches their limit, give them an extra from here on the <a href="{{ url_for('users') }}">Users</a> page (⋯ → Add extra). Extras cannot be more than the reserve.</div>
+      {% if pl.org_inr is none %}<div class="bd-sub t-warn">Set an organisation limit (step 2) so part of the credits stays in reserve.</div>{% endif %}
+      {% else %}
+      <div class="bd-big text-secondary">—</div>
+      <div class="bd-sub">Add credits (step 1) to see how much stays in reserve for extras.</div>
+      {% endif %}
+    </div>
+  </div>
+  <div class="bd-sub mt-3">When a limit is reached, Generate with AI and AI calls from the CLI / IDE are refused with a "limit reached" message; test runs still run their normal steps and skip AI steps.</div>
+</section>
+
+<form class="au-filters panel mb-3" method="get">
+  <div><label class="form-label" for="f1">From</label><input class="form-control form-control-sm" id="f1" type="date" name="from" value="{{ d_from }}"></div>
+  <div><label class="form-label" for="f2">To</label><input class="form-control form-control-sm" id="f2" type="date" name="to" value="{{ d_to }}"></div>
+  <div><label class="form-label" for="f3">Project</label><select class="form-select form-select-sm" id="f3" name="project"><option value="">All</option>{% for p in projects %}<option value="{{ p.id }}" {{ 'selected' if pid == p.id }}>{{ p.name }}</option>{% endfor %}</select></div>
+  <div><label class="form-label" for="f4">User</label><select class="form-select form-select-sm" id="f4" name="user"><option value="">All</option>{% for u in users %}<option {{ 'selected' if user == u }}>{{ u }}</option>{% endfor %}</select></div>
+  <div><label class="form-label" for="f5">Used for</label><select class="form-select form-select-sm" id="f5" name="kind"><option value="">All</option><option value="run" {{ 'selected' if kind == 'run' }}>AI steps in runs</option><option value="generate" {{ 'selected' if kind == 'generate' }}>Generate with AI</option><option value="cli-step" {{ 'selected' if kind == 'cli-step' }}>AI steps from CLI / IDE</option></select></div>
+  <div class="au-btns"><button class="btn btn-primary btn-sm">Apply</button><a class="btn btn-link btn-sm" href="{{ url_for('ai_usage') }}">Reset</a></div>
+</form>
+
+<div class="tiles mb-3">
+  <div class="tile"><span class="n">{{ totals.cost|usd }}</span><span>Estimated cost · {{ totals.cost|inr(inr) }}</span></div>
+  <div class="tile"><span class="n">{{ totals.calls or 0 }}</span><span>AI calls</span></div>
+  <div class="tile"><span class="n">{{ totals.tin|tok }}</span><span>Input tokens</span></div>
+  <div class="tile"><span class="n">{{ totals.tout|tok }}</span><span>Output tokens</span></div>
+  <div class="tile"><span class="n">{{ totals.tcache|tok }}</span><span>Cache tokens</span></div>
+  <div class="tile"><span class="n">{{ totals.cases or 0 }}</span><span>Test cases using AI</span></div>
+</div>
+
+{% if by_day %}
+{% set peak = by_day|map(attribute='cost')|max or 0.0000001 %}
+<div class="panel mb-3">
+  <div class="d-flex justify-content-between mb-2"><b>Cost per day</b><span class="small text-secondary">{{ d_from }} to {{ d_to }}</span></div>
+  <div class="au-bars">
+    {% for d in by_day %}
+    <div class="au-bar" title="{{ d.day }}: {{ d.cost|usd }} · {{ d.calls }} calls · {{ (d.tin or 0) + (d.tout or 0) }} tokens">
+      <span style="height: {{ [((d.cost or 0) / peak * 100)|round(1), 2]|max }}%"></span><small>{{ d.day[5:] }}</small></div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<div class="panel p-0 mb-3">
+  <div class="au-head"><b>By test case</b><span class="small text-secondary">Highest cost first</span></div>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0 au-table">
+      <thead><tr><th class="text-start">Test case</th><th class="text-start">Project</th><th class="text-end">Runs with AI</th><th class="text-end">Generated</th><th class="text-end">AI calls</th><th class="text-end">Input</th><th class="text-end">Output</th><th class="text-end">Cost (USD)</th><th class="text-end">Cost (₹)</th><th class="text-start">Last used</th></tr></thead>
+      <tbody>
+      {% for r in by_case %}
+      <tr>
+        <td class="text-start">{% if r.tc_no %}<a href="{{ url_for('case', cid=r.case_id) }}"><b>TC-{{ r.tc_no }}</b></a> <span class="text-secondary">{{ r.title|truncate(60, True, '…') }}</span>{% else %}<span class="text-secondary">(deleted test case)</span>{% endif %}</td>
+        <td class="text-start">{{ r.project or '-' }}</td>
+        <td class="text-end">{{ r.runs }}</td><td class="text-end">{{ 'Yes' if r.gens else '' }}</td>
+        <td class="text-end">{{ r.calls or 0 }}</td>
+        <td class="text-end">{{ '{:,}'.format(r.tin or 0) }}</td><td class="text-end">{{ '{:,}'.format(r.tout or 0) }}</td>
+        <td class="text-end">{{ r.cost|usd }}</td><td class="text-end">{{ r.cost|inr(inr) }}</td>
+        <td class="text-start">{{ r.last_at|ago }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="10" class="text-secondary text-center py-4">No AI usage in this period. Usage appears after runs with AI steps or Generate with AI (needs API credits).</td></tr>
+      {% endfor %}
+      </tbody>
+      {% if by_case %}<tfoot><tr><th class="text-start" colspan="4">Total</th><th class="text-end">{{ totals.calls or 0 }}</th><th class="text-end">{{ '{:,}'.format(totals.tin or 0) }}</th><th class="text-end">{{ '{:,}'.format(totals.tout or 0) }}</th><th class="text-end">{{ totals.cost|usd }}</th><th class="text-end">{{ totals.cost|inr(inr) }}</th><th></th></tr></tfoot>{% endif %}
+    </table>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-5">
+    <div class="panel p-0 h-100">
+      <div class="au-head"><b>By user</b></div>
+      <table class="table table-sm align-middle mb-0 au-table">
+        <thead><tr><th class="text-start">User</th><th class="text-end">Calls</th><th class="text-end">Tokens</th><th class="text-end">Cost (USD)</th><th class="text-end">Cost (₹)</th></tr></thead>
+        <tbody>{% for r in by_user %}<tr><td class="text-start">{{ r.username or '-' }}</td><td class="text-end">{{ r.calls or 0 }}</td><td class="text-end">{{ ((r.tin or 0) + (r.tout or 0))|tok }}</td><td class="text-end">{{ r.cost|usd }}</td><td class="text-end">{{ r.cost|inr(inr) }}</td></tr>
+        {% else %}<tr><td colspan="5" class="text-secondary text-center py-3">No usage yet.</td></tr>{% endfor %}</tbody>
+      </table>
+    </div>
+  </div>
+  <div class="col-lg-7">
+    <div class="panel p-0 h-100">
+      <div class="au-head"><b>Recent AI activity</b></div>
+      <div class="au-recent">
+        {% for r in recent %}
+        <div class="au-ev"><span class="au-kind au-{{ r.kind }}">{{ {'run': 'Run', 'generate': 'Generate', 'cli-step': 'CLI'}.get(r.kind, r.kind) }}</span>
+          <span class="min-w-0 flex-grow-1 text-truncate">{% if r.tc_no %}TC-{{ r.tc_no }} {{ r.title }}{% endif %}{% if r.run_id %} · Run #{{ r.run_id }}{% endif %}</span>
+          <span class="text-secondary small text-nowrap">{{ r.username }} · {{ r.at|ago }} · {{ ((r.input_tokens or 0) + (r.output_tokens or 0))|tok }} tok · {{ r.cost_usd|usd }}</span></div>
+        {% else %}<div class="text-secondary small p-3">No AI activity yet.</div>{% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="small text-secondary mt-3">
+  Cost is an estimate from Anthropic list prices per million tokens
+  ({% for m, pr in prices.items() %}{{ m }}: ${{ pr[0] }} in / ${{ pr[1] }} out{{ ', ' if not loop.last }}{% endfor %}),
+  ₹ at {{ '%.2f'|format(inr) }} per $: the dollar-weighted average of the rates entered with your credit purchases. The Anthropic Console Usage page shows what was actually billed.
+  When one Generate call creates several test cases, its tokens are split evenly across them.
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {   // live $ -> ₹ while typing the credit amount
+  var a = document.getElementById('crAmt'), r = document.getElementById('crRate'), out = document.getElementById('crConv');
+  if (!a) return;
+  function upd() { var v = parseFloat((a.value || '').replace(/,/g, '')), rate = parseFloat((r.value || '').replace(/,/g, ''));
+    v = isFinite(v) && v > 0 && isFinite(rate) && rate > 0 ? v * rate : 0;
+    out.textContent = '= \u20B9' + v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+  a.addEventListener('input', upd); r.addEventListener('input', upd); upd();
+})();
+</script>
+{% endblock %}

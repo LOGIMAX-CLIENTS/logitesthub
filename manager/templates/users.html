@@ -1,0 +1,166 @@
+{% extends 'base.html' %}
+{% block title %}Users{% endblock %}
+{% block crumbs %}<span class="tm-crumbs"><b>Users</b></span>{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap gap-2 align-items-center justify-content-between mb-3">
+  <div><h1 class="h4 mb-0">Users ({{ users|length }})</h1><div class="text-secondary small">Only admins can create accounts</div></div>
+  <button class="btn btn-success" type="button" data-bs-toggle="collapse" data-bs-target="#newUser" aria-expanded="false">+ Create Account</button>
+</div>
+
+<div class="collapse mb-3" id="newUser">
+  <form method="post" action="{{ url_for('user_new') }}" class="panel" autocomplete="off">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="row g-3">
+      <div class="col-md-4"><label class="form-label" for="nu">Username</label>
+        <input class="form-control" id="nu" name="username" pattern="[A-Za-z0-9._\-]{3,30}" title="3-30 letters, numbers, dot, dash or underscore" required></div>
+      <div class="col-md-5"><label class="form-label" for="nn">Full name</label>
+        <input class="form-control" id="nn" name="name" maxlength="60" required></div>
+      <div class="col-md-3"><label class="form-label" for="nr">Role</label>
+        <select class="form-select" id="nr" name="role"><option value="member">Member</option><option value="admin">Admin</option></select></div>
+      <div class="col-md-4"><label class="form-label" for="np">Password <span class="text-secondary small">(min {{ min_pw }})</span></label>
+        <input class="form-control" id="np" name="password" type="password" minlength="{{ min_pw }}" autocomplete="new-password" required></div>
+      <div class="col-md-4"><label class="form-label" for="nc">Confirm password</label>
+        <input class="form-control" id="nc" name="confirm" type="password" minlength="{{ min_pw }}" autocomplete="new-password" required></div>
+      <div class="col-md-4 d-flex align-items-end"><button class="btn btn-primary w-100">Create account</button></div>
+    </div>
+    <div class="small text-secondary mt-2">Members can create, edit and run tests. Admins can also manage accounts.</div>
+  </form>
+</div>
+
+<div class="panel p-0">
+  <div class="table-responsive">
+    <table class="table align-middle mb-0 users-table">
+      <thead><tr><th class="text-start">User</th><th class="text-start">Role</th><th class="text-start">Created</th><th class="text-start">AI this month</th><th class="text-end">Actions</th></tr></thead>
+      <tbody>
+      {% for u in users %}
+      <tr>
+        <td class="text-start"><div class="d-flex align-items-center gap-2"><span class="avatar">{{ u.name[:1]|upper }}</span>
+          <div><div class="fw-semibold">{{ u.name }}{% if u.id == me.id %} <span class="text-secondary small">(you)</span>{% endif %}</div><div class="small text-secondary">@{{ u.username }}</div></div></div></td>
+        <td class="text-start"><span class="role role-{{ u.role }}">{{ u.role|capitalize }}</span></td>
+        <td class="text-start">{{ u.created_at[:10] }}</td>
+        {% set s = ai[u.id] %}
+        <td class="text-start ul-ai">
+          <button type="button" class="ul-btn" data-bs-toggle="modal" data-bs-target="#aiLimit" data-uid="{{ u.id }}" data-uname="{{ u.username }}"
+                  data-source="{{ s.limit_source }}" data-limit="{{ s.base_limit_inr if s.limit_source == 'user' and s.base_limit_inr is not none else '' }}" title="Set AI limit">
+            <span class="ul-num">{{ s.used_inr|inr(1) }}</span>
+            <span class="ul-of">/ {{ (s.limit_inr|inr(1)) if s.limit_inr is not none else 'no limit' }}{% if s.limit_source == 'default' and s.limit_inr is not none %} <i>(default)</i>{% endif %}</span>
+            {% if s.extra_inr %}<span class="ul-extra" title="{% for x in s.extras %}{{ x.amount_inr|inr(1) }}: {{ x.note }} (by {{ x.added_by }}){{ '; ' if not loop.last }}{% endfor %}">incl. +{{ s.extra_inr|inr(1) }} extra this month</span>{% endif %}
+            {% if s.pct is not none %}<span class="ul-meter"><span style="width: {{ s.pct }}%" class="{{ 'hot' if s.pct >= 80 }}"></span></span>{% endif %}
+          </button>
+          {% if not s.ok and s.limit_inr is not none %}<button type="button" class="ul-flag ul-flag-btn" data-bs-toggle="modal" data-bs-target="#aiExtra" data-uid="{{ u.id }}" data-uname="{{ u.username }}"
+              data-used="{{ s.used_inr|inr(1) }}" data-limit="{{ s.limit_inr|inr(1) }}">Limit reached · Add extra</button>
+          {% elif not s.ok %}<span class="ul-flag">Organisation limit reached</span>{% endif %}
+        </td>
+        <td class="text-end">
+          <div class="dropdown">
+            <button class="tm-icon" type="button" data-bs-toggle="dropdown" aria-label="Actions for {{ u.username }}">
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/></svg></button>
+            <ul class="dropdown-menu dropdown-menu-end">
+              <li><button class="dropdown-item" type="button" data-bs-toggle="modal" data-bs-target="#resetPw" data-uid="{{ u.id }}" data-uname="{{ u.username }}">Reset password</button></li>
+              <li><button class="dropdown-item" type="button" data-bs-toggle="modal" data-bs-target="#aiLimit" data-uid="{{ u.id }}" data-uname="{{ u.username }}"
+                  data-source="{{ ai[u.id].limit_source }}" data-limit="{{ ai[u.id].base_limit_inr if ai[u.id].limit_source == 'user' and ai[u.id].base_limit_inr is not none else '' }}">Set AI limit</button></li>
+              <li><button class="dropdown-item" type="button" data-bs-toggle="modal" data-bs-target="#aiExtra" data-uid="{{ u.id }}" data-uname="{{ u.username }}"
+                  data-used="{{ ai[u.id].used_inr|inr(1) }}" data-limit="{{ (ai[u.id].limit_inr|inr(1)) if ai[u.id].limit_inr is not none else 'no limit' }}">Add extra (this month)</button></li>
+              {% if u.id != me.id %}
+              <li><form method="post" action="{{ url_for('user_role', uid=u.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="dropdown-item">Make {{ 'member' if u.role == 'admin' else 'admin' }}</button></form></li>
+              <li><hr class="dropdown-divider"></li>
+              <li><form method="post" action="{{ url_for('user_delete', uid=u.id) }}" onsubmit="return confirm('Remove account @{{ u.username }}? Their past runs and test cases stay.')"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="dropdown-item text-danger">Remove account</button></form></li>
+              {% endif %}
+            </ul>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="modal fade" id="resetPw" tabindex="-1" aria-labelledby="resetPwTitle" aria-hidden="true">
+  <div class="modal-dialog"><form class="modal-content" method="post" autocomplete="off">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="modal-header"><h2 class="modal-title h6" id="resetPwTitle">Reset password</h2><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+    <div class="modal-body">
+      <label class="form-label" for="rp">New password <span class="text-secondary small">(min {{ min_pw }})</span></label>
+      <input class="form-control mb-3" id="rp" name="password" type="password" minlength="{{ min_pw }}" autocomplete="new-password" required>
+      <label class="form-label" for="rc">Confirm password</label>
+      <input class="form-control" id="rc" name="confirm" type="password" minlength="{{ min_pw }}" autocomplete="new-password" required>
+    </div>
+    <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary">Reset</button></div>
+  </form></div>
+</div>
+<div class="modal fade" id="aiLimit" tabindex="-1" aria-labelledby="aiLimitTitle" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered"><form class="modal-content tb-modal" method="post">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="modal-header"><h2 class="modal-title h6" id="aiLimitTitle">AI limit</h2><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+    <div class="modal-body">
+      <div class="form-check"><input class="form-check-input" type="radio" name="mode" value="default" id="alDef">
+        <label class="form-check-label" for="alDef">Use the default limit ({{ (default_limit|float|inr(1) ~ ' per month') if default_limit else 'no limit' }})</label></div>
+      <div class="form-check mt-2"><input class="form-check-input" type="radio" name="mode" value="custom" id="alCus">
+        <label class="form-check-label" for="alCus">Own monthly limit</label></div>
+      <div class="input-group input-group-sm mt-2 ms-4" style="max-width: 240px"><span class="input-group-text">₹</span>
+        <input class="form-control" id="alVal" name="monthly_inr" inputmode="decimal" placeholder="Blank = no limit"></div>
+      <div class="small text-secondary mt-3">Counted from the 1st of each month. When it is reached, AI calls from the web app, CLI and IDE stop with a "limit reached" message; normal test steps still run.</div>
+    </div>
+    <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary">Save</button></div>
+  </form></div>
+</div>
+<div class="modal fade" id="aiExtra" tabindex="-1" aria-labelledby="aiExtraTitle" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered"><form class="modal-content tb-modal" method="post">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="modal-header"><h2 class="modal-title h6" id="aiExtraTitle">Add extra AI budget</h2><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+    <div class="modal-body">
+      <div class="ex-now" id="exNow"></div>
+      {% if plan.reserve_inr is not none %}<div class="ex-reserve">Reserve available: <b>{{ [plan.reserve_inr, 0]|max|inr(1) }}</b> <span>(the extra is taken from here)</span></div>
+      {% else %}<div class="ex-reserve">No credits recorded, so there is no reserve to check against. <a href="{{ url_for('ai_usage') }}#budget">Add credits</a></div>{% endif %}
+      <label class="form-label mt-2" for="exAmt">Extra for this month</label>
+      <div class="input-group input-group-sm" style="max-width: 220px"><span class="input-group-text">₹</span>
+        <input class="form-control" id="exAmt" name="amount_inr" inputmode="decimal" placeholder="e.g. 200" required{% if plan.reserve_inr is not none %} data-max="{{ [plan.reserve_inr, 0]|max }}"{% endif %}></div>
+      <div class="ex-quick">{% for q in (100, 200, 500) %}<button type="button" class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('exAmt').value={{ q }}">+₹{{ q }}</button>{% endfor %}</div>
+      <div class="small t-fail mt-1" id="exOver" hidden>More than the reserve.</div>
+      <label class="form-label mt-2" for="exNote">Reason</label>
+      <input class="form-control form-control-sm" id="exNote" name="note" maxlength="255" required placeholder="e.g. GRN release regression testing">
+      <div class="small text-secondary mt-2">Only for this month. On the 1st the user is back to their normal limit. Their normal limit is not changed.</div>
+    </div>
+    <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary">Add extra</button></div>
+  </form></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+if (location.hash === '#new') { bootstrap.Collapse.getOrCreateInstance(document.getElementById('newUser')).show(); document.getElementById('nu').focus(); }
+var RESET_URL = {{ url_for('user_reset_password', uid=0)|tojson }}, LIMIT_URL = {{ url_for('user_ai_limit', uid=0)|tojson }},
+    EXTRA_URL = {{ url_for('user_ai_extra', uid=0)|tojson }};
+document.getElementById('aiExtra').addEventListener('show.bs.modal', function (e) {
+  var b = e.relatedTarget, form = this.querySelector('form');
+  form.action = EXTRA_URL.replace('/0/', '/' + b.dataset.uid + '/');
+  this.querySelector('.modal-title').textContent = 'Add extra AI budget for @' + b.dataset.uname;
+  document.getElementById('exNow').textContent = 'This month: ' + b.dataset.used + ' used of ' + b.dataset.limit + '.';
+  form.reset(); document.getElementById('exOver').hidden = true; setTimeout(function () { document.getElementById('exAmt').focus(); }, 300);
+});
+(function () {   // warn before submit when the extra is more than the reserve (server checks it too)
+  var amt = document.getElementById('exAmt'), over = document.getElementById('exOver'), btn = document.querySelector('#aiExtra .btn-primary');
+  function chk() { var max = parseFloat(amt.dataset.max), v = parseFloat((amt.value || '').replace(/,/g, ''));
+    var bad = !isNaN(max) && isFinite(v) && v > max; over.hidden = !bad; btn.disabled = bad; }
+  amt.addEventListener('input', chk);
+  document.querySelectorAll('#aiExtra .ex-quick button').forEach(function (b) { b.addEventListener('click', function () { setTimeout(chk, 0); }); });
+})();
+document.getElementById('aiLimit').addEventListener('show.bs.modal', function (e) {
+  var b = e.relatedTarget, form = this.querySelector('form'), val = document.getElementById('alVal');
+  form.action = LIMIT_URL.replace('/0/', '/' + b.dataset.uid + '/');
+  this.querySelector('.modal-title').textContent = 'AI limit for @' + b.dataset.uname;
+  var custom = b.dataset.source === 'user';
+  document.getElementById(custom ? 'alCus' : 'alDef').checked = true;
+  val.value = b.dataset.limit || ''; val.disabled = !custom;
+});
+document.querySelectorAll('#aiLimit input[name=mode]').forEach(function (r) {
+  r.addEventListener('change', function () { var v = document.getElementById('alVal'); v.disabled = r.value !== 'custom' || !r.checked; if (!v.disabled) v.focus(); });
+});
+document.getElementById('resetPw').addEventListener('show.bs.modal', function (e) {
+  var b = e.relatedTarget, form = this.querySelector('form');
+  form.action = RESET_URL.replace('/0/', '/' + b.dataset.uid + '/');
+  this.querySelector('.modal-title').textContent = 'Reset password for @' + b.dataset.uname;
+  form.reset();
+});
+</script>
+{% endblock %}

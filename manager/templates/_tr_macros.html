@@ -1,0 +1,55 @@
+{# shared pieces for Test Runs pages #}
+{% macro status_icon(st) -%}
+{%- if st == 'PASSED' -%}<span class="si si-passed" title="Passed"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></span>
+{%- elif st == 'FAILED' -%}<span class="si si-failed" title="Failed"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round"><path d="m7 7 10 10M17 7 7 17"/></svg></span>
+{%- elif st == 'PARTIAL' -%}<span class="si si-needs-ai" title="Partial: some steps did not run"><b>!</b></span>
+{%- elif st == 'queued' -%}<span class="si si-queued" title="Queued: waits for the case before it"></span>
+{%- elif st == 'running' -%}<span class="si si-running" title="Running"><span class="spinner-border spinner-border-sm"></span></span>
+{%- else -%}<span class="si si-never" title="Never run"></span>{%- endif -%}
+{%- endmacro %}
+
+{% macro result_bar(s) -%}
+{%- if s -%}
+<div class="trb" title="{{ s.passed }} passed · {{ s.failed }} failed · {{ s.other }} partial / error · {{ s.running }} running">
+  <span class="trb-text">{{ s.passed }} / {{ s.total }} Passed</span>
+  <span class="trb-bar">{% for k in ('passed', 'failed', 'other', 'running') %}{% if s[k] %}<i class="trb-{{ k }}" style="width: {{ (s[k] / s.total * 100)|round(2) }}%"></i>{% endif %}{% endfor %}</span>
+</div>
+{%- else -%}<div class="trb"><span class="trb-text text-secondary">Not run yet</span><span class="trb-bar"></span></div>{%- endif -%}
+{%- endmacro %}
+
+{% macro schedule_form(runs, envs, days, today, fixed_run=None, back=None) %}
+<form class="modal-content tb-modal" method="post" action="{{ url_for('testruns.schedule_new') }}">
+  <input type="hidden" name="csrf" value="{{ csrf }}">{% if back %}<input type="hidden" name="back" value="{{ back }}">{% endif %}
+  <div class="modal-header"><h2 class="modal-title h6">Create a Scheduled Run</h2><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+  <div class="modal-body">
+    {% if fixed_run %}<input type="hidden" name="test_run_id" value="{{ fixed_run.id }}"><div class="small text-secondary mb-2">Test Run: <b class="text-body">{{ fixed_run.name }}</b></div>
+    {% else %}<label class="form-label" for="scRun">Test Run</label>
+    <select class="form-select form-select-sm" id="scRun" name="test_run_id" required><option value="">Select a test run…</option>{% for r in runs %}<option value="{{ r.id }}">{{ r.name }}</option>{% endfor %}</select>{% endif %}
+    <label class="form-label mt-3" for="scEnv">Environment</label>
+    <select class="form-select form-select-sm" id="scEnv" name="env_id">{% if not fixed_run %}<option value="">The Test Run's own environment</option>{% endif %}{% for e in envs %}<option value="{{ e.id }}" {{ 'selected' if fixed_run and fixed_run.env_id == e.id }}>{{ e.name }} · {{ e.base_url }}</option>{% endfor %}</select>
+    <div class="form-label mt-3">How often</div>
+    <div class="sc-kind" role="radiogroup">
+      {% for k, lbl in (('once', 'Once'), ('daily', 'Every day'), ('weekly', 'Weekly')) %}
+      <label><input type="radio" name="kind" value="{{ k }}" {{ 'checked' if k == 'daily' }} onchange="scKind(this.form)"> {{ lbl }}</label>{% endfor %}
+    </div>
+    <div class="row g-2 mt-1">
+      <div class="col-6 sc-once" hidden><label class="form-label small" for="scDate">Date</label><input class="form-control form-control-sm" id="scDate" type="date" name="run_date" min="{{ today }}" value="{{ today }}"></div>
+      <div class="col-6"><label class="form-label small" for="scTime">Time</label><input class="form-control form-control-sm" id="scTime" type="time" name="at_time" value="21:00" required></div>
+    </div>
+    <div class="sc-weekly mt-2" hidden>{% for d in days %}<label class="sc-day"><input type="checkbox" name="weekdays" value="{{ loop.index0 }}" {{ 'checked' if loop.index0 < 5 }}><span>{{ d }}</span></label>{% endfor %}</div>
+    <div class="small text-secondary mt-3">Runs on this server, one test case after another, and records video + steps for each. The server (this PC for now) must be on at that time. It cannot reach a developer's own localhost.</div>
+  </div>
+  <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary">Create schedule</button></div>
+</form>
+{% endmacro %}
+
+{% macro schedule_js() %}
+<script>
+function scKind(form) {
+  var k = form.querySelector('input[name=kind]:checked').value;
+  form.querySelector('.sc-once').hidden = k !== 'once';
+  form.querySelector('.sc-weekly').hidden = k !== 'weekly';
+}
+document.querySelectorAll('form[action$="/schedules/new"]').forEach(scKind);
+</script>
+{% endmacro %}

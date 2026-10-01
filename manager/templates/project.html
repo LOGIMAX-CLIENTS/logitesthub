@@ -1,0 +1,408 @@
+{% extends 'base.html' %}
+{% block title %}{{ p.name }}{% endblock %}
+{% block crumbs %}<span class="tm-crumbs"><a href="{{ url_for('projects') }}">Test Case</a> <span>/</span> <b>{{ p.name }}</b></span>{% endblock %}
+{% block mainclass %}tm-main{% endblock %}
+{% block content %}
+{% set ico_folder %}<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.6l2 2h7.4A2.5 2.5 0 0 1 21 9.5v8A2.5 2.5 0 0 1 18.5 20h-13A2.5 2.5 0 0 1 3 17.5Z" fill="currentColor"/></svg>{% endset %}
+{% set ico_dots %}<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/></svg>{% endset %}
+<div class="tm-tabbar">
+  <nav class="tm-tabs" aria-label="Project sections">
+      <a class="{{ 'active' if tab == 'cases' }}" href="{{ url_for('project', pid=p.id, folder=folder_id) }}">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6v3H9z"/><path d="M15 5.5h2.5A1.5 1.5 0 0 1 19 7v12.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19.5V7a1.5 1.5 0 0 1 1.5-1.5H9"/><path d="m8.5 13 2.2 2.2L15.5 10.5"/></svg>
+        Test Cases <span class="pill">{{ total }}</span></a>
+      <a class="{{ 'active' if tab == 'runs' }}" href="{{ url_for('project', pid=p.id, folder=folder_id, tab='runs') }}">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m10 9.2 4.8 2.8-4.8 2.8z"/></svg>
+        Test Runs <span class="pill">{{ n_runs }}</span></a>
+    </nav>
+</div>
+<div class="tm">
+  <!-- ============ Left: repository panel ============ -->
+  <aside class="tm-panel" id="tmPanel">
+
+    <div class="tm-repo" id="tmRepo">
+      <button class="tm-repo-head" type="button" aria-expanded="true" onclick="tmToggle(this,'tmRepoBody')">
+        <span>Repository <span class="pill">{{ total }}</span></span>
+        <svg class="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 15 6-6 6 6"/></svg>
+      </button>
+
+      <div class="tm-repo-body" id="tmRepoBody">
+        <a class="tm-all {{ 'active' if not folder_id }}" href="{{ url_for('project', pid=p.id, tab=None if tab == 'cases' else 'runs') }}">
+          <span>All Test Cases</span><span class="pill">{{ total }}</span></a>
+
+        <div class="tm-tools">
+          <label class="tm-search">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+            <input id="folderSearch" type="search" placeholder="Search folders" aria-label="Search folders" oninput="tmFilter(this.value)">
+          </label>
+          <button class="tm-icon" type="button" title="New folder" aria-label="New folder" onclick="tmNewFolder()">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.6l2 2h7.4A2.5 2.5 0 0 1 21 9.5v8A2.5 2.5 0 0 1 18.5 20h-13A2.5 2.5 0 0 1 3 17.5Z"/><path d="M12 10.5v6M9 13.5h6"/></svg>
+          </button>
+          <div class="dropdown">
+            <button class="tm-icon" type="button" data-bs-toggle="dropdown" aria-label="Folder options">{{ ico_dots }}</button>
+            <ul class="dropdown-menu dropdown-menu-end">
+              <li><button class="dropdown-item" type="button" onclick="tmSort('name')">Sort by name</button></li>
+              <li><button class="dropdown-item" type="button" onclick="tmSort('count')">Sort by test count</button></li>
+              <li><hr class="dropdown-divider"></li>
+              <li><button class="dropdown-item" type="button" onclick="tmNewFolder()">New folder</button></li>
+            </ul>
+          </div>
+        </div>
+
+        <form class="tm-newfolder" id="newFolderForm" method="post" action="{{ url_for('folder_new', pid=p.id) }}" hidden>
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <input class="form-control form-control-sm" name="name" maxlength="80" placeholder="Folder name" required>
+          <button class="btn btn-sm btn-primary">Add</button>
+          <button class="btn btn-sm btn-link text-secondary" type="button" onclick="this.form.hidden=true">Cancel</button>
+        </form>
+
+        <div class="tm-folders" id="folderList">
+          {% for f in folders %}
+          <div class="tm-folder {{ 'active' if folder_id == f.id }}" data-name="{{ f.name|lower }}" data-count="{{ f.n }}">
+            <a class="tm-folder-link" href="{{ url_for('project', pid=p.id, folder=f.id, tab=None if tab == 'cases' else 'runs') }}" title="{{ f.name }}">
+              <span class="fi">{{ ico_folder }}</span><span class="fn">{{ f.name }}</span>
+              <span class="fc" title="{{ f.ran }} of {{ f.n }} test cases have been run">{{ f.ran }}/{{ f.n }}</span>
+            </a>
+            <div class="tm-folder-acts">
+              <a class="tm-icon sm" href="{{ url_for('case_new', pid=p.id, folder=f.id) }}" title="Add test case to this folder" aria-label="Add test case to {{ f.name }}">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></a>
+              <div class="dropdown">
+                <button class="tm-icon sm" type="button" data-bs-toggle="dropdown" aria-label="Folder actions for {{ f.name }}">{{ ico_dots }}</button>
+                <ul class="dropdown-menu dropdown-menu-end">
+                  <li><button class="dropdown-item" type="button" onclick="tmRename({{ f.id }}, {{ f.name|tojson|forceescape }})">Rename</button></li>
+                  <li><form method="post" action="{{ url_for('folder_archive', pid=p.id, fid=f.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="dropdown-item">Archive</button></form></li>
+                </ul>
+              </div>
+            </div>
+          </div>
+          {% else %}
+          <div class="tm-empty">No folders yet.</div>
+          {% endfor %}
+          <div class="tm-empty" id="noFolderMatch" hidden>No folder matches.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tm-archived">
+      <button class="tm-repo-head" type="button" aria-expanded="{{ 'true' if current and current.archived else 'false' }}" onclick="tmToggle(this,'tmArchBody')">
+        <span>Archived <span class="pill">{{ archived|length }}</span>
+          <span class="tm-info" title="Archived folders are hidden from All Test Cases. Open one to see its tests, or restore it.">i</span></span>
+        <svg class="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 15 6-6 6 6"/></svg>
+      </button>
+      <div class="tm-arch-body" id="tmArchBody" {{ '' if current and current.archived else 'hidden' }}>
+        {% for f in archived %}
+        <div class="tm-folder {{ 'active' if folder_id == f.id }}">
+          <a class="tm-folder-link" href="{{ url_for('project', pid=p.id, folder=f.id) }}"><span class="fi">{{ ico_folder }}</span><span class="fn">{{ f.name }}</span><span class="fc">{{ f.ran }}/{{ f.n }}</span></a>
+          <form method="post" action="{{ url_for('folder_archive', pid=p.id, fid=f.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn btn-sm btn-link tm-restore">Restore</button></form>
+        </div>
+        {% else %}
+        <div class="tm-empty">Nothing archived.</div>
+        {% endfor %}
+      </div>
+    </div>
+  </aside>
+
+  <!-- ============ Right: cases / runs ============ -->
+  <section class="tm-content">
+    {% macro qs() -%}
+      {%- set base = {'folder': folder_id, 'q': q, 'sort': f.sort if f.sort != 'newest' else None, 'status': f.status or None, 'tag': f.tag or None, 'source': f.source or None, 'by': f.by or None, 'qa': f.qa or None} -%}
+      {%- set _ = base.update(kwargs) -%}
+      {{- url_for('project', pid=p.id, **base) -}}
+    {%- endmacro %}
+    {% set chev %}<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M6 9h12l-6 7z"/></svg>{% endset %}
+    <div class="tm-content-head">
+      <h1 class="h6 mb-0">{{ current.name if current else ('All Test Cases' if tab == 'cases' else 'All Test Runs') }}{% if current and current.archived %} <span class="badge text-bg-secondary">Archived</span>{% endif %}</h1>
+      {% if tab == 'cases' %}
+      <div class="tb-actions">
+        <a class="tb-link {{ 'on' if view == 'dups' }}" href="{{ qs(view=None if view == 'dups' else 'dups') }}">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>Review Duplicates</a>
+        <button class="tb-ai" type="button" data-bs-toggle="modal" data-bs-target="#aiModal">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 2.5 13.9 8l5.6 1.9-5.6 1.9L12 17.4l-1.9-5.6L4.5 9.9 10.1 8zM19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/></svg>Generate with AI</button>
+        <div class="btn-group">
+          <a class="btn btn-success tb-add" href="{{ url_for('case_new', pid=p.id, folder=folder_id) }}">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 3h8l4 4v14H6z"/><path d="M12 10v6M9 13h6"/></svg>Add Test Case</a>
+          <button type="button" class="btn btn-success dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-label="More ways to add"></button>
+          <ul class="dropdown-menu dropdown-menu-end">
+            <li><a class="dropdown-item" href="{{ url_for('case_new', pid=p.id, folder=folder_id) }}">Blank test case</a></li>
+            <li><button class="dropdown-item" type="button" data-bs-toggle="modal" data-bs-target="#importModal">Import _test.md files</button></li>
+            <li><button class="dropdown-item" type="button" data-bs-toggle="modal" data-bs-target="#aiModal">Generate with AI</button></li>
+          </ul>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+
+    {% if tab == 'cases' %}
+    <form id="bulkForm" method="post" action="{{ url_for('cases_bulk', pid=p.id) }}">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="back" value="{{ request.full_path }}">
+      <input type="hidden" name="action" id="bulkAction"><input type="hidden" name="env_id" id="bulkEnvId"><input type="hidden" name="folder_id" id="bulkFolder">
+    </form>
+    <div class="tb-filters">
+      <input class="form-check-input tb-all" type="checkbox" id="selAll" aria-label="Select all test cases">
+      <form method="get" class="tb-search">
+        {% for k in ('folder', 'sort', 'status', 'tag', 'source', 'by') %}{% set v = folder_id if k == 'folder' else f[k] %}{% if v and not (k == 'sort' and v == 'newest') %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endif %}{% endfor %}
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+        <input name="q" id="caseSearch" value="{{ q }}" placeholder="Search by Test Case ID or Title" aria-label="Search test cases" autocomplete="off">
+      </form>
+      <div class="dropdown"><button class="tb-dd {{ 'set' if f.sort != 'newest' }}" data-bs-toggle="dropdown">Sort{% if f.sort != 'newest' %}: {{ sorts[f.sort][0] }}{% endif %} {{ chev }}</button>
+        <ul class="dropdown-menu">{% for k, v in sorts.items() %}<li><a class="dropdown-item {{ 'active' if f.sort == k }}" href="{{ qs(sort=None if k == 'newest' else k) }}">{{ v[0] }}</a></li>{% endfor %}</ul></div>
+      <div class="dropdown"><button class="tb-dd {{ 'set' if f.status }}" data-bs-toggle="dropdown">Status{% if f.status %}: {{ status_filters[f.status] }}{% endif %} {{ chev }}</button>
+        <ul class="dropdown-menu"><li><a class="dropdown-item {{ 'active' if not f.status }}" href="{{ qs(status=None) }}">All</a></li>
+          {% for k, v in status_filters.items() %}<li><a class="dropdown-item {{ 'active' if f.status == k }}" href="{{ qs(status=k) }}">{{ v }}</a></li>{% endfor %}</ul></div>
+      <div class="dropdown"><button class="tb-dd {{ 'set' if f.tag }}" data-bs-toggle="dropdown">Tags{% if f.tag %}: {{ f.tag }}{% endif %} {{ chev }}</button>
+        <ul class="dropdown-menu tb-scroll"><li><a class="dropdown-item {{ 'active' if not f.tag }}" href="{{ qs(tag=None) }}">All tags</a></li>
+          {% for t in all_tags %}<li><a class="dropdown-item {{ 'active' if f.tag == t }}" href="{{ qs(tag=t) }}">{{ t }}</a></li>{% else %}<li><span class="dropdown-item-text text-secondary small">No tags in these cases</span></li>{% endfor %}</ul></div>
+      <div class="dropdown"><button class="tb-dd {{ 'set' if f.source or f.by }}" data-bs-toggle="dropdown">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M7 12h10M10 17h4"/></svg>More {{ chev }}</button>
+        <ul class="dropdown-menu dropdown-menu-end tb-scroll">
+          <li><h6 class="dropdown-header">QA status</h6></li>
+          <li><a class="dropdown-item {{ 'active' if not f.qa }}" href="{{ qs(qa=None) }}">Any</a></li>
+          <li><a class="dropdown-item {{ 'active' if f.qa == 'ready' }}" href="{{ qs(qa='ready') }}">Ready for QA</a></li>
+          <li><a class="dropdown-item {{ 'active' if f.qa == 'draft' }}" href="{{ qs(qa='draft') }}">Draft</a></li>
+          <li><hr class="dropdown-divider"></li>
+          <li><h6 class="dropdown-header">Source</h6></li>
+          <li><a class="dropdown-item {{ 'active' if not f.source }}" href="{{ qs(source=None) }}">Any</a></li>
+          <li><a class="dropdown-item {{ 'active' if f.source == 'imported' }}" href="{{ qs(source='imported') }}">Imported</a></li>
+          <li><a class="dropdown-item {{ 'active' if f.source == 'web' }}" href="{{ qs(source='web') }}">Created in LogiTestHub</a></li>
+          <li><hr class="dropdown-divider"></li>
+          <li><h6 class="dropdown-header">Created by</h6></li>
+          <li><a class="dropdown-item {{ 'active' if not f.by }}" href="{{ qs(by=None) }}">Anyone</a></li>
+          {% for u in all_authors %}<li><a class="dropdown-item {{ 'active' if f.by == u }}" href="{{ qs(by=u) }}">{{ u }}</a></li>{% endfor %}
+          {% if q or f.status or f.tag or f.source or f.by or f.sort != 'newest' %}<li><hr class="dropdown-divider"></li>
+          <li><a class="dropdown-item text-danger" href="{{ url_for('project', pid=p.id, folder=folder_id) }}">Clear all filters</a></li>{% endif %}
+        </ul></div>
+    </div>
+
+    <div class="tb-bulk" id="bulkBar" hidden>
+      <b id="bulkCount">0</b> selected
+      <div class="btn-group btn-group-sm">
+        <button class="btn btn-outline-secondary" type="button" onclick="bulk('run')">▶ Run selected</button>
+        {% if env_list %}<select class="form-select form-select-sm tb-env" id="bulkEnv" aria-label="Environment for the run">
+          {% for e in env_list %}<option value="{{ e.id }}">on {{ e.name }}</option>{% endfor %}</select>{% endif %}
+      </div>
+      <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="modal" data-bs-target="#selRun">Create Test Run</button>
+      <button class="btn btn-sm btn-outline-secondary" type="button" onclick="bulk('qa_ready')">Mark Ready for QA</button>
+      <button class="btn btn-sm btn-outline-secondary" type="button" onclick="bulk('qa_draft')">Mark Draft</button>
+      <div class="dropdown d-inline-block">
+        <button class="btn btn-sm btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown">Move to folder</button>
+        <ul class="dropdown-menu tb-scroll">
+          <li><button class="dropdown-item" type="button" onclick="bulk('move', '')">(no folder)</button></li>
+          {% for fo in folders %}<li><button class="dropdown-item" type="button" onclick="bulk('move', '{{ fo.id }}')">{{ fo.name }}</button></li>{% endfor %}
+        </ul>
+      </div>
+      <button class="btn btn-sm btn-link text-secondary" type="button" onclick="document.querySelectorAll('.sel').forEach(function(x){x.checked=false});syncSel()">Clear</button>
+    </div>
+
+    {% if view == 'dups' %}
+    <div class="panel mb-3">
+      <div class="d-flex justify-content-between align-items-center mb-2"><b>Possible duplicates ({{ dups|length }} group{{ 's' if dups|length != 1 }})</b>
+        <a class="small" href="{{ qs(view=None) }}">Close</a></div>
+      {% for g in dups %}
+      <div class="dup-group"><div class="dup-reason">{{ g.reason }}</div>
+        {% for c in g.cases %}<a class="dup-item" href="{{ url_for('case', cid=c.id) }}">TC-{{ c.tc_no }} · {{ c.title }}{% if c.folder_name %} <span class="text-secondary">· {{ c.folder_name }}</span>{% endif %}</a>{% endfor %}
+      </div>
+      {% else %}<div class="text-secondary small">No duplicates found in this project: every test case has a different title and different steps.</div>{% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="small text-secondary mb-2" id="caseCount">{{ cases|length }} test case{{ 's' if cases|length != 1 }}</div>
+    <div class="list" id="caseList">
+      {% for c in cases %}
+      <div class="case-line" data-tc="{{ c.tc_no }}" data-title="{{ c.title|lower }}" data-folder="{{ (c.folder_name or '')|lower }}">
+        <input class="form-check-input sel" type="checkbox" value="{{ c.id }}" aria-label="Select TC-{{ c.tc_no }}">
+        <a class="list-row case-row flex-grow-1 min-w-0" href="{{ url_for('case', cid=c.id) }}">
+          <span class="dot st-{{ (c.last_status or 'none')|lower }}" title="{{ c.last_status or 'Never run' }}"></span>
+          <div class="flex-grow-1 min-w-0">
+            <div class="fw-semibold text-truncate">{{ c.title }}</div>
+            <div class="small text-secondary">TC-{{ c.tc_no }} · Updated {{ c.updated_at[:16] }} by {{ c.updated_by or '-' }}{% if c.folder_name %} · <span class="tm-inline-folder">{{ ico_folder }}</span> {{ c.folder_name }}{% endif %}</div>
+          </div>
+          {% if c.qa_status == 'ready' %}<span class="qa-tag">Ready for QA</span>{% endif %}
+          {% if c.last_status %}<span class="badge st-{{ c.last_status|lower }}">{{ c.last_status }}</span>{% endif %}
+        </a>
+      </div>
+      {% else %}
+      <div class="panel text-secondary">{{ 'No test cases match these filters.' if (q or f.status or f.tag or f.source or f.by) else 'No test cases here yet.' }}</div>
+      {% endfor %}
+    </div>
+
+    <!-- Test Run from the selected cases -->
+    <div class="modal fade" id="selRun" tabindex="-1" aria-labelledby="selRunTitle" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered"><form class="modal-content tb-modal" id="selRunForm" method="post" action="{{ url_for('testruns.create') }}"
+          onsubmit="var f=this;f.querySelectorAll('input[name=ids]').forEach(function(x){x.remove()});document.querySelectorAll('.sel:checked').forEach(function(x){var i=document.createElement('input');i.type='hidden';i.name='ids';i.value=x.value;f.appendChild(i)});">
+        <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="project_id" value="{{ p.id }}">
+        <div class="modal-header"><h2 class="modal-title h6" id="selRunTitle">Create Test Run from <span id="selRunN">0</span> selected case(s)</h2><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+        <div class="modal-body">
+          <label class="form-label" for="srName">Name</label>
+          <input class="form-control form-control-sm" id="srName" name="name" maxlength="160" required placeholder="GRN negative pcs - QA regression">
+          <label class="form-label mt-2" for="srEnv">Environment</label>
+          <select class="form-select form-select-sm" id="srEnv" name="env_id">{% for e in env_list %}<option value="{{ e.id }}">{{ e.name }} · {{ e.base_url }}</option>{% endfor %}</select>
+          <label class="form-check mt-3"><input class="form-check-input" type="checkbox" name="only_ready"> When it runs, skip cases not marked Ready for QA</label>
+          <div class="small text-secondary mt-2">A fixed list: exactly these cases. Run it now or schedule it from the Test Run page.</div>
+        </div>
+        <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary">Create Test Run</button></div>
+      </form></div>
+    </div>
+
+    <!-- Generate with AI -->
+    <div class="modal fade" id="aiModal" tabindex="-1" aria-labelledby="aiTitle" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered"><form class="modal-content tb-modal" method="post" action="{{ url_for('cases_generate', pid=p.id) }}" onsubmit="var b=this.querySelector('.btn-primary');b.disabled=true;b.innerHTML='<span class=&quot;spinner-border spinner-border-sm me-2&quot;></span>Generating… (1-3 min)'">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <div class="modal-header"><h2 class="modal-title" id="aiTitle">Generate test cases with AI</h2><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+        <div class="modal-body">
+          <label class="form-label" for="aiTask">Requirement, bug or change</label>
+          <textarea class="form-control" id="aiTask" name="task" rows="5" minlength="15" required placeholder="e.g. GRN entry must block negative pcs when transferring across lots"></textarea>
+          <div class="row g-2 mt-2">
+            <div class="col-5"><label class="form-label" for="aiCount">How many</label><input class="form-control" id="aiCount" name="count" type="number" min="1" max="15" value="6"></div>
+            <div class="col-7"><label class="form-label" for="aiFolder">Save to folder</label>
+              <select class="form-select" id="aiFolder" name="folder_id"><option value="">(no folder)</option>{% for fo in folders %}<option value="{{ fo.id }}" {{ 'selected' if folder_id == fo.id }}>{{ fo.name }}</option>{% endfor %}</select></div>
+          </div>
+          <label class="form-label mt-2" for="aiRepo">Code repo (optional: uses its uncommitted changes)</label>
+          <input class="form-control" id="aiRepo" name="repo" placeholder="C:/xampp/htdocs/wt-prod">
+          <div class="small text-secondary mt-2">Needs Claude API credits. Generated cases are saved for review; nothing runs until you press Run.</div>
+        </div>
+        <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary">Generate</button></div>
+      </form></div>
+    </div>
+
+    <!-- Import _test.md -->
+    <div class="modal fade" id="importModal" tabindex="-1" aria-labelledby="impTitle" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered"><form class="modal-content tb-modal" method="post" enctype="multipart/form-data" action="{{ url_for('cases_import', pid=p.id) }}">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <div class="modal-header"><h2 class="modal-title" id="impTitle">Import test cases</h2><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+        <div class="modal-body">
+          <label class="form-label" for="impFiles">_test.md files (kane-cli / TestMU-Ai format)</label>
+          <input class="form-control" id="impFiles" name="files" type="file" accept=".md" multiple required>
+          <label class="form-label mt-2" for="impFolder">Save to folder</label>
+          <select class="form-select" id="impFolder" name="folder_id"><option value="">(no folder)</option>{% for fo in folders %}<option value="{{ fo.id }}" {{ 'selected' if folder_id == fo.id }}>{{ fo.name }}</option>{% endfor %}</select>
+        </div>
+        <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary">Import</button></div>
+      </form></div>
+    </div>
+    {% else %}
+    <div class="list">
+      {% for r in runs %}
+      <a class="list-row case-row" href="{{ url_for('case', cid=r.case_id, run=r.id) }}">
+        <span class="badge st-{{ r.status|lower }}">{{ r.status }}</span>
+        <div class="flex-grow-1 min-w-0">
+          <div class="fw-semibold text-truncate">{{ r.title }}</div>
+          <div class="small text-secondary">TC-{{ r.tc_no }} · Run #{{ r.id }} by {{ r.run_by or '-' }} · {{ r.started_at }}</div>
+        </div>
+        <div class="small text-secondary text-end">{% if r.total %}{{ r.passed }}/{{ r.total }} passed · {{ r.duration_ms|secs }}{% endif %}{% if r.error %}<span class="t-fail">{{ r.error }}</span>{% endif %}</div>
+      </a>
+      {% else %}
+      <div class="panel text-secondary">No runs yet.</div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </section>
+</div>
+
+<form id="renameForm" method="post" hidden><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="name"></form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+var RENAME_URL = {{ url_for('folder_rename', pid=p.id, fid=0)|tojson }};
+function tmToggle(btn, id) {
+  var body = document.getElementById(id), open = btn.getAttribute('aria-expanded') !== 'true';
+  btn.setAttribute('aria-expanded', open); body.hidden = !open;
+}
+function tmFilter(q) {
+  q = (q || '').trim().toLowerCase(); var shown = 0;
+  document.querySelectorAll('#folderList .tm-folder').forEach(function (el) {
+    var hit = !q || el.dataset.name.indexOf(q) !== -1; el.hidden = !hit; if (hit) shown++;
+  });
+  document.getElementById('noFolderMatch').hidden = shown > 0 || !q;
+}
+function tmSort(by) {
+  var list = document.getElementById('folderList'), end = document.getElementById('noFolderMatch');
+  Array.from(list.querySelectorAll('.tm-folder')).sort(function (a, b) {
+    return by === 'count' ? (+b.dataset.count - +a.dataset.count) || a.dataset.name.localeCompare(b.dataset.name)
+                          : a.dataset.name.localeCompare(b.dataset.name);
+  }).forEach(function (el) { list.insertBefore(el, end); });
+}
+function tmNewFolder() {
+  var f = document.getElementById('newFolderForm'); f.hidden = false; f.querySelector('input[name=name]').focus();
+}
+function tmRename(id, current) {
+  var name = window.prompt('Rename folder', current);
+  if (name === null || !name.trim() || name.trim() === current) return;
+  var f = document.getElementById('renameForm');
+  f.action = RENAME_URL.replace(/\/0\/rename$/, '/' + id + '/rename');
+  f.elements.name.value = name.trim(); f.submit();
+}
+var active = document.querySelector('#folderList .tm-folder.active');
+if (active) active.scrollIntoView({ block: 'nearest' });
+</script>
+<script>
+function syncSel() {
+  var sel = document.querySelectorAll('.sel:checked'), all = document.querySelectorAll('.case-line:not([hidden]) .sel'), box = document.getElementById('selAll');
+  if (!box) return;
+  document.getElementById('bulkBar').hidden = !sel.length;
+  document.getElementById('bulkCount').textContent = sel.length;
+  box.checked = sel.length && sel.length === all.length; box.indeterminate = sel.length && sel.length < all.length;
+}
+function bulk(action, folder) {
+  var f = document.getElementById('bulkForm'), sel = document.querySelectorAll('.sel:checked');
+  if (!sel.length) return;
+  if (action === 'run' && !confirm('Run ' + sel.length + ' test case(s)? They run one after another on this PC.')) return;
+  f.querySelectorAll('input[name=ids]').forEach(function (x) { x.remove(); });
+  sel.forEach(function (x) { var i = document.createElement('input'); i.type = 'hidden'; i.name = 'ids'; i.value = x.value; f.appendChild(i); });
+  document.getElementById('bulkAction').value = action; document.getElementById('bulkFolder').value = folder || '';
+  var envSel = document.getElementById('bulkEnv'), envIn = document.getElementById('bulkEnvId');
+  if (envIn) envIn.value = envSel ? envSel.value : '';
+  f.submit();
+}
+(function () {
+  var m = document.getElementById('selRun');
+  if (m) m.addEventListener('show.bs.modal', function () { document.getElementById('selRunN').textContent = document.querySelectorAll('.sel:checked').length; });
+})();
+(function () {
+  var all = document.getElementById('selAll');
+  if (!all) return;
+  all.addEventListener('change', function () { document.querySelectorAll('.sel').forEach(function (x) { x.checked = all.checked; }); syncSel(); });
+  document.querySelectorAll('.sel').forEach(function (x) { x.addEventListener('change', syncSel); });
+})();
+</script>
+<script>
+(function () {   // live search: filters the loaded list while typing, best matches first (Enter still searches on the server)
+  var box = document.getElementById('caseSearch'), list = document.getElementById('caseList'), count = document.getElementById('caseCount');
+  if (!box || !list || !count) return;
+  var rows = [].slice.call(list.querySelectorAll('.case-line'));
+  if (!rows.length) return;
+  rows.forEach(function (r, i) { r._order = i; });
+  var baseText = count.textContent, empty = document.createElement('div');
+  empty.className = 'panel text-secondary'; empty.hidden = true; list.appendChild(empty);
+  function rank(r, q) {             // lower = better; -1 = no match
+    var tc = r.dataset.tc, t = r.dataset.title, num = q.replace(/^tc-?/, '');
+    if (/^\d+$/.test(num) && tc === num) return 0;                     // "125" or "TC-125": that exact case
+    if (t.indexOf(q) === 0) return 1;                                     // title starts with it
+    if (/^\d+$/.test(num) && tc.indexOf(num) === 0) return 2;            // TC number starts with it
+    if (t.indexOf(q) > -1) return 3;                                      // title contains it
+    if (r.dataset.folder.indexOf(q) > -1) return 4;                       // folder name
+    return -1;
+  }
+  function apply() {
+    var q = box.value.trim().toLowerCase(), shown = 0;
+    var ranked = rows.map(function (r) { return { r: r, k: q ? rank(r, q) : 0 }; });
+    ranked.sort(function (a, b) { return (a.k < 0) - (b.k < 0) || a.k - b.k || a.r._order - b.r._order; });
+    ranked.forEach(function (x) {
+      var hide = x.k < 0;
+      x.r.hidden = hide;
+      if (hide) { var cb = x.r.querySelector('.sel'); if (cb) cb.checked = false; } else shown++;
+      list.insertBefore(x.r, empty);
+    });
+    count.textContent = q ? shown + ' of ' + rows.length + ' test cases match "' + box.value.trim() + '"' : baseText;
+    empty.hidden = shown > 0;
+    empty.textContent = 'No test case matches "' + box.value.trim() + '".';
+    if (typeof syncSel === 'function') syncSel();
+    try { var u = new URL(location.href); if (q) u.searchParams.set('q', box.value.trim()); else u.searchParams.delete('q'); history.replaceState(null, '', u); } catch (e) {}
+  }
+  var timer;
+  box.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(apply, 120); });
+  box.addEventListener('keydown', function (e) { if (e.key === 'Escape') { box.value = ''; apply(); } });
+  var all = document.getElementById('selAll');   // "select all" = the matches you can see, not hidden rows
+  if (all) all.addEventListener('change', function () { rows.forEach(function (r) { if (r.hidden) { var cb = r.querySelector('.sel'); if (cb) cb.checked = false; } }); if (typeof syncSel === 'function') syncSel(); });
+  if (box.value.trim()) apply();
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,444 @@
+{% extends 'base.html' %}
+{% block title %}TC-{{ c.tc_no }} {{ c.title }}{% endblock %}
+{% block head %}{% if any_running or cstate == 'running' %}<meta http-equiv="refresh" content="5">{% endif %}{% endblock %}
+{% block crumbs %}{% if not public %}<span class="tm-crumbs"><a href="{{ url_for('projects') }}">Test Case</a> <span>/</span> <a href="{{ url_for('project', pid=c.project_id) }}">{{ c.project_name }}</a>{% if c.folder_name %} <span>/</span> <a href="{{ url_for('project', pid=c.project_id, folder=c.folder_id) }}">{{ c.folder_name }}</a>{% endif %} <span>/</span> <b>TC-{{ c.tc_no }}</b></span>{% else %}<span class="tm-crumbs"><b>Shared run</b></span>{% endif %}{% endblock %}
+{% block mainclass %}tm-main{% endblock %}
+{% macro file_url(name) -%}
+{{ url_for('shared_file', token=token, name=name) if public else url_for('run_file', rid=run.id, name=name) }}
+{%- endmacro %}
+{% block content %}
+{% if not public %}
+<div class="tm-tabbar case-tabbar">
+  <nav class="tm-tabs" aria-label="Test case sections">
+    <a class="{{ 'active' if tab == 'summary' }}" href="{{ url_for('case', cid=c.id, run=run.id if run else None) }}">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 16h6"/></svg>Test Summary</a>
+    <a class="{{ 'active' if tab == 'testcase' }}" href="{{ url_for('case', cid=c.id, tab='testcase') }}">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6v3H9z"/><path d="M15 5.5h2.5A1.5 1.5 0 0 1 19 7v12.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19.5V7a1.5 1.5 0 0 1 1.5-1.5H9"/><path d="m8.5 13 2.2 2.2L15.5 10.5"/></svg>Test Case</a>
+    <a class="{{ 'active' if tab == 'code' }}" href="{{ url_for('case', cid=c.id, tab='code') }}">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m8 8-4 4 4 4M16 8l4 4-4 4M13.5 6l-3 12"/></svg>Code <span class="pill">1</span></a>
+    <a class="{{ 'active' if tab == 'runs' }}" href="{{ url_for('case', cid=c.id, tab='runs') }}">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6"/><path d="M3 4v4h4M12 8v4l3 2"/></svg>Runs <span class="pill">{{ runs|length }}</span></a>
+  </nav>
+  <div class="case-actions">
+    {% set denv = env_list|first %}
+    <form method="post" action="{{ url_for('case_run', cid=c.id) }}" class="btn-group run-split">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="env_id" id="runEnv" value="{{ denv.id if denv else '' }}">
+      <button class="btn btn-success btn-sm" {{ 'disabled' if any_running }} title="Run on {{ denv.name if denv else 'the default environment' }}">{{ 'Running…' if any_running else '▶ Run test' }}{% if denv and not any_running %} <span class="run-env">· {{ denv.name }}</span>{% endif %}</button>
+      {% if env_list|length > 1 and not any_running %}
+      <button type="button" class="btn btn-success btn-sm dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-label="Choose environment"></button>
+      <ul class="dropdown-menu dropdown-menu-end">
+        <li><h6 class="dropdown-header">Run on</h6></li>
+        {% for e in env_list %}<li><button class="dropdown-item" type="submit" onclick="document.getElementById('runEnv').value='{{ e.id }}'"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></svg> <b>{{ e.name }}</b>{% if e.is_default %} <span class="text-secondary small">default</span>{% endif %}<div class="small text-secondary env-dd-url">{{ e.base_url }}</div></button></li>{% endfor %}
+      </ul>
+      {% endif %}
+    </form>
+    <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('case_edit', cid=c.id) }}">Edit</a>
+  </div>
+</div>
+{% endif %}
+<div class="case-body">
+
+{% if tab in ('testcase', 'code') and gen_error %}
+<div class="alert alert-danger">{{ gen_error }}</div>
+
+{% elif tab == 'testcase' %}
+{% set n_ai = gen.steps|selectattr('kind', 'equalto', 'unknown')|list|length %}
+<div class="panel tc-view">
+  <div class="tc-head">
+    <div>
+      <div class="h5 mb-1">{{ gen.title }}</div>
+      <div class="small text-secondary">{{ gen.steps|length }} steps{% if n_ai %} · {{ n_ai }} AI step{{ 's' if n_ai != 1 }}{% endif %} · Updated {{ c.updated_at[:16] }} by {{ c.updated_by or '-' }}</div>
+    </div>
+    <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('case_edit', cid=c.id) }}">Edit steps</a>
+  </div>
+  {% set ns = namespace(sec=None) %}
+  <ol class="tc-steps">
+  {% for s in gen.steps %}
+    {% if s.section and s.section != ns.sec %}<li class="tc-section">{{ s.section }}</li>{% set ns.sec = s.section %}{% endif %}
+    <li class="tc-step"><span class="tc-num">{{ loop.index }}</span><span class="tc-text">{{ s.text|varchips }}</span>
+      {% if s.kind == 'unknown' %}<span class="tc-ai" title="Not a standard step sentence: the AI agent performs or checks it from the screen">AI step</span>{% endif %}</li>
+  {% endfor %}
+  </ol>
+  <details class="tc-source"><summary>Source (_test.md)</summary><pre class="code mb-0">{{ c.content }}</pre></details>
+</div>
+
+{% elif tab == 'code' %}
+{% set text = gen.files[file] %}
+{% set labels = {'verified': 'Verified', 'failed': 'Failed', 'running': 'Verifying…', 'unverified': 'Unverified'} %}
+{% set code_name = 'tc-' ~ c.tc_no ~ '-' ~ (c.title|lower|replace(' ', '-')|truncate(40, True, '')) %}
+{% if not code_open %}
+<div class="cx-list">
+  <div class="cx-list-head"><b>Code</b> <span class="pill">1</span><span class="text-secondary small ms-2">Generated automatically from the test case steps</span></div>
+  <a class="cx-item" href="{{ url_for('case', cid=c.id, tab='code', item=1) }}">
+    <span class="cx-item-icon"><img src="{{ url_for('static', filename='playwright-logo.svg') }}" alt="Playwright" width="28" height="28"></span>
+    <span class="min-w-0 flex-grow-1">
+      <span class="d-flex align-items-center gap-2"><b class="text-truncate">{{ code_name }}</b><span class="cx-state cx-{{ cstate }}">{{ labels[cstate] }}</span></span>
+      <span class="cx-meta mt-1"><span class="cx-tech">python</span><span>·</span><span class="cx-tech">playwright</span><span>· Created by {{ c.created_by or '-' }} on {{ (c.created_at or c.updated_at)[:16] }}</span></span>
+    </span>
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="text-secondary"><path d="m9 6 6 6-6 6"/></svg>
+  </a>
+</div>
+{% else %}
+<div class="cx">
+  <div class="cx-head">
+    <div class="min-w-0">
+      <div class="cx-title"><a class="cx-back" href="{{ url_for('case', cid=c.id, tab='code') }}" aria-label="Back to code list"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M11 18l-6-6 6-6"/></svg></a><span class="text-truncate">{{ code_name }}</span>
+        <span class="cx-state cx-{{ cstate }}">{{ labels[cstate] }}</span></div>
+      <div class="cx-meta">
+        <span class="cx-tech"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M11.9 2c-5 0-4.7 2.2-4.7 2.2v2.3h4.8v.7H5.3S2 6.8 2 11.9s2.8 4.9 2.8 4.9h1.7v-2.4s-.1-2.8 2.8-2.8h4.7s2.7 0 2.7-2.6V4.7S17.1 2 11.9 2Zm-2.6 1.5a.9.9 0 1 1 0 1.7.9.9 0 0 1 0-1.7Z" fill="#3776ab"/><path d="M12.1 22c5 0 4.7-2.2 4.7-2.2v-2.3H12v-.7h6.7S22 17.2 22 12.1s-2.8-4.9-2.8-4.9h-1.7v2.4s.1 2.8-2.8 2.8H10s-2.7 0-2.7 2.6v4.3S6.9 22 12.1 22Zm2.6-1.5a.9.9 0 1 1 0-1.7.9.9 0 0 1 0 1.7Z" fill="#f2c230"/></svg>python</span>
+        <span class="cx-tech"><img src="{{ url_for('static', filename='playwright-logo.svg') }}" alt="" width="16" height="16">playwright</span>
+        <span>· Created by {{ c.created_by or '-' }} on {{ (c.created_at or c.updated_at)[:16] }}</span>
+        {% if c.updated_by and c.updated_at != c.created_at %}<span>· Updated by {{ c.updated_by }} on {{ c.updated_at[:16] }}</span>{% endif %}
+      </div>
+      <div class="cx-note cx-note-{{ cstate }}">
+        {% if cstate == 'verified' %}✓ Code verified: sample execution passed on {{ c.code_verified_at[:16] }} (by {{ c.code_verified_by or '-' }}).
+        {% elif cstate == 'failed' %}✕ Sample execution failed on {{ c.code_verified_at[:16] }}: {{ c.code_msg or 'no output' }}
+        {% elif cstate == 'running' %}<span class="spinner-border spinner-border-sm me-1"></span> Running sample execution in a headless browser… this page refreshes every 5 seconds.
+        {% elif c.code_hash %}ⓘ Code is not verified after recent changes. Run sample execution to verify the code.
+        {% else %}ⓘ Code is not verified yet. Run sample execution to verify the code.{% endif %}
+      </div>
+    </div>
+    <form method="post" action="{{ url_for('case_verify', cid=c.id) }}">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="btn btn-success btn-sm" {{ 'disabled' if cstate == 'running' }}>{{ 'Verifying…' if cstate == 'running' else '▶ Run sample execution' }}</button>
+    </form>
+  </div>
+
+  <div class="cx-tabs">
+    {% for name in ('test.py', 'requirements.txt', '.env.example') %}
+    <a class="{{ 'active' if file == name }}" href="{{ url_for('case', cid=c.id, tab='code', item=1, file=name) }}">{{ name }}</a>
+    {% endfor %}
+    <span class="ms-auto d-flex gap-1 align-items-center">
+      <button class="cx-btn" type="button" id="copyCode" title="Copy {{ file }}">Copy</button>
+      <a class="cx-btn" href="{{ url_for('case_code_file', cid=c.id, name=file) }}" title="Download {{ file }}">Download</a>
+    </span>
+  </div>
+  <div class="cx-code">
+    <pre class="cx-gutter" aria-hidden="true">{% for _ in text.rstrip('\n').split('\n') %}{{ loop.index }}
+{% endfor %}</pre>
+    <pre class="cx-src"><code class="language-{{ 'python' if file == 'test.py' else 'ini' }}" id="codeText">{{ text }}</code></pre>
+  </div>
+</div>
+<div class="small text-secondary mt-2 cx-foot">Generated from the Test Case steps with the same parser the runner uses. Passwords are never written into the code: they come from <code>.env</code> at run time.</div>
+{% endif %}
+
+{% elif tab == 'runs' %}
+<div class="list">
+  {% for r in runs %}
+  <a class="list-row case-row" href="{{ url_for('case', cid=c.id, run=r.id) }}">
+    <span class="badge st-{{ r.status|lower }}">{{ r.status }}</span>
+    <div class="flex-grow-1">Run #{{ r.id }} · {{ r.started_at }} · by {{ r.run_by or '-' }}</div>
+    <div class="small text-secondary">{% if r.total %}{{ r.passed }}/{{ r.total }} passed · {{ r.duration_ms|secs }}{% endif %}{% if r.error %}<span class="t-fail">{{ r.error }}</span>{% endif %}{% if r.share_token %} · shared{% endif %}</div>
+  </a>
+  {% else %}<div class="panel text-secondary">Never run. Press ▶ Run test.</div>{% endfor %}
+</div>
+
+{% else %}
+{# ================= Test Summary ================= #}
+{% set vlabel = {'verified': 'Verified', 'failed': 'Failed', 'running': 'Verifying', 'unverified': 'Unverified'} %}
+{% set sicon = {
+  'passed': '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>',
+  'failed': '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round"><path d="m7 7 10 10M17 7 7 17"/></svg>',
+  'needs-ai': '<b>AI</b>',
+  'skipped': '<svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor"><path d="M6 6.5v11l8-5.5zM16 6h2.5v12H16z"/></svg>'} %}
+
+<div class="sm-head">
+  <div class="sm-title-row">
+    {% if public %}<h1 class="sm-title">{{ c.title }}</h1>
+    {% else %}<h1 class="sm-title sm-title-edit" id="caseTitle" tabindex="0" title="Double-click to rename"
+        data-url="{{ url_for('case_title_update', cid=c.id) }}" data-csrf="{{ csrf }}">{{ c.title }}</h1>{% endif %}
+    {% if not public %}
+    <div class="sm-tools">
+      <span class="sm-tool-group">
+        <a class="sm-tool {{ 'on' if tab == 'summary' }}" href="{{ url_for('case', cid=c.id) }}" title="Summary view"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="4" y="4" width="16" height="16" rx="2.5"/><path d="M8 9h8M8 12.5h8M8 16h5"/></svg></a>
+        <a class="sm-tool" href="{{ url_for('case', cid=c.id, tab='testcase') }}" title="Steps only"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="2.5"/><path d="M10 4v16"/></svg></a>
+      </span>
+      {% if run and run.status not in ('running', 'queued') %}
+      <button class="sm-tool {{ 'on' if run.share_token }}" id="shareBtn" type="button" data-bs-toggle="modal" data-bs-target="#shareModal"
+              title="{{ 'Shared - view or stop the share link' if run.share_token else 'Share this run' }}"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="17" cy="5.5" r="2.5"/><circle cx="6.5" cy="12" r="2.5"/><circle cx="17" cy="18.5" r="2.5"/><path d="m8.7 10.8 6.1-3.9M8.7 13.2l6.1 3.9"/></svg></button>
+      {% endif %}
+      <div class="dropdown">
+        <button class="sm-tool" type="button" data-bs-toggle="dropdown" aria-label="More actions"><svg viewBox="0 0 24 24" width="17" height="17"><circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/></svg></button>
+        <ul class="dropdown-menu dropdown-menu-end">
+          <li><a class="dropdown-item" href="{{ url_for('case', cid=c.id, tab='code', item=1) }}">Open generated code</a></li>
+          <li><a class="dropdown-item" href="{{ url_for('case', cid=c.id, tab='runs') }}">Run history</a></li>
+          <li><a class="dropdown-item" href="{{ url_for('case_code_file', cid=c.id, name='test.py') }}">Download test.py</a></li>
+        </ul>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="ch-meta">
+    {% if not public %}<div class="dropdown d-inline-block">
+      <button class="qa-pill qa-{{ c.qa_status or 'draft' }}" type="button" data-bs-toggle="dropdown" title="{{ ('Marked by ' ~ c.qa_marked_by ~ ' ' ~ (c.qa_marked_at|ago)) if c.qa_marked_by else 'QA status' }}">{{ 'Ready for QA' if c.qa_status == 'ready' else 'Draft' }} ▾</button>
+      <ul class="dropdown-menu">
+        <li><form method="post" action="{{ url_for('case_qa', cid=c.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="status" value="ready"><button class="dropdown-item">Ready for QA <span class="small text-secondary d-block">Code is on the QA server; include in scheduled QA runs</span></button></form></li>
+        <li><form method="post" action="{{ url_for('case_qa', cid=c.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="status" value="draft"><button class="dropdown-item">Draft <span class="small text-secondary d-block">Still being fixed / tested locally</span></button></form></li>
+      </ul></div><span class="ch-dot"></span>{% endif %}
+    {% if not public %}<a class="ch-verify ch-v-{{ cstate }}" href="{{ url_for('case', cid=c.id, tab='code', item=1) }}" title="Code verification - open the Code tab">
+      {% if cstate == 'verified' %}<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8 12.3 2.7 2.7L16 9.7"/></svg>
+      {% elif cstate == 'failed' %}<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="m9 9 6 6M15 9l-6 6"/></svg>
+      {% else %}<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="3 3"><circle cx="12" cy="12" r="9"/></svg>{% endif %}
+      {{ vlabel[cstate] }}</a><span class="ch-dot"></span>{% endif %}
+    <span class="ch-id">#TC-{{ c.tc_no }}</span>
+    {% if c.folder_name %}<span class="ch-dot"></span>
+    <a class="ch-folder" href="{{ url_for('project', pid=c.project_id, folder=c.folder_id) if not public else '#' }}"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.6l2 2h7.4A2.5 2.5 0 0 1 21 9.5v8A2.5 2.5 0 0 1 18.5 20h-13A2.5 2.5 0 0 1 3 17.5Z" fill="currentColor"/></svg>{{ c.folder_name }}</a>{% endif %}
+    <span class="ch-dot"></span>
+    <span><b>{{ c.updated_by or '-' }}</b> updated this test case <span title="{{ c.updated_at }}">{{ c.updated_at|ago }}</span></span>
+    <span class="ch-dot"></span>
+    <span class="ch-src" title="{{ 'Imported from TestMU-Ai' if c.source_path else 'Created in LogiTestHub' }}"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">{% if c.source_path %}<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>{% else %}<rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8"/>{% endif %}</svg>{{ 'Imported' if c.source_path else 'Web' }}</span>
+  </div>
+</div>
+
+{% if run and run.status in ('PASSED','FAILED','PARTIAL') %}
+<div class="ch-stats sm-stats">
+  <span class="ch-total"><b>{{ run.total or 0 }}</b> Total Steps</span>
+  <span class="ch-count ch-fail" title="Failed"><i>{{ sicon['failed']|safe }}</i>{{ run.failed or 0 }}</span>
+  <span class="ch-count ch-pass" title="Passed"><i>{{ sicon['passed']|safe }}</i>{{ run.passed or 0 }}</span>
+  <span class="ch-count ch-ai" title="Needs AI"><i>AI</i>{{ run.needs_ai or 0 }}</span>
+  <span class="ch-count ch-skip" title="Skipped"><i>{{ sicon['skipped']|safe }}</i>{{ run.skipped or 0 }}</span>
+</div>
+{% endif %}
+
+<div class="sm-grid">
+  <!-- ---------- steps ---------- -->
+  <section class="sm-steps">
+    {% if not run %}
+    <div class="sm-empty">This test has not been run yet. Press <b>▶ Run test</b> (top right) to record the first run.</div>
+    {% elif run.status == 'queued' %}
+    <div class="sm-empty"><span class="si si-queued me-2"></span>Queued in a Test Run: it starts as soon as the case before it finishes. This page refreshes every 5 seconds.</div>
+    {% elif run.status == 'running' %}
+    <div class="sm-empty"><span class="spinner-border spinner-border-sm me-2"></span>Running in a headless browser… this page refreshes every 5 seconds.</div>
+    {% elif run.status == 'ERROR' %}
+    <div class="alert alert-danger">The run could not finish: {{ run.error }}</div>
+    {% else %}
+      {% if has_video %}<div class="sm-hint">Click any step to jump the recording to that moment.</div>{% endif %}
+      {% for g in group_steps(steps) %}
+      <div class="sg" id="sg{{ loop.index }}">
+        <span class="sg-num">{{ loop.index }}</span>
+        <div class="sg-card">
+          <button class="sg-head" type="button" aria-expanded="true" onclick="var s=this.closest('.sg');s.classList.toggle('closed');this.setAttribute('aria-expanded',!s.classList.contains('closed'))">
+            <svg class="sg-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>
+            <span class="si si-{{ g.status }}">{{ sicon[g.status]|safe }}</span>
+            <span class="sg-title">{{ g.title }}</span>
+            <span class="sg-count" title="{{ g.passed }} of {{ g.steps|length }} passed">{{ g.passed }}/{{ g.steps|length }}</span>
+          </button>
+          <div class="sg-body">
+            {% for s in g.steps %}
+            <div class="sr st-{{ s.status }}" data-at="{{ s.at if s.at is defined and s.at is not none else '' }}" role="button" tabindex="0">
+              <span class="si si-{{ s.status }}">{{ sicon.get(s.status, '')|safe }}</span>
+              <div class="sr-main">
+                <div class="sr-text">{{ s.text }}</div>
+                {% if s.error %}<div class="sr-note t-fail">{{ s.error }}</div>{% endif %}
+                {% for w in s.warnings or [] %}<div class="sr-note t-warn">{{ w }}</div>{% endfor %}
+                {% if s.status == 'needs-ai' %}<div class="sr-note">Free-text step, not run{% if s.ai %}: {{ s.ai }}{% endif %}.</div>
+                {% elif s.ai and not s.error %}<div class="sr-note">AI checked: {{ s.ai }}</div>{% endif %}
+              </div>
+              <span class="sr-time">{{ (s.ms|secs) if s.status != 'skipped' else '' }}</span>
+              {% if s.shot %}<img class="thumb sr-thumb" src="{{ file_url(s.shot) }}" alt="Step {{ s.n }} screenshot" loading="lazy">{% endif %}
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    {% endif %}
+  </section>
+
+  <!-- ---------- right sidebar ---------- -->
+  <aside class="sm-side">
+
+    {% if run and run.status in ('PASSED','FAILED','PARTIAL') %}
+    <div class="sm-sec">
+      <div class="sm-sec-title">Screen recording</div>
+      {% if has_video %}
+      <video id="vid" class="rec" src="{{ file_url('video.webm') }}" controls preload="metadata" playsinline
+             {% if run_has(run, 'poster.png') %}poster="{{ file_url('poster.png') }}"{% endif %}></video>
+      {% else %}<div class="sm-sec-note">No video for this run.</div>{% endif %}
+    </div>
+    {% endif %}
+
+    {% if run %}
+    <div class="sm-sec">
+      <div class="sm-sec-title">Last run</div>
+      <dl class="sm-dl">
+        <dt>Result</dt><dd><span class="badge st-{{ run.status|lower }}">{{ run.status }}</span></dd>
+        <dt>Run</dt><dd>#{{ run.id }} by {{ run.run_by or '-' }}</dd>
+        <dt>Environment</dt><dd>{{ run.env_name or 'Default (shared variables)' }}</dd>
+        <dt>When</dt><dd title="{{ run.started_at }}">{{ run.started_at|ago }}</dd>
+        {% if run.duration_ms %}<dt>Duration</dt><dd>{{ run.duration_ms|secs }}</dd>{% endif %}
+      </dl>
+      {% if not public and run.share_token %}
+      <label class="sm-sec-note mt-2 d-block" for="shareUrl">Share link (anyone with it can view this run){% if run.share_expires %} · expires {{ run.share_expires[:16] }}{% endif %}</label>
+      <input id="shareUrl" class="form-control form-control-sm" readonly value="{{ url_for('shared', token=run.share_token, _external=True) }}" onclick="this.select()">
+      {% endif %}
+    </div>
+    {% endif %}
+
+    <div class="sm-sec">
+      <div class="sm-sec-title">Details</div>
+      <dl class="sm-dl">
+        {% if c.folder_name %}<dt>Folder</dt><dd>{{ c.folder_name }}</dd>{% endif %}
+        {% set tags = case_tags(c.content) %}
+        {% if tags %}<dt>Tags</dt><dd>{% for t in tags %}<span class="sm-tag">{{ t }}</span>{% endfor %}</dd>{% endif %}
+        <dt>Created</dt><dd>{{ c.created_by or '-' }} · {{ (c.created_at or c.updated_at)[:10] }}</dd>
+        <dt>Source</dt><dd>{{ 'Imported from TestMU-Ai' if c.source_path else 'Created in LogiTestHub' }}</dd>
+        {% if not public and me and me.role == 'admin' %}{% set u = case_ai_cost(c.id) %}
+        <dt>AI cost</dt><dd>{% if u.calls or u.cost %}<a href="{{ url_for('ai_usage', **{'from': '2000-01-01'}) }}" title="{{ u.calls }} AI calls · {{ u.tin }} in / {{ u.tout }} out tokens">{{ u.cost|usd }} · {{ (u.tin + u.tout)|tok }} tokens</a>{% else %}<span class="text-secondary">None yet</span>{% endif %}</dd>{% endif %}
+      </dl>
+    </div>
+  </aside>
+</div>
+{% endif %}
+</div>
+<div id="lb" class="lightbox"><img alt="Screenshot"></div>
+{% if not public and tab == 'summary' and run and run.status not in ('running', 'queued') %}
+<div class="modal fade" id="shareModal" tabindex="-1" aria-labelledby="shareModalTitle" aria-hidden="true"
+     data-url="{{ url_for('run_share_link', rid=run.id) }}" data-csrf="{{ csrf }}">
+  <div class="modal-dialog modal-dialog-centered share-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 class="modal-title" id="shareModalTitle">Share Test Case</h2>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="share-label">Expiry Duration</div>
+        <div class="dropdown">
+          <button class="share-days" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+            View: <span id="shareDaysLabel">7 Days</span>
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M6 9h12l-6 7z"/></svg></button>
+          <ul class="dropdown-menu share-days-menu" role="menu">
+            {% for d in (7, 15, 30) %}
+            <li><a class="dropdown-item {{ 'active' if d == 7 }}" href="#" role="menuitemradio" aria-checked="{{ 'true' if d == 7 else 'false' }}" data-days="{{ d }}">
+              <span class="chk">✓</span>{{ d }} Days</a></li>
+            {% endfor %}
+          </ul>
+        </div>
+        <div class="share-link-wrap" id="shareLinkWrap" {{ '' if run.share_token else 'hidden' }}>
+          <label class="share-label" for="shareLink">Link</label>
+          <input class="form-control form-control-sm" id="shareLink" readonly value="{{ url_for('shared', token=run.share_token, _external=True) if run.share_token else '' }}">
+        </div>
+        <div class="share-note" id="shareNote">{% if run.share_token %}Link is active{% if run.share_expires %} until {{ run.share_expires[:16] }}{% endif %}. Copy Link again to extend it from today.{% else %}Anyone with the link can view this run's steps, screenshots and recording without signing in.{% endif %}</div>
+        <div class="alert alert-danger py-2 mt-2 mb-0" id="shareErr" hidden></div>
+      </div>
+      <div class="modal-footer">
+        {% if run.share_token %}
+        <form method="post" action="{{ url_for('run_unshare', rid=run.id) }}" class="me-auto" onsubmit="return confirm('Stop sharing? The current link will stop working.')">
+          <input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn btn-link btn-sm text-danger px-0">Stop sharing</button></form>
+        {% endif %}
+        <button type="button" class="btn btn-outline-secondary" id="shareCopy">Copy Link</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+{% if tab == 'code' and gen and code_open %}
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>
+if (window.hljs) hljs.highlightElement(document.getElementById('codeText'));
+document.getElementById('copyCode').addEventListener('click', function () {
+  var btn = this, text = document.getElementById('codeText').textContent;
+  var done = function (ok) { btn.textContent = ok ? 'Copied' : 'Copy failed'; setTimeout(function () { btn.textContent = 'Copy'; }, 1500); };
+  var fallback = function () {   // http on a LAN IP has no clipboard API
+    var ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select(); var ok = false; try { ok = document.execCommand('copy'); } catch (e) {}
+    ta.remove(); done(ok);
+  };
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(function () { done(true); }, fallback);
+  else fallback();
+});
+</script>
+{% endif %}
+<script>
+(function () {
+  var vid = document.getElementById('vid'), lb = document.getElementById('lb'), lbImg = lb.querySelector('img');
+  document.querySelectorAll('.sr').forEach(function (el) {
+    el.addEventListener('click', function (e) {
+      if (e.target.classList.contains('thumb')) { lbImg.src = e.target.src; lb.style.display = 'flex'; return; }
+      var at = parseFloat(el.dataset.at);
+      if (vid && !isNaN(at)) { vid.currentTime = at; vid.play(); vid.scrollIntoView({ block: 'nearest' }); }
+      document.querySelectorAll('.sr.current').forEach(function (s) { s.classList.remove('current'); });
+      el.classList.add('current');
+    });
+  });
+  lb.addEventListener('click', function () { lb.style.display = 'none'; });
+})();
+</script>
+<script>
+(function () {   // double-click the title to rename the test case inline
+  var h = document.getElementById('caseTitle');
+  if (!h) return;
+  function start() {
+    if (h.querySelector('input')) return;
+    var old = h.textContent.trim(), input = document.createElement('input'), done = false;
+    input.type = 'text'; input.value = old; input.maxLength = 200; input.className = 'sm-title-input';
+    input.setAttribute('aria-label', 'Test case title');
+    h.textContent = ''; h.appendChild(input); input.focus(); input.select();
+    function finish(save) {
+      if (done) return; done = true;
+      var val = input.value.replace(/\s+/g, ' ').trim();
+      if (!save || !val || val === old) { h.textContent = old; if (save && !val) alert('Title cannot be empty.'); return; }
+      h.textContent = val; h.classList.add('saving');
+      var fd = new FormData(); fd.append('csrf', h.dataset.csrf); fd.append('title', val);
+      fetch(h.dataset.url, { method: 'POST', body: fd, credentials: 'same-origin' })
+        .then(function (r) { return r.json().catch(function () { return { ok: false }; }); })
+        .then(function (j) {
+          h.classList.remove('saving');
+          if (!j.ok) { h.textContent = old; alert(j.error || 'Could not save the title.'); return; }
+          h.textContent = j.title; document.title = document.title.replace(old, j.title);
+          h.classList.add('saved'); setTimeout(function () { h.classList.remove('saved'); }, 1200);
+        })
+        .catch(function () { h.classList.remove('saving'); h.textContent = old; alert('Could not save the title (network error).'); });
+    }
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    });
+    input.addEventListener('blur', function () { finish(true); });
+  }
+  h.addEventListener('dblclick', start);
+  h.addEventListener('keydown', function (e) { if (e.key === 'F2') { e.preventDefault(); start(); } });
+})();
+</script>
+<script>
+(function () {   // Share Test Case popup: pick expiry, Copy Link creates the link and copies it
+  var modal = document.getElementById('shareModal');
+  if (!modal) return;
+  var days = 7, btn = document.getElementById('shareCopy'), box = document.getElementById('shareLink'),
+      wrap = document.getElementById('shareLinkWrap'), note = document.getElementById('shareNote'),
+      label = document.getElementById('shareDaysLabel'), err = document.getElementById('shareErr');
+  modal.querySelectorAll('[data-days]').forEach(function (a) {
+    a.addEventListener('click', function (e) {
+      e.preventDefault(); days = +a.dataset.days; label.textContent = days + ' Days';
+      modal.querySelectorAll('[data-days]').forEach(function (x) { x.classList.toggle('active', x === a); x.setAttribute('aria-checked', x === a); });
+    });
+  });
+  function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text).then(function () { return true; }, legacy);
+    return Promise.resolve(legacy());
+    function legacy() { box.focus(); box.select(); try { return document.execCommand('copy'); } catch (e) { return false; } }
+  }
+  btn.addEventListener('click', function () {
+    err.hidden = true; btn.disabled = true; btn.textContent = 'Creating…';
+    var fd = new FormData(); fd.append('csrf', modal.dataset.csrf); fd.append('days', days);
+    fetch(modal.dataset.url, { method: 'POST', body: fd, credentials: 'same-origin' })
+      .then(function (r) { return r.json().catch(function () { return { ok: false, error: 'Unexpected server reply.' }; }); })
+      .then(function (j) {
+        if (!j.ok) throw new Error(j.error || 'Could not create the link.');
+        box.value = j.url; wrap.hidden = false;
+        note.textContent = 'Anyone with this link can view this run until ' + j.expires + ' (' + j.days + ' days).';
+        document.getElementById('shareBtn').classList.add('on');
+        return copyText(j.url);
+      })
+      .then(function (ok) { btn.textContent = ok ? 'Copied ✓' : 'Link ready - copy it below'; })
+      .catch(function (e) { err.textContent = e.message; err.hidden = false; btn.textContent = 'Copy Link'; })
+      .finally(function () { btn.disabled = false; setTimeout(function () { btn.textContent = 'Copy Link'; }, 2500); });
+  });
+  box.addEventListener('click', function () { box.select(); });
+})();
+</script>
+{% endblock %}

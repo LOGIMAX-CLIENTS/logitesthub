@@ -1,0 +1,216 @@
+{% extends 'base.html' %}
+{% import '_tr_macros.html' as m with context %}
+{% block title %}{{ tr.name }}{% endblock %}
+{% block head %}{% if any_running %}<meta http-equiv="refresh" content="6">{% endif %}{% endblock %}
+{% block crumbs %}<span class="tm-crumbs"><a href="{{ url_for('testruns.index') }}">Test Runs</a> <span>/</span> <b>{{ tr.name }}</b></span>{% endblock %}
+{% block content %}
+{% set s = summ.get(sel) %}
+<div class="trd-head">
+  <div class="min-w-0">
+    <h1 class="trd-title">{{ m.status_icon(s.status if s else None) }} {{ tr.name }}</h1>
+    <div class="trl-meta">
+      <span>{{ tr.project_name }}{% if tr.mode == 'fixed' %} · fixed list{% elif tr.folder_name %} · {{ tr.folder_name }}{% else %} · all folders{% endif %}</span>
+      <span>{{ cases|length }} case{{ 's' if cases|length != 1 }}{% if skip_ids %} · <b class="t-warn">{{ n_run }} will run</b>{% endif %}</span>
+      {% if tr.only_ready %}<span class="qa-tag">Ready for QA only</span>{% endif %}
+      <span class="trl-env">{{ tr.env_name or 'Default env' }}</span>
+      <span>Created by {{ tr.created_by }} {{ tr.created_at|ago }}</span>
+    </div>
+    {% if tr.description %}<div class="small text-secondary mt-1">{{ tr.description }}</div>{% endif %}
+  </div>
+  <div class="d-flex flex-wrap gap-2">
+    <form method="post" action="{{ url_for('testruns.run_now', tid=tr.id) }}" class="btn-group run-split">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="env_id" id="trRunEnv" value="{{ tr.env_id or '' }}">
+      <button class="btn btn-success btn-sm" {{ 'disabled' if any_running or not n_run }} title="{{ 'Every chosen case is still Draft: untick Ready for QA only, or mark them Ready for QA' if cases and not n_run else '' }}">{{ 'Running…' if any_running else '▶ Run now' }}{% if not any_running %} <span class="run-env">· {{ tr.env_name or 'default' }}</span>{% endif %}</button>
+      {% if env_list|length > 1 and not any_running and n_run %}
+      <button type="button" class="btn btn-success btn-sm dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-label="Choose environment"></button>
+      <ul class="dropdown-menu dropdown-menu-end"><li><h6 class="dropdown-header">Run on</h6></li>
+        {% for e in env_list %}<li><button class="dropdown-item" type="submit" onclick="document.getElementById('trRunEnv').value='{{ e.id }}'"><b>{{ e.name }}</b><div class="small text-secondary env-dd-url">{{ e.base_url }}</div></button></li>{% endfor %}</ul>
+      {% endif %}
+    </form>
+    <button class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#casePicker">☑ Select test cases</button>
+    <button class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#newSched">⏰ Schedule</button>
+    <button class="btn btn-outline-secondary btn-sm" data-bs-toggle="collapse" data-bs-target="#trEdit">Edit</button>
+    <form method="post" action="{{ url_for('testruns.delete', tid=tr.id) }}" onsubmit="return confirm('Delete this Test Run? Its schedules stop; past case results stay.')"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn btn-link btn-sm text-danger">Delete</button></form>
+  </div>
+</div>
+
+<div class="collapse mb-3" id="trEdit">
+  <form method="post" action="{{ url_for('testruns.edit', tid=tr.id) }}" class="panel">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="row g-2">
+      <div class="col-md-4"><label class="form-label" for="eName">Name</label><input class="form-control form-control-sm" id="eName" name="name" value="{{ tr.name }}" required maxlength="160"></div>
+      {% if tr.mode == 'dynamic' %}
+      <div class="col-md-3"><label class="form-label" for="eFolder">Folder</label><select class="form-select form-select-sm" id="eFolder" name="folder_id"><option value="">All folders</option>
+        {% for f in folders %}<option value="{{ f.id }}" {{ 'selected' if f.id == tr.folder_id }}>{{ f.name }}</option>{% endfor %}</select></div>{% endif %}
+      <div class="col-md-3"><label class="form-label" for="eEnv">Environment</label><select class="form-select form-select-sm" id="eEnv" name="env_id">{% for e in env_list %}<option value="{{ e.id }}" {{ 'selected' if e.id == tr.env_id }}>{{ e.name }}</option>{% endfor %}</select></div>
+      <div class="col-md-2 d-flex align-items-end"><label class="form-check"><input class="form-check-input" type="checkbox" name="only_ready" {{ 'checked' if tr.only_ready }}> Ready for QA only</label></div>
+      <div class="col-12"><label class="form-label" for="eDesc">Description</label><input class="form-control form-control-sm" id="eDesc" name="description" value="{{ tr.description or '' }}" maxlength="500"></div>
+    </div>
+    <button class="btn btn-primary btn-sm mt-3">Save</button>
+  </form>
+</div>
+
+<div class="trd-grid">
+  <section class="panel p-0">
+    <div class="au-head"><b>{% if sel %}Run #{{ sel }} results{% else %}Test cases{% endif %} <span class="small text-secondary fw-normal">· run in this order, one after another</span></b>{% if s %}{{ m.result_bar(s) }}{% endif %}</div>
+    <div class="trd-cases">
+      {% set shown = results.keys()|list %}
+      {% for c in cases %}{% set r = results.get(c.id) %}
+      <a class="trd-case {{ 'is-skip' if c.id in skip_ids }}" href="{{ url_for('case', cid=c.id, run=r.id) if r else url_for('case', cid=c.id) }}">
+        <span class="trd-order">{{ loop.index }}</span>{{ m.status_icon(r.status if r else None) }}
+        <span class="min-w-0 flex-grow-1"><b>TC-{{ c.tc_no }}</b> <span class="text-truncate">{{ c.title }}</span></span>
+        {% if c.qa_status == 'ready' %}<span class="qa-tag">Ready for QA</span>{% elif c.id in skip_ids %}<span class="skip-tag" title="Ready for QA only is on">Skipped: not Ready for QA</span>{% endif %}
+        <span class="small text-secondary text-nowrap">{% if r and r.total %}{{ r.passed }}/{{ r.total }} steps · {{ r.duration_ms|secs }}{% elif r %}{{ r.status }}{% else %}not in this run{% endif %}</span>
+      </a>
+      {% else %}
+      <div class="tr-empty"><b>No test cases {{ 'match' if tr.mode == 'dynamic' or tr.only_ready else 'selected yet' }}</b>
+        <span>{% if tr.mode == 'dynamic' and tr.only_ready %}None of the cases in this folder are marked Ready for QA yet. Mark them on the project page, or untick "Ready for QA only" in Edit.{% else %}Pick the test cases to run, from one or many folders.{% endif %}</span>
+        <button class="btn btn-success btn-sm mt-2" data-bs-toggle="modal" data-bs-target="#casePicker">☑ Select test cases</button></div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <aside>
+    <div class="panel p-0 mb-3">
+      <div class="au-head"><b>Run history</b><span class="small text-secondary">{{ execs|length }}</span></div>
+      {% for e in execs %}{% set es = summ.get(e.id) %}
+      <a class="trd-exec {{ 'on' if e.id == sel }}" href="{{ url_for('testruns.detail', tid=tr.id, exec=e.id) }}">
+        {{ m.status_icon(es.status if es else None) }}
+        <span class="flex-grow-1 min-w-0"><b>Run #{{ e.id }}</b> <span class="small text-secondary">{{ e.env_name or 'default' }} · {{ e.started_at|ago }} · {{ '⏰ schedule' if e.schedule_id else 'by ' ~ e.started_by }}</span></span>
+        <span class="small text-nowrap">{% if es %}{{ es.passed }}/{{ es.total }}{% endif %}</span>
+      </a>
+      {% else %}<div class="small text-secondary p-3">Not run yet. Press ▶ Run now or add a schedule.</div>{% endfor %}
+    </div>
+    <div class="panel p-0" id="schedule">
+      <div class="au-head"><b>Schedules</b><button class="btn btn-link btn-sm p-0" data-bs-toggle="modal" data-bs-target="#newSched">+ Add</button></div>
+      {% for sc in scheds %}
+      <div class="trd-exec {{ 'is-paused' if not sc.active }}">
+        <span class="flex-grow-1 min-w-0"><b>{{ describe(sc) }}</b><span class="small text-secondary d-block">{{ sc.env_name or 'Test Run env' }} · {% if sc.active and sc.next_run_at %}next {{ sc.next_run_at[:16] }} ({{ sc.next_run_at|until }}){% else %}{{ 'paused' if sc.next_run_at else 'finished' }}{% endif %}</span></span>
+        {% if sc.active or sc.next_run_at %}<form method="post" action="{{ url_for('testruns.schedule_action', sid=sc.id, action='pause' if sc.active else 'resume') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="back" value="{{ url_for('testruns.detail', tid=tr.id) }}"><button class="btn btn-sm btn-outline-secondary">{{ 'Pause' if sc.active else 'Resume' }}</button></form>{% endif %}
+      </div>
+      {% else %}<div class="small text-secondary p-3">No schedule. Add one to run this automatically, e.g. every night at 9 PM on QA.</div>{% endfor %}
+    </div>
+  </aside>
+</div>
+
+
+<!-- Case picker: all folders, tick a folder or single cases, any number of folders -->
+<div class="modal fade" id="casePicker" tabindex="-1" aria-labelledby="cpTitle" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+    <form class="modal-content tb-modal cp" method="post" action="{{ url_for('testruns.set_cases', tid=tr.id) }}" id="cpForm">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="modal-header">
+        <div><h2 class="modal-title h6 mb-0" id="cpTitle">Select test cases</h2>
+          <div class="small text-secondary">Tick a whole folder, or open it and tick single cases. Mix as many folders as you like.</div></div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="cp-tools">
+        <label class="tm-search flex-grow-1"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+          <input id="cpSearch" type="search" placeholder="Search by TC number or title" aria-label="Search test cases"></label>
+        <label class="cp-toggle"><input type="checkbox" id="cpReady"> Ready for QA only</label>
+        <button type="button" class="btn btn-sm btn-link" id="cpExpand">Expand all</button>
+        <button type="button" class="btn btn-sm btn-link text-danger" id="cpClear">Clear</button>
+      </div>
+      <div class="modal-body p-0" id="cpBody" role="tree" aria-label="Folders and test cases"></div>
+      <div class="modal-footer">
+        <label class="cp-onlyready me-auto"><input class="form-check-input" type="checkbox" name="only_ready" {{ 'checked' if tr.only_ready }}>
+          Run only cases marked <b>Ready for QA</b> <span class="text-secondary">(Draft ones are skipped)</span></label>
+        <span class="small"><b id="cpCount">0</b> selected <span class="text-secondary">from <span id="cpFolders">0</span> folder(s) · runs in TC order</span></span>
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-primary" id="cpSave">Save selection</button>
+      </div>
+    </form>
+  </div>
+</div>
+<script type="application/json" id="cpData">{{ picker|tojson }}</script>
+
+<div class="modal fade" id="newSched" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">{{ m.schedule_form([], env_list, days, today, fixed_run=tr, back=url_for('testruns.detail', tid=tr.id)) }}</div>
+</div>
+{% endblock %}
+{% block scripts %}<script>
+(function () {   // test case picker
+  var el = document.getElementById('cpData');
+  if (!el) return;
+  var data = JSON.parse(el.textContent), sel = new Set(data.selected), body = document.getElementById('cpBody');
+  var q = '', readyOnly = false, open = new Set();
+  var groups = data.folders.map(function (f) { return { id: f.id, name: f.name, cases: [] }; });
+  var byId = {}; groups.forEach(function (g) { byId[g.id] = g; });
+  var none = { id: 0, name: '(no folder)', cases: [] };
+  data.cases.forEach(function (c) { (byId[c.folder] || none).cases.push(c); });
+  if (none.cases.length) groups.push(none);
+  groups.forEach(function (g) { if (g.cases.some(function (c) { return sel.has(c.id); })) open.add(g.id); });
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (ch) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]; }); }
+  function visible(c) {
+    if (readyOnly && !c.ready) return false;
+    return !q || ('tc-' + c.tc).indexOf(q) !== -1 || c.title.toLowerCase().indexOf(q) !== -1;
+  }
+  function render() {
+    var html = '';
+    groups.forEach(function (g) {
+      var vis = g.cases.filter(visible);
+      if (!vis.length && (q || readyOnly)) return;
+      var n = g.cases.filter(function (c) { return sel.has(c.id); }).length, all = vis.length && vis.every(function (c) { return sel.has(c.id); });
+      var some = vis.some(function (c) { return sel.has(c.id); });
+      var isOpen = open.has(g.id) || !!q;
+      html += '<div class="cp-folder" role="treeitem" aria-expanded="' + isOpen + '">' +
+        '<div class="cp-frow"><input type="checkbox" class="form-check-input cp-fcb" data-f="' + g.id + '"' + (all ? ' checked' : '') +
+        (some && !all ? ' data-mixed="1"' : '') + ' aria-label="Select all in ' + esc(g.name) + '">' +
+        '<button type="button" class="cp-open" data-f="' + g.id + '"><svg class="cp-chev" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>' +
+        '<svg viewBox="0 0 24 24" width="16" height="16" class="cp-ficon"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.6l2 2h7.4A2.5 2.5 0 0 1 21 9.5v8A2.5 2.5 0 0 1 18.5 20h-13A2.5 2.5 0 0 1 3 17.5Z" fill="currentColor"/></svg>' +
+        '<span class="cp-fname">' + esc(g.name) + '</span></button>' +
+        '<span class="cp-fcount' + (n ? ' on' : '') + '">' + n + ' / ' + g.cases.length + '</span></div>';
+      if (isOpen) {
+        html += '<div class="cp-cases" role="group">';
+        vis.forEach(function (c) {
+          html += '<label class="cp-case"><input type="checkbox" class="form-check-input cp-ccb" value="' + c.id + '"' + (sel.has(c.id) ? ' checked' : '') + '>' +
+            '<span class="cp-tc">TC-' + c.tc + '</span><span class="cp-title">' + esc(c.title) + '</span>' +
+            (c.ready ? '<span class="qa-tag">Ready for QA</span>' : '') +
+            (c.last ? '<span class="badge st-' + c.last.toLowerCase() + '">' + esc(c.last) + '</span>' : '') + '</label>';
+        });
+        if (!vis.length) html += '<div class="cp-empty">No test cases in this folder.</div>';
+        html += '</div>';
+      }
+      html += '</div>';
+    });
+    body.innerHTML = html || '<div class="cp-empty p-4">No test cases match.</div>';
+    body.querySelectorAll('.cp-fcb[data-mixed]').forEach(function (x) { x.indeterminate = true; });
+    count();
+  }
+  function count() {
+    var folders = new Set();
+    data.cases.forEach(function (c) { if (sel.has(c.id)) folders.add(c.folder || 0); });
+    document.getElementById('cpCount').textContent = sel.size;
+    document.getElementById('cpFolders').textContent = folders.size;
+  }
+  body.addEventListener('click', function (e) {
+    var b = e.target.closest('.cp-open');
+    if (b) { var f = +b.dataset.f; open.has(f) ? open.delete(f) : open.add(f); render(); }
+  });
+  body.addEventListener('change', function (e) {
+    var t = e.target;
+    if (t.classList.contains('cp-ccb')) { t.checked ? sel.add(+t.value) : sel.delete(+t.value); render(); }
+    if (t.classList.contains('cp-fcb')) {
+      var g = groups.filter(function (x) { return x.id === +t.dataset.f; })[0];
+      g.cases.filter(visible).forEach(function (c) { t.checked ? sel.add(c.id) : sel.delete(c.id); });
+      render();
+    }
+  });
+  document.getElementById('cpSearch').addEventListener('input', function () { q = this.value.trim().toLowerCase(); render(); });
+  document.getElementById('cpReady').addEventListener('change', function () { readyOnly = this.checked; render(); });
+  document.getElementById('cpExpand').addEventListener('click', function () {
+    var allOpen = groups.every(function (g) { return open.has(g.id); });
+    groups.forEach(function (g) { allOpen ? open.delete(g.id) : open.add(g.id); });
+    this.textContent = allOpen ? 'Expand all' : 'Collapse all'; render();
+  });
+  document.getElementById('cpClear').addEventListener('click', function () { sel.clear(); render(); });
+  document.getElementById('cpForm').addEventListener('submit', function (e) {
+    if (!sel.size && !confirm('Save with no test cases selected?')) { e.preventDefault(); return; }
+    var f = this; f.querySelectorAll('input[name=ids]').forEach(function (x) { x.remove(); });
+    sel.forEach(function (id) { var i = document.createElement('input'); i.type = 'hidden'; i.name = 'ids'; i.value = id; f.appendChild(i); });
+  });
+  render();
+  if (new URLSearchParams(location.search).get('pick')) bootstrap.Modal.getOrCreateInstance(document.getElementById('casePicker')).show();
+})();
+</script>
+{{ m.schedule_js() }}{% if request.args.get('schedule') %}<script>bootstrap.Modal.getOrCreateInstance(document.getElementById('newSched')).show();</script>{% endif %}{% endblock %}

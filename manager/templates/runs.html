@@ -1,0 +1,25 @@
+{% extends 'base.html' %}
+{% block title %}Test Runs{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap gap-2 align-items-center justify-content-between mb-3">
+  <div><h1 class="h4 mb-0">Test Runs</h1><div class="text-secondary small">Latest 200 runs across all projects{{ ' · Partial / error' if status == 'other' }}</div></div>
+  <div class="btn-group btn-group-sm flex-wrap" role="group" aria-label="Filter by result">
+    <a class="btn btn-outline-secondary {{ 'active' if not status }}" href="{{ url_for('runs_list') }}">All</a>
+    {% for s in statuses %}<a class="btn btn-outline-secondary {{ 'active' if status == s }}" href="{{ url_for('runs_list', status=s) }}">{{ s|capitalize }}</a>{% endfor %}
+  </div>
+</div>
+<div class="list">
+  {% for r in runs %}
+  <a class="list-row case-row" href="{{ url_for('case', cid=r.case_id, run=r.id) }}">
+    <span class="badge st-{{ r.status|lower }}">{{ r.status }}</span>
+    <div class="flex-grow-1 min-w-0">
+      <div class="fw-semibold text-truncate">{{ r.title }}</div>
+      <div class="small text-secondary">{{ r.project_name }} · TC-{{ r.tc_no }} · Run #{{ r.id }} by {{ r.run_by or '-' }} · {{ r.started_at }}</div>
+    </div>
+    <div class="small text-secondary text-end">{% if r.total %}{{ r.passed }}/{{ r.total }} passed · {{ r.duration_ms|secs }}{% endif %}{% if r.error %}<span class="t-fail">{{ r.error }}</span>{% endif %}</div>
+  </a>
+  {% else %}
+  <div class="panel text-secondary">No runs{{ ' with this result' if status }}.</div>
+  {% endfor %}
+</div>
+{% endblock %}

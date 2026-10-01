@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Home{% endblock %} · LogiTestHub</title>
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='logo.svg') }}">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="{{ url_for('static', filename='style.css') }}" rel="stylesheet">
+{% block head %}{% endblock %}
+</head>
+<body class="{{ 'with-rail' if me and not public }} {% block bodyclass %}{% endblock %}">
+{% if me and not public %}
+{% set ep = request.endpoint or '' %}
+{% set active_pid = p.id if (p is defined and p) else (c.project_id if (c is defined and c) else none) %}
+{% set in_tm = ep in ('projects', 'project', 'case', 'case_new', 'case_edit') %}
+{# Collapsed icon rail; widens on hover (desktop) or with the menu button (touch). Icons are our own set. #}
+<nav class="side" id="side" aria-label="Main">
+  <div class="side-brand">
+    <img class="side-mark" src="{{ url_for('static', filename='logo.svg') }}" alt="" width="38" height="38">
+    <span class="side-label side-title"><span class="wm">Logi<b>TestHub</b></span><small>Plan • Test • Track • Deliver</small></span>
+  </div>
+  <div class="side-items">
+    <a class="side-item {{ 'active' if ep == 'home' }}" href="{{ url_for('home') }}" title="Home">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="8" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="5" rx="1.5"/><rect x="13.5" y="11.5" width="7" height="9" rx="1.5"/><rect x="3.5" y="14.5" width="7" height="6" rx="1.5"/></svg>
+      <span class="side-label">Home</span>
+    </a>
+    <div class="side-group {{ 'open' if in_tm }}">
+      <div class="side-item {{ 'active' if in_tm }}">
+        <a class="side-link" href="{{ url_for('projects') }}" title="Test Case">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6v3H9z"/><path d="M15 5.5h2.5A1.5 1.5 0 0 1 19 7v12.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19.5V7a1.5 1.5 0 0 1 1.5-1.5H9"/><path d="m8.5 13 2.2 2.2L15.5 10.5"/></svg>
+          <span class="side-label">Test Case</span>
+        </a>
+        <button class="side-caret side-label" type="button" aria-label="Show projects" aria-expanded="{{ 'true' if in_tm else 'false' }}"
+                onclick="var g=this.closest('.side-group');g.classList.toggle('open');this.setAttribute('aria-expanded',g.classList.contains('open'))">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+        </button>
+      </div>
+      <div class="side-sub">
+        <a class="{{ 'active' if ep == 'projects' }}" href="{{ url_for('projects') }}">All projects</a>
+        {% for np in nav_projects %}
+        <a class="{{ 'active' if active_pid == np.id }}" href="{{ url_for('project', pid=np.id) }}">{{ np.name }}</a>
+        {% endfor %}
+      </div>
+    </div>
+    <a class="side-item {{ 'active' if ep == 'runs_list' or ep.startswith('testruns.') }}" href="{{ url_for('testruns.index') }}" title="Test Runs">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m10 9.2 4.8 2.8-4.8 2.8z"/></svg>
+      <span class="side-label">Test Runs</span>
+    </a>
+    {% if me.role == 'admin' %}
+    <a class="side-item {{ 'active' if ep == 'users' }}" href="{{ url_for('users') }}" title="Users">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8.5" r="3.5"/><path d="M2.5 19.5a6.5 6.5 0 0 1 13 0"/><path d="M16 5.2a3.5 3.5 0 0 1 0 6.6M18 13.8a6.5 6.5 0 0 1 3.5 5.7"/></svg>
+      <span class="side-label">Users</span>
+    </a>
+    <a class="side-item {{ 'active' if ep == 'environments' }}" href="{{ url_for('environments') }}" title="Environments">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01M11 7h6M11 17h6"/></svg>
+      <span class="side-label">Environments</span>
+    </a>
+    <a class="side-item {{ 'active' if ep == 'ai_usage' }}" href="{{ url_for('ai_usage') }}" title="AI Usage">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/><path d="m17.5 3 .7 1.6 1.6.7-1.6.7-.7 1.6-.7-1.6-1.6-.7 1.6-.7z" fill="currentColor"/></svg>
+      <span class="side-label">AI Usage</span>
+    </a>
+    <a class="side-item {{ 'active' if ep == 'reports.users' }}" href="{{ url_for('reports.users') }}" title="User Report">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6.5A2.5 2.5 0 0 0 4 5.5v13A2.5 2.5 0 0 0 6.5 21h11a2.5 2.5 0 0 0 2.5-2.5V9z"/><path d="M14 3v6h6"/><circle cx="12" cy="12.5" r="2"/><path d="M8.5 18a3.5 3.5 0 0 1 7 0"/></svg>
+      <span class="side-label">User Report</span>
+    </a>
+    {% endif %}
+  </div>
+  <div class="side-bottom">
+    <div class="dropup dropend">
+      <button class="side-item side-cred" type="button" title="Credentials" data-bs-toggle="dropdown" aria-expanded="false"
+              data-bs-popper-config='{"strategy":"fixed"}'>
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="m10.8 12.2 8.7-8.7M16 7l2.5 2.5M13.5 9.5 15.5 11.5"/></svg>
+        <span class="side-label">Credentials</span>
+        <svg class="side-label ms-auto" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+      </button>
+      <div class="dropdown-menu cred-pop">
+        <div class="cred-title">Credential</div>
+        <button class="cred-row" type="button" data-copy-text="{{ me.username }}">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="10" r="3"/><path d="M6.5 18.5c1.3-2 3.2-3 5.5-3s4.2 1 5.5 3"/></svg>
+          <span class="cred-name">Username<small>{{ me.username }}</small></span>{% include '_copy_icon.html' %}</button>
+        <a class="cred-row" href="{{ url_for('profile') }}#access-key" title="{{ 'Access key is shown only once. Regenerate on the profile page to copy a new one.' if my_key else 'Generate your access key' }}">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="10.5" r="2.5"/><path d="M12 13v4.5M12 15.5h1.8"/></svg>
+          <span class="cred-name">Access Key<small>{{ ('lth_••••' ~ my_key.key_hint) if my_key else 'Not generated yet' }}</small></span>
+          <span class="cred-act">{{ 'Regenerate' if my_key else 'Generate' }}</span></a>
+        <a class="cred-row cred-manage" href="{{ url_for('profile') }}#access-key">
+          <span class="cred-name">Manage Credentials</span>
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg></a>
+      </div>
+    </div>
+  </div>
+  <button class="side-toggle" type="button" aria-label="Expand menu" onclick="document.getElementById('side').classList.toggle('expanded')">
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+  </button>
+</nav>
+{% endif %}
+<nav class="topbar">
+  <a class="brand wm" href="{{ url_for('home') if me else '#' }}">Logi<b>TestHub</b></a>
+  <div class="crumbs">{% block crumbs %}{% endblock %}</div>
+  {% if me %}
+  <div class="dropdown user">
+    <button class="user-btn" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Account menu">
+      <span class="avatar">{{ me.name[:1]|upper }}</span>
+      <span class="user-name">{{ me.name }}</span>
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>
+    </button>
+    <div class="dropdown-menu dropdown-menu-end user-menu">
+      <div class="user-menu-head"><span class="avatar">{{ me.name[:1]|upper }}</span><div class="min-w-0"><div class="fw-semibold text-truncate">{{ me.name }}</div><div class="small text-secondary">@{{ me.username }} · {{ me.role|capitalize }}</div></div></div>
+      <div class="dropdown-divider"></div>
+      <a class="dropdown-item" href="{{ url_for('profile') }}">My profile</a>
+      {% if me.role == 'admin' %}
+      <a class="dropdown-item" href="{{ url_for('users') }}">Users</a>
+      <a class="dropdown-item" href="{{ url_for('users') }}#new">Create account</a>
+      {% endif %}
+      <div class="dropdown-divider"></div>
+      <form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="dropdown-item">Sign out</button></form>
+    </div>
+  </div>
+  {% endif %}
+</nav>
+<main class="{% block mainclass %}container-xl{% endblock %} py-4">
+  {% with msgs = get_flashed_messages(with_categories=true) %}
+  {% for cat, m in msgs %}<div class="alert alert-{{ cat }} py-2">{{ m }}</div>{% endfor %}
+  {% endwith %}
+  {% block content %}{% endblock %}
+</main>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+document.querySelectorAll('[data-copy-text]').forEach(function (b) {   // sidebar Credentials: copy username
+  b.addEventListener('click', function (e) {
+    e.preventDefault(); e.stopPropagation();
+    var text = b.dataset.copyText, done = function (ok) { b.classList.add(ok ? 'ok' : 'bad'); setTimeout(function () { b.classList.remove('ok', 'bad'); }, 1400); };
+    var legacy = function () { var ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select(); var ok = false; try { ok = document.execCommand('copy'); } catch (x) {} ta.remove(); done(ok); };
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(function () { done(true); }, legacy); else legacy();
+  });
+});
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

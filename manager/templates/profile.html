@@ -1,0 +1,105 @@
+{% extends 'base.html' %}
+{% block title %}Profile{% endblock %}
+{% block crumbs %}<span class="tm-crumbs"><b>Profile</b></span>{% endblock %}
+{% block content %}
+<div class="profile-head panel mb-3">
+  <span class="avatar avatar-lg">{{ me.name[:1]|upper }}</span>
+  <div class="min-w-0">
+    <div class="h5 mb-0 text-truncate">{{ me.name }}</div>
+    <div class="text-secondary small">@{{ me.username }} · <span class="role role-{{ me.role }}">{{ me.role|capitalize }}</span> · Member since {{ me.created_at[:10] }}</div>
+  </div>
+  <div class="profile-stats">
+    <div><b>{{ stats.runs }}</b><span>Runs started</span></div>
+    <div><b>{{ stats.cases }}</b><span>Test cases created</span></div>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-6">
+    <form method="post" class="panel h-100">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="details">
+      <h2 class="h6 mb-3">Details</h2>
+      <label class="form-label" for="un">Username</label>
+      <input class="form-control mb-3" id="un" value="{{ me.username }}" disabled>
+      <label class="form-label" for="nm">Full name</label>
+      <input class="form-control mb-3" id="nm" name="name" value="{{ me.name }}" maxlength="60" required>
+      <button class="btn btn-primary">Save</button>
+    </form>
+  </div>
+  <div class="col-lg-6">
+    <form method="post" class="panel h-100" autocomplete="off">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="password">
+      <h2 class="h6 mb-3">Change password</h2>
+      <label class="form-label" for="cur">Current password</label>
+      <input class="form-control mb-3" id="cur" name="current" type="password" autocomplete="current-password" required>
+      <label class="form-label" for="npw">New password <span class="text-secondary small">(min {{ min_pw }} characters)</span></label>
+      <input class="form-control mb-3" id="npw" name="new" type="password" minlength="{{ min_pw }}" autocomplete="new-password" required>
+      <label class="form-label" for="cpw">Confirm new password</label>
+      <input class="form-control mb-3" id="cpw" name="confirm" type="password" minlength="{{ min_pw }}" autocomplete="new-password" required>
+      <button class="btn btn-primary">Change password</button>
+    </form>
+  </div>
+</div>
+
+<div class="panel mt-3 my-ai" id="my-ai">
+  <h2 class="h6 mb-1">My AI usage this month</h2>
+  <div class="d-flex flex-wrap align-items-end gap-3 mt-2">
+    <div class="my-ai-big {{ 't-fail' if not ai.ok }}">{{ ai.used_inr|inr(1) }}</div>
+    <div class="text-secondary small pb-1">of {{ (ai.limit_inr|inr(1)) if ai.limit_inr is not none else 'no limit' }}{% if ai.limit_source == 'default' and ai.limit_inr is not none %} (default){% endif %}{% if ai.extra_inr %} · includes +{{ ai.extra_inr|inr(1) }} extra this month{% endif %} · resets {{ ai.resets_on }}</div>
+  </div>
+  {% if ai.pct is not none %}<div class="bd-meter mt-2" role="img" aria-label="{{ ai.pct }}% of your AI limit used"><span style="width: {{ ai.pct }}%" class="{{ 'hot' if ai.pct >= 80 }}"></span></div>{% endif %}
+  {% if ai.message %}<div class="small mt-2 {{ 't-fail' if not ai.ok else 't-warn' }}">{{ ai.message }}</div>{% endif %}
+  <div class="small text-secondary mt-2">Counts AI steps in runs, Generate with AI, and AI calls from the CLI / IDE. Estimated from token prices.</div>
+</div>
+
+<div class="panel mt-3 ak" id="access-key">
+  <h2 class="h6 mb-1">Username and Access Key</h2>
+  <div class="text-secondary small mb-3">Use these to connect the LogiTestHub CLI or your IDE. The AI key stays on the server; only this access key is used on your PC.</div>
+  <div class="row g-3">
+    <div class="col-md-5">
+      <label class="form-label" for="akUser">Username</label>
+      <div class="ak-field"><input id="akUser" readonly value="{{ me.username }}"><button type="button" class="ak-copy" data-copy="#akUser" aria-label="Copy username">{% include '_copy_icon.html' %}</button></div>
+    </div>
+    <div class="col-md-7">
+      <label class="form-label" for="akKey">Access Key</label>
+      {% if new_key %}
+      <div class="ak-field ak-new"><input id="akKey" readonly value="{{ new_key }}"><button type="button" class="ak-copy" data-copy="#akKey" aria-label="Copy access key">{% include '_copy_icon.html' %}</button></div>
+      <div class="ak-warn">Copy this key now. For security it is shown only once; after you leave this page only its last 4 characters are kept.</div>
+      {% elif key %}
+      <div class="ak-field"><input id="akKey" readonly value="lth_••••••••••••••••••••{{ key.key_hint }}" aria-describedby="akMeta"></div>
+      {% else %}
+      <div class="ak-field"><input id="akKey" readonly value="No access key yet"></div>
+      {% endif %}
+      <div class="small text-secondary mt-1" id="akMeta">
+        {% if key %}Created {{ key.created_at[:16] }} · {% if key.last_used_at %}Last used {{ key.last_used_at|ago }} from {{ key.last_used_ip }}{% else %}Never used{% endif %}{% endif %}
+      </div>
+    </div>
+  </div>
+  <div class="d-flex flex-wrap gap-2 mt-3">
+    <form method="post" {% if key %}onsubmit="return confirm('Regenerate the access key? The current key stops working immediately, so update the CLI / IDE with the new one.')"{% endif %}>
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="key_new">
+      <button class="btn btn-outline-secondary">{{ 'Regenerate Access Key' if key else 'Generate Access Key' }}</button></form>
+    {% if key %}
+    <form method="post" onsubmit="return confirm('Revoke the access key? The CLI / IDE will stop connecting until you generate a new one.')">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="key_revoke">
+      <button class="btn btn-link text-danger">Revoke</button></form>
+    {% endif %}
+  </div>
+  <details class="ak-how mt-3">
+    <summary>Test the connection</summary>
+    <pre>curl -u {{ me.username }}:&lt;access-key&gt; {{ api_base }}/whoami</pre>
+  </details>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+document.querySelectorAll('.ak-copy').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var input = document.querySelector(b.dataset.copy), text = input.value;
+    var done = function (ok) { b.classList.add(ok ? 'ok' : 'bad'); setTimeout(function () { b.classList.remove('ok', 'bad'); }, 1400); };
+    var legacy = function () { input.select(); var ok = false; try { ok = document.execCommand('copy'); } catch (e) {} done(ok); };
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(function () { done(true); }, legacy); else legacy();
+  });
+});
+</script>
+{% endblock %}

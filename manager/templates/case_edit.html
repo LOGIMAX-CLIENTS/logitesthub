@@ -1,0 +1,25 @@
+{% extends 'base.html' %}
+{% block title %}{{ 'Edit' if case else 'New test case' }}{% endblock %}
+{% block crumbs %}<a href="{{ url_for('projects') }}">Projects</a> / <a href="{{ url_for('project', pid=p.id) }}">{{ p.name }}</a> / {{ ('TC-' ~ case.tc_no) if case else 'New' }}{% endblock %}
+{% block content %}
+<form method="post" class="panel">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <div class="row g-3 mb-3">
+    <div class="col-md-4">
+      <label class="form-label" for="folder">Folder</label>
+      <select class="form-select" id="folder" name="folder_id">
+        <option value="">(no folder)</option>
+        {% for f in folders %}<option value="{{ f.id }}" {{ 'selected' if folder_id == f.id }}>{{ f.name }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-md-8 small text-secondary align-self-end">
+      One step per line. <code># Title</code>, <code>## Section</code>. Use <code>{{ '{{' }}variable{{ '}}' }}</code> for data from the variables file.
+    </div>
+  </div>
+  <textarea class="form-control font-monospace" name="content" rows="24" spellcheck="false">{{ content }}</textarea>
+  <div class="d-flex gap-2 mt-3">
+    <button class="btn btn-primary">Save</button>
+    <a class="btn btn-outline-secondary" href="{{ url_for('case', cid=case.id) if case else url_for('project', pid=p.id) }}">Cancel</a>
+  </div>
+</form>
+{% endblock %}
