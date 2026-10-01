@@ -1138,7 +1138,7 @@ def _env_form(existing=None):
     if not envs.NAME_RE.match(name):
         return None, 'Name: 2-40 letters, numbers, space, dot, dash or underscore (e.g. QA, Dev, Local).'
     if not url:
-        return None, 'Base URL must start with http:// or https:// (e.g. https://qa.retail.logimaxindia.com/admin/).'
+        return None, 'Base URL must start with http:// or https:// (e.g. https://qa.example.com/admin/).'
     clash = con().execute('SELECT id FROM environments WHERE name=?', (name,)).fetchone()
     if clash and (not existing or clash['id'] != existing['id']):
         return None, f'An environment named "{name}" already exists.'

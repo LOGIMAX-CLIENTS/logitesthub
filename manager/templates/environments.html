@@ -13,7 +13,7 @@
     <div class="col-md-3"><label class="form-label" for="{{ pre }}Name">Name</label>
       <input class="form-control form-control-sm" id="{{ pre }}Name" name="name" value="{{ e.name if e else '' }}" maxlength="40" required placeholder="QA"></div>
     <div class="col-md-9"><label class="form-label" for="{{ pre }}Url">Base URL</label>
-      <input class="form-control form-control-sm" id="{{ pre }}Url" name="base_url" value="{{ e.base_url if e else '' }}" required placeholder="https://qa.retail.logimaxindia.com/admin/"></div>
+      <input class="form-control form-control-sm" id="{{ pre }}Url" name="base_url" value="{{ e.base_url if e else '' }}" required placeholder="https://qa.example.com/admin/"></div>
     <div class="col-md-3"><label class="form-label" for="{{ pre }}User">Login username</label>
       <input class="form-control form-control-sm" id="{{ pre }}User" name="username" value="{{ e.username or '' if e else '' }}" autocomplete="off"></div>
     <div class="col-md-3"><label class="form-label" for="{{ pre }}Pw">Login password</label>
