@@ -213,6 +213,15 @@ umask 077
 } > "$SAVED_CONF"
 umask 022
 as_app() { sudo -u "$APP_USER" -H env HOME="$APP_HOME" GIT_TERMINAL_PROMPT=0 "$@"; }
+web_check() {   # web_check PORT -> HTTP code of /login through the web server; waits up to 15 s (a reload opens new ports a moment later)
+  local c=000 i
+  for i in $(seq 1 15); do
+    c=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: ${DOMAIN:-localhost}" "http://127.0.0.1:$1/login" || true)
+    if [ "$c" = 200 ]; then break; fi
+    sleep 1
+  done
+  echo "$c"
+}
 
 # ================================================================================================
 step 1 "Checks: OS, internet, GitHub token"
@@ -471,7 +480,7 @@ EOF
   a2ensite -q "$SERVICE" >/dev/null
   apache2ctl configtest || die "Apache config test failed" "see the message above; this app's site file: $SITE"
   systemctl reload apache2
-  code=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: ${DOMAIN:-localhost}" http://127.0.0.1:$NGINX_PORT/login || true)
+  code=$(web_check "$NGINX_PORT")
   [ "$code" = 200 ] || die "Apache -> app gives HTTP $code" "check: sudo tail -n 30 /var/log/apache2/$SERVICE-error.log"
   ok "Apache serves the app on port $NGINX_PORT (existing Apache sites unchanged)"
 else
@@ -500,7 +509,7 @@ ln -sf /etc/nginx/sites-available/$SERVICE /etc/nginx/sites-enabled/$SERVICE
 rm -f /etc/nginx/sites-enabled/default
 nginx -t || die "nginx config test failed" "see the message above"
 systemctl enable --now nginx >/dev/null; systemctl reload nginx
-code=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: ${DOMAIN:-localhost}" http://127.0.0.1:$NGINX_PORT/login || true)
+code=$(web_check "$NGINX_PORT")
 [ "$code" = 200 ] || die "nginx -> app gives HTTP $code" "check: sudo tail -n 30 /var/log/nginx/error.log"
 ok "nginx serves the app on port $NGINX_PORT"
 fi
