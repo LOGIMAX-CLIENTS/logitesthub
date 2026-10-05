@@ -1868,6 +1868,12 @@ if __name__ == '__main__':
     recover_interrupted_runs()      # before the scheduler, so it never sees stale 'running' rows
     testruns_bp.start_scheduler()   # checks due schedules every 30 s while this server runs
     port = int(os.environ.get('PORT', '5050'))
+    host = os.environ.get('HOST', '0.0.0.0')   # 127.0.0.1 behind nginx: only the proxy can reach the app
+    if os.environ.get('LTH_BEHIND_PROXY') == '1':   # nginx / load balancer: trust X-Forwarded-* so links use https + the domain
+        from werkzeug.middleware.proxy_fix import ProxyFix
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+    if os.environ.get('LTH_SECURE_COOKIE') == '1':   # site served over https only
+        app.config['SESSION_COOKIE_SECURE'] = True
     print(f' * LogiTestHub on http://localhost:{port}  (LAN: http://<this-pc-ip>:{port})')
     app.config['LTH_PORT'] = port   # runners started by the server call back on this port
-    app.run(host='0.0.0.0', port=port, threaded=True, debug=False)
+    app.run(host=host, port=port, threaded=True, debug=False)

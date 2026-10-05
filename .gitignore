@@ -24,3 +24,6 @@ __pycache__/
 *.pyc
 Thumbs.db
 .DS_Store
+
+# server setup answers (passwords)
+deploy/setup.conf

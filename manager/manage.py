@@ -1,6 +1,6 @@
 """Admin commands.
 
-  python manage.py create-user <username> "<Full Name>" [--admin]
+  python manage.py create-user <username> "<Full Name>" [--admin] [--password-stdin]
   python manage.py set-password <username>
   python manage.py import-folder --project Retail --path F:/TestMU-Ai/.testmuai/tests/Retail
   python manage.py import-runs                 # attach existing runs/ folders to imported cases
@@ -17,10 +17,13 @@ import db
 
 
 def create_user(args):
-    pw = getpass.getpass(f'Password for {args.username}: ')
+    if args.password_stdin:   # setup script: password piped in, no prompt
+        pw = sys.stdin.readline().rstrip('\r\n')
+    else:
+        pw = getpass.getpass(f'Password for {args.username}: ')
     if len(pw) < 8:
         sys.exit('Password must be at least 8 characters.')
-    if pw != getpass.getpass('Repeat password: '):
+    if not args.password_stdin and pw != getpass.getpass('Repeat password: '):
         sys.exit('Passwords do not match.')
     with db.connect() as con:
         if con.execute('SELECT 1 FROM users WHERE username=?', (args.username,)).fetchone():
@@ -183,6 +186,7 @@ def main():
     u.add_argument('username')
     u.add_argument('name')
     u.add_argument('--admin', action='store_true')
+    u.add_argument('--password-stdin', action='store_true', help='read the password from stdin (no prompt)')
     u.set_defaults(fn=create_user)
     sp = sub.add_parser('set-password')
     sp.add_argument('username')

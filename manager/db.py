@@ -4,7 +4,8 @@ Connection settings: data/mysql.json, one entry per database (like CodeIgniter's
   {"default": {host, port, user, password, database},      <- LogiTestHub's own DB (read/write)
    "unified": {host, port, user, password, database, ...}}  <- Unified_DB (PM Members), read-only, optional
 A flat {host, port, ...} file is still read as "default". Env overrides: LTH_DB_HOST / _PORT / _USER /
-_PASSWORD / _NAME for default, LTH_UNIFIED_DB_HOST / ... for unified. See mysql.example.json.
+_PASSWORD / _NAME / _SSL_CA for default, LTH_UNIFIED_DB_HOST / ... for unified. See mysql.example.json.
+Optional "ssl_ca": path to a CA bundle; the connection then uses TLS (Amazon RDS: global-bundle.pem).
 Call sites keep the sqlite3-style API: '?' placeholders, row['col'] / row[0], and
 `with con:` = one transaction (commit on success, rollback on error; the connection stays open).
 """
@@ -184,7 +185,6 @@ class Connection:
 DB_DEFAULTS = {
     'default': {'host': '127.0.0.1', 'port': 3306, 'user': 'root', 'password': '', 'database': 'logitesthub'},
     'unified': {'host': '', 'port': 3306, 'user': '', 'password': '', 'database': 'Unified_DB'},
-    #'unified': {'host': 'pm-logimax-prod-db.cdk8wggounv9.ap-south-1.rds.amazonaws.com', 'port': 3306, 'user': 'admin_pm_logimax', 'password': 'rDrERv80CQyZEeE4QTy2', 'database': 'Unified_DB'},
 }
 DB_ENV_PREFIX = {'default': 'LTH_DB_', 'unified': 'LTH_UNIFIED_DB_'}
 
@@ -201,7 +201,8 @@ def db_config(name='default'):
         elif name == 'default':   # old flat file = the default connection
             cfg.update(raw)
     pre = DB_ENV_PREFIX[name]
-    for key, env in (('host', 'HOST'), ('port', 'PORT'), ('user', 'USER'), ('password', 'PASSWORD'), ('database', 'NAME')):
+    for key, env in (('host', 'HOST'), ('port', 'PORT'), ('user', 'USER'), ('password', 'PASSWORD'), ('database', 'NAME'),
+                     ('ssl_ca', 'SSL_CA')):
         if os.environ.get(pre + env):
             cfg[key] = os.environ[pre + env]
     cfg['port'] = int(cfg['port'])
@@ -230,8 +231,9 @@ def to_local(iso_utc):
 def connect(name='default', read_only=False):
     """connect() = LogiTestHub's own DB. connect('unified', read_only=True) = Unified_DB (PM Members)."""
     cfg = db_config(name)
+    ssl = {'ca': cfg['ssl_ca']} if cfg.get('ssl_ca') else None   # e.g. Amazon RDS: TLS checked against the RDS CA bundle
     raw = pymysql.connect(host=cfg['host'], port=cfg['port'], user=cfg['user'], password=cfg['password'],
-                          database=cfg['database'], charset='utf8mb4', autocommit=True,
+                          database=cfg['database'], charset='utf8mb4', autocommit=True, ssl=ssl,
                           cursorclass=pymysql.cursors.DictCursor, connect_timeout=10 if name == 'default' else 6,
                           read_timeout=None if name == 'default' else 8)
     if read_only:
