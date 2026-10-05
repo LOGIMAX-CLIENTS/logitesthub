@@ -3,23 +3,36 @@
 #
 #   sudo bash setup-server.sh                      # asks for every detail (Enter = default shown in [brackets])
 #   sudo bash setup-server.sh --config my.conf     # answers from a file (same variable names as below); asks only what is missing
+#   sudo bash setup-server.sh --instance staging   # a second, separate copy on the same server (own folder, port, DB, service, site)
 #
+# Instances: no --instance = "logitesthub" (prod): /opt/logitesthub, /etc/logitesthub, service logitesthub, port 5050.
+#            --instance staging = "logitesthub-staging": /opt/logitesthub-staging, /etc/logitesthub-staging, port 5051 ...
 # Safe to run again: it updates the code, packages and config in place and keeps the database, keys and runs.
 # What it does, in order (each step prints "==> [n/14]"):
 #   1 checks   2 timezone   3 apt packages   4 Node.js 20   5 code from GitHub (token, no password prompt)
 #   6 npm + Chromium   7 Python venv   8 database (Amazon RDS or local MySQL)   9 data/mysql.json
 #   10 tables + admin user   11 env file   12 systemd service   13 nginx   14 HTTPS (certbot / ALB / none)
-# Log: /var/log/logitesthub-setup.log   Answers (no secrets): /etc/logitesthub/setup.conf
+# Log: /var/log/<service>-setup.log   Answers (no secrets): /etc/<service>/setup.conf
 
 set -Eeuo pipefail
 
-LOG=/var/log/logitesthub-setup.log
-CONF_DIR=/etc/logitesthub
+INSTANCE=""; CONFIG_FILE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --instance) INSTANCE=${2:-}; shift 2 ;;
+    --config)   CONFIG_FILE=${2:-}; shift 2 ;;
+    -h|--help)  sed -n '2,16p' "$0"; exit 0 ;;
+    *) echo "Unknown option: $1  (use --instance NAME and/or --config FILE)"; exit 1 ;;
+  esac
+done
+[ -z "$INSTANCE" ] || [[ $INSTANCE =~ ^[a-z][a-z0-9]{0,15}$ ]] || { echo "--instance: lower-case letters/digits only (e.g. staging)"; exit 1; }
+SERVICE=logitesthub${INSTANCE:+-$INSTANCE}   # logitesthub | logitesthub-staging
+LOG=/var/log/$SERVICE-setup.log
+CONF_DIR=/etc/$SERVICE
 SAVED_CONF="$CONF_DIR/setup.conf"
 TOKEN_FILE="$CONF_DIR/github-token"
-ENV_FILE="$CONF_DIR/logitesthub.env"
+ENV_FILE="$CONF_DIR/$SERVICE.env"
 RDS_CA="$CONF_DIR/rds-ca.pem"
-SERVICE=logitesthub
 STEP="start"
 TOTAL=14
 
@@ -39,18 +52,23 @@ trap 'on_err $LINENO' ERR
 mkdir -p "$CONF_DIR"; chmod 755 "$CONF_DIR"
 touch "$LOG"; chmod 600 "$LOG"
 exec > >(tee -a "$LOG") 2>&1
-echo "---- $(date '+%F %T') setup started ----"
+echo "---- $(date '+%F %T') setup started (instance: $SERVICE) ----"
 
-# ---------- answers: saved answers of an earlier run (shown as defaults), then --config file (used as is) ----------
+# ---------- answers: saved answers of an earlier run (defaults), then values given on the command line /
+# --config (those win: `sudo DB_MODE=rds bash setup-server.sh` is not overridden by the saved file) ----------
+ANSWER_VARS="APP_USER INSTALL_DIR TIMEZONE APP_PORT NGINX_PORT GITHUB_REPO GITHUB_BRANCH DB_MODE RDS_HOST RDS_PORT RDS_MASTER_USER
+  DB_NAME DB_USER PM_DB_HOST PM_DB_PORT PM_DB_NAME PM_DB_USER DOMAIN SSL_MODE CERTBOT_EMAIL ADMIN_USERNAME ADMIN_NAME"
+GIVEN=$(for v in $ANSWER_VARS; do [ -n "${!v:-}" ] && declare -p "$v"; done; true)
 if [ -f "$SAVED_CONF" ]; then
   # shellcheck disable=SC1090
   source "$SAVED_CONF"
 fi
+eval "$GIVEN"
 CONFIG_MODE=0
-if [ "${1:-}" = "--config" ]; then
-  [ -f "${2:-}" ] || die "config file '${2:-}' not found" "sudo bash $0 --config /path/to/file.conf"
+if [ -n "$CONFIG_FILE" ]; then
+  [ -f "$CONFIG_FILE" ] || die "config file '$CONFIG_FILE' not found" "sudo bash $0 --config /path/to/file.conf"
   # shellcheck disable=SC1090
-  source "$2"; CONFIG_MODE=1
+  source "$CONFIG_FILE"; CONFIG_MODE=1
 fi
 
 ask() {   # ask VAR "Question" "default". With --config, a VAR that already has a value is not asked again.
@@ -85,9 +103,9 @@ echo; echo "  -- Server --"
 ask APP_USER     "Linux user that runs the app" "${SUDO_USER:-ubuntu}"
 id "$APP_USER" >/dev/null 2>&1 || die "Linux user '$APP_USER' does not exist" "use an existing user (ubuntu) or create it: sudo adduser $APP_USER"
 APP_HOME=$(getent passwd "$APP_USER" | cut -d: -f6)
-ask INSTALL_DIR  "Install folder" "/opt/logitesthub"
+ask INSTALL_DIR  "Install folder" "/opt/$SERVICE"
 ask TIMEZONE     "Server time zone (times shown in the app)" "Asia/Kolkata"
-ask APP_PORT     "App port (internal; nginx forwards 80/443 to it)" "5050"
+ask APP_PORT     "App port (internal; nginx forwards to it; each instance needs its own)" "$( [ -n "$INSTANCE" ] && echo 5051 || echo 5050 )"
 
 echo; echo "  -- GitHub (read-only token: Contents = Read) --"
 ask GITHUB_REPO   "Repository (owner/name)" "LOGIMAX-CLIENTS/logitesthub"
@@ -107,8 +125,8 @@ if [ "$DB_MODE" = rds ]; then
 else
   DB_HOST=127.0.0.1; DB_PORT=3306
 fi
-ask DB_NAME "Database name" "logitesthub"
-ask DB_USER "App database user" "logitesthub"
+ask DB_NAME "Database name" "logitesthub${INSTANCE:+_$INSTANCE}"
+ask DB_USER "App database user" "logitesthub${INSTANCE:+_$INSTANCE}"
 OLD_DB_PW=""
 if [ -f "$INSTALL_DIR/manager/data/mysql.json" ]; then
   OLD_DB_PW=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['default'].get('password',''))" "$INSTALL_DIR/manager/data/mysql.json" 2>/dev/null || true)
@@ -128,7 +146,7 @@ if [ -n "$PM_DB_HOST" ]; then
 fi
 
 echo; echo "  -- Domain / HTTPS --"
-ask DOMAIN "Domain name (e.g. tester.logimaxindia.com; Enter = none, use IP)" ""
+ask DOMAIN "Domain name (e.g. ${INSTANCE:+$INSTANCE-}tester.logimaxindia.com; Enter = none, use IP)" ""
 if [ -n "$DOMAIN" ]; then
   ask SSL_MODE "HTTPS: 'alb' (AWS load balancer + ACM cert), 'certbot' (Let's Encrypt on this server), 'none'" "alb"
 else
@@ -139,6 +157,25 @@ if [ "$SSL_MODE" = certbot ]; then
   ask CERTBOT_EMAIL "Email for Let's Encrypt expiry notices" ""
   [ -n "$CERTBOT_EMAIL" ] || die "certbot needs an email" "run again and give an email"
 fi
+# nginx: with a domain every instance can share port 80 (told apart by the domain); without one each needs its own port
+if [ "$SSL_MODE" = certbot ]; then
+  NGINX_PORT=80
+else
+  ask NGINX_PORT "Public web port on this server (nginx)" "$( [ -n "$DOMAIN" ] || [ -z "$INSTANCE" ] && echo 80 || echo 8081 )"
+fi
+[[ $APP_PORT =~ ^[0-9]+$ && $NGINX_PORT =~ ^[0-9]+$ ]] || die "ports must be numbers" "run again"
+[ "$APP_PORT" != "$NGINX_PORT" ] || die "app port and web port are both $APP_PORT" "use different ports (app 5050, web 80)"
+for other in /etc/logitesthub*/setup.conf; do   # the other instances on this server
+  [ -f "$other" ] && [ "$other" != "$SAVED_CONF" ] || continue
+  IFS='|' read -r o_app o_web o_dom o_dir < <( set +u; source "$other"; echo "$APP_PORT|${NGINX_PORT:-80}|$DOMAIN|$INSTALL_DIR" )
+  o_name=$(basename "$(dirname "$other")")
+  [ "$o_app" != "$APP_PORT" ] || die "app port $APP_PORT is already used by $o_name" "pick another app port (e.g. 5051)"
+  [ "$o_dir" != "$INSTALL_DIR" ] || die "install folder $INSTALL_DIR is already used by $o_name" "pick another folder"
+  if [ "${o_web:-80}" = "$NGINX_PORT" ] && { [ -z "$DOMAIN" ] || [ -z "$o_dom" ] || [ "$o_dom" = "$DOMAIN" ]; }; then
+    die "web port $NGINX_PORT is already used by $o_name without a separate domain" "give each instance its own domain, or another web port (e.g. 8081)"
+  fi
+done
+PROTO_VAR="lth_proto_${SERVICE//-/_}"   # nginx map variable: one per instance (two sites may not define the same one)
 
 echo; echo "  -- AI + first admin --"
 ask_secret ANTHROPIC_API_KEY "Anthropic API key (sk-ant-...; Enter = skip, AI steps off)" "$OLD_AI_KEY" 0
@@ -150,8 +187,7 @@ ask_secret ADMIN_PASSWORD "Admin password, min 8 chars (Enter = skip if this adm
 umask 077
 {
   echo "# LogiTestHub setup answers (no secrets). Written by setup-server.sh; shown as defaults on the next run."
-  for v in APP_USER INSTALL_DIR TIMEZONE APP_PORT GITHUB_REPO GITHUB_BRANCH DB_MODE RDS_HOST RDS_PORT RDS_MASTER_USER \
-           DB_NAME DB_USER PM_DB_HOST PM_DB_PORT PM_DB_NAME PM_DB_USER DOMAIN SSL_MODE CERTBOT_EMAIL ADMIN_USERNAME ADMIN_NAME; do
+  for v in $ANSWER_VARS; do
     printf '%s=%q\n' "$v" "${!v:-}"
   done
 } > "$SAVED_CONF"
@@ -388,10 +424,10 @@ ok "app answers on 127.0.0.1:$APP_PORT"
 step 13 "nginx (port 80 -> app)"
 cat > /etc/nginx/sites-available/$SERVICE <<EOF
 # LogiTestHub. HTTPS comes from certbot (edits this file) or the AWS load balancer in front.
-map \$http_x_forwarded_proto \$lth_proto { default \$http_x_forwarded_proto; "" \$scheme; }
+map \$http_x_forwarded_proto \$${PROTO_VAR} { default \$http_x_forwarded_proto; "" \$scheme; }
 server {
-    listen 80;
-    listen [::]:80;
+    listen $NGINX_PORT;
+    listen [::]:$NGINX_PORT;
     server_name ${DOMAIN:-_};
     client_max_body_size 25m;            # app accepts 10 MB (screenshots from the CLI)
     location / {
@@ -400,7 +436,7 @@ server {
         proxy_set_header Host \$host;
         proxy_set_header X-Forwarded-Host \$host;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$lth_proto;
+        proxy_set_header X-Forwarded-Proto \$${PROTO_VAR};
         proxy_read_timeout 600s;         # Test Assistant / Generate with AI can take minutes
         proxy_send_timeout 600s;
         proxy_buffering off;
@@ -411,7 +447,7 @@ ln -sf /etc/nginx/sites-available/$SERVICE /etc/nginx/sites-enabled/$SERVICE
 rm -f /etc/nginx/sites-enabled/default
 nginx -t || die "nginx config test failed" "see the message above"
 systemctl enable --now nginx >/dev/null; systemctl reload nginx
-code=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: ${DOMAIN:-localhost}" http://127.0.0.1/login || true)
+code=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: ${DOMAIN:-localhost}" http://127.0.0.1:$NGINX_PORT/login || true)
 [ "$code" = 200 ] || die "nginx -> app gives HTTP $code" "check: sudo tail -n 30 /var/log/nginx/error.log"
 ok "nginx serves the app on port 80"
 
@@ -440,6 +476,6 @@ case "$SSL_MODE" in
            echo "             HTTPS:443 listener with an ACM certificate for $DOMAIN; HTTP:80 listener redirects to 443"
            echo "             DNS: CNAME $DOMAIN -> the load balancer's DNS name"
            echo "  Open:      https://$DOMAIN" ;;
-  none)    echo "  Open:      http://<server-ip>/  (from your PC through an SSH tunnel: localhost:8080 -> $(hostname -I | awk '{print $1}'):80)" ;;
+  none)    echo "  Open:      http://${DOMAIN:-<server-ip>}:$NGINX_PORT/  (SSH tunnel from your PC: local port -> $(hostname -I | awk '{print $1}'):$NGINX_PORT)" ;;
 esac
 echo "  Update later: run this script again (Enter keeps every answer)."
