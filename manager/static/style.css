@@ -896,13 +896,13 @@ button.set-cell:focus-visible { outline: 2px solid var(--gold); outline-offset: 
 /* ---- Dark theme: <html data-bs-theme="dark"> (toggle in the top bar). The var(--x, #light) tokens above
    are only defined here, so light mode keeps its exact original colours. ---- */
 [data-bs-theme="dark"] {
-  --bg: #0b0d1f; --card: #14172e; --ink: #e6e8f5; --muted: #9ba1c2; --line: #262a4a;
+  --bg: #0a0a0a; --card: #141414; --ink: #ededed; --muted: #a1a1aa; --line: #262626;
   --navy-2: #3b2f86; --gold: #ff8a3d; --gold-tint: #3a2418; --gold-soft: #ffc48a;
   --brand: #a48bff; --brand-2: #c77dff; --brand-tint: #241e4f; --brand-solid: #6d3df5;
   --pass: #3cc58a; --fail: #ff7f5c; --ai: #a68bff; --skip: #7d8a99; --run: #a48bff; --warn: #f0a24a;
-  --surface: #181b36; --surface-2: #1a1d3a; --surface-3: #232750;
-  --ink-2: #c5c9e3; --muted-2: #8d93b5; --gold-ink: #ffb27a; --brand-ink: #b9a4ff; --fail-ink: #ff8f73;
-  --line-2: #2f3460; --pass-line: #22684b; --fail-line: #7a3524; --warn-line: #7a5420; --brand-line: #3f3590; --gold-line: #6a3d1f;
+  --surface: #181818; --surface-2: #1b1b1b; --surface-3: #262626;
+  --ink-2: #c8c8cc; --muted-2: #8b8b93; --gold-ink: #ffb27a; --brand-ink: #b9a4ff; --fail-ink: #ff8f73;
+  --line-2: #333333; --pass-line: #22684b; --fail-line: #7a3524; --warn-line: #7a5420; --brand-line: #3f3590; --gold-line: #6a3d1f;
   --pass-tint: #133126; --fail-tint: #36201b; --warn-tint: #33260f; --ai-tint: #261f3d;
   --chart: #8f6bff; --chart-avg: #ffa25c;
   color-scheme: dark;
@@ -925,13 +925,13 @@ button.set-cell:focus-visible { outline: 2px solid var(--gold); outline-offset: 
 [data-bs-theme="dark"] .badge[class*="st-"], [data-bs-theme="dark"] .si-passed, [data-bs-theme="dark"] .si-failed,
 [data-bs-theme="dark"] .si-needs-ai, [data-bs-theme="dark"] .ch-count i { color: #0b1418; }
 /* gradients and translucent whites that the token pass skips */
-[data-bs-theme="dark"] .sg-head { background: linear-gradient(100deg, #2a1f4a 0%, #1c2040 45%, #2a1b3a 100%); }
+[data-bs-theme="dark"] .sg-head { background: linear-gradient(100deg, #221c33 0%, #181818 45%, #221a2a 100%); }
 [data-bs-theme="dark"] .sg-count { background: rgba(0,0,0,.25); }
 [data-bs-theme="dark"] .sm-exec { background: linear-gradient(180deg, #203039, #192830); }
 [data-bs-theme="dark"] .tb-ai { background: linear-gradient(var(--surface), var(--surface)) padding-box, linear-gradient(100deg, var(--gold), var(--brand-2)) border-box; }
 [data-bs-theme="dark"] .set-tab:hover { background: rgba(255,255,255,.06); }
 [data-bs-theme="dark"] .cli-copy:hover { background: rgba(255,255,255,.08); }
-[data-bs-theme="dark"] .ch-v-unverified { background: #3a3f66; }
+[data-bs-theme="dark"] .ch-v-unverified { background: #3a3a3f; }
 [data-bs-theme="dark"] .list-row:hover, [data-bs-theme="dark"] .cx-item:hover { box-shadow: 0 1px 6px rgba(0,0,0,.35); }
 
 /* ---- theme toggle (top bar) ---- */
@@ -1142,7 +1142,7 @@ body.with-rail::after { content: ""; position: fixed; right: 0; bottom: 0; width
 @media (max-width: 1100px) { .proj-card { flex-wrap: wrap; } .proj-acts { width: 100%; padding-left: 86px; } }
 @media (max-width: 576px) { .proj-card { padding: 16px 16px 16px 22px; gap: 14px; } .proj-icon { width: 48px; height: 48px; border-radius: 12px; }
   .proj-acts { padding-left: 0; flex-wrap: wrap; } .page-head h1 { font-size: 24px; } }
-[data-bs-theme="dark"] .proj-icon { background: linear-gradient(135deg, #2a2160, #1d2550); }
+[data-bs-theme="dark"] .proj-icon { background: linear-gradient(135deg, #2a2140, #1f1f2a); }
 
 /* search results */
 .search-h { font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 8px; }
@@ -1246,13 +1246,13 @@ body.login-page .alert { max-width: 1240px; width: 100%; margin: 0 auto 12px; }
 [data-bs-theme="dark"] body.login-page { background:
   radial-gradient(600px 420px at 8% 18%, rgba(110, 90, 255, .22), transparent 70%),
   radial-gradient(520px 420px at 96% 12%, rgba(200, 80, 200, .18), transparent 70%), #0b0d1f; }
-[data-bs-theme="dark"] .lg-shell { background: rgba(20, 23, 46, .6); border-color: rgba(255, 255, 255, .06); box-shadow: 0 30px 70px rgba(0, 0, 0, .4); }
-[data-bs-theme="dark"] .lg-card { background: rgba(20, 23, 46, .92); border-color: #262a4a; }
+[data-bs-theme="dark"] .lg-shell { background: rgba(20, 20, 20, .6); border-color: rgba(255, 255, 255, .06); box-shadow: 0 30px 70px rgba(0, 0, 0, .4); }
+[data-bs-theme="dark"] .lg-card { background: rgba(20, 20, 20, .92); border-color: #262626; }
 [data-bs-theme="dark"] .lg-wm, [data-bs-theme="dark"] .lg-card h1, [data-bs-theme="dark"] .lg-field input { color: #e6e8f5; }
 [data-bs-theme="dark"] .lg-tag, [data-bs-theme="dark"] .lg-lead, [data-bs-theme="dark"] .lg-feats li, [data-bs-theme="dark"] .lg-card .form-label,
 [data-bs-theme="dark"] .lg-check, [data-bs-theme="dark"] .lg-note, [data-bs-theme="dark"] .lg-foot b { color: #c5c9e3; }
-[data-bs-theme="dark"] .lg-field { background: #181b36; border-color: #2f3460; }
-[data-bs-theme="dark"] .lg-field:focus-within { background: #1d2140; }
+[data-bs-theme="dark"] .lg-field { background: #181818; border-color: #333333; }
+[data-bs-theme="dark"] .lg-field:focus-within { background: #1f1f1f; }
 [data-bs-theme="dark"] .lg-note { background: #241e4f; border-color: #3f3590; }
 [data-bs-theme="dark"] .lg-link { color: #b9a4ff; }
 @media (max-height: 780px) and (min-width: 993px) {   /* laptop screens: the whole sign-in fits without scrolling */
@@ -1312,6 +1312,7 @@ body.login-page { background:
 .ic-ai       { --ic: #f97c2f; --ic-bg: rgba(249, 124, 47, .14); }
 .ic-report   { --ic: #16a34a; --ic-bg: rgba(22, 163, 74, .13); }
 .ic-cred     { --ic: #d48806; --ic-bg: rgba(212, 136, 6, .14); }
+[data-bs-theme="dark"] .side { background: linear-gradient(180deg, #111111 0%, #0a0a0a 100%); border-right: 1px solid #1f1f1f; }   /* black, not navy */
 [data-bs-theme="dark"] .side-ic { --ic-bg: rgba(255, 255, 255, .07); filter: brightness(1.25); }
 
 [data-bs-theme="light"] .side { background: linear-gradient(180deg, #ffffff 0%, #f8f7fe 100%); border-right: 1px solid #ebeaf7; }
