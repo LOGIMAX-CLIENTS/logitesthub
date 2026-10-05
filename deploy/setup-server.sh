@@ -57,7 +57,7 @@ echo "---- $(date '+%F %T') setup started (instance: $SERVICE) ----"
 # ---------- answers: saved answers of an earlier run (defaults), then values given on the command line /
 # --config (those win: `sudo DB_MODE=rds bash setup-server.sh` is not overridden by the saved file) ----------
 ANSWER_VARS="APP_USER INSTALL_DIR TIMEZONE APP_PORT NGINX_PORT GITHUB_REPO GITHUB_BRANCH DB_MODE RDS_HOST RDS_PORT RDS_MASTER_USER
-  DB_NAME DB_USER PM_DB_HOST PM_DB_PORT PM_DB_NAME PM_DB_USER DOMAIN SSL_MODE CERTBOT_EMAIL ADMIN_USERNAME ADMIN_NAME"
+  DB_NAME DB_USER PM_DB_HOST PM_DB_PORT PM_DB_NAME PM_DB_USER DOMAIN SSL_MODE CERTBOT_EMAIL ADMIN_USERNAME ADMIN_NAME WEB_SERVER"
 GIVEN=$(for v in $ANSWER_VARS; do [ -n "${!v:-}" ] && declare -p "$v"; done; true)
 if [ -f "$SAVED_CONF" ]; then
   # shellcheck disable=SC1090
@@ -105,7 +105,7 @@ id "$APP_USER" >/dev/null 2>&1 || die "Linux user '$APP_USER' does not exist" "u
 APP_HOME=$(getent passwd "$APP_USER" | cut -d: -f6)
 ask INSTALL_DIR  "Install folder" "/opt/$SERVICE"
 ask TIMEZONE     "Server time zone (times shown in the app)" "Asia/Kolkata"
-ask APP_PORT     "App port (internal; nginx forwards to it; each instance needs its own)" "$( [ -n "$INSTANCE" ] && echo 5051 || echo 5050 )"
+ask APP_PORT     "App port (internal; the web server forwards to it; each instance needs its own)" "$( [ -n "$INSTANCE" ] && echo 5051 || echo 5050 )"
 
 echo; echo "  -- GitHub (read-only token: Contents = Read) --"
 ask GITHUB_REPO   "Repository (owner/name)" "LOGIMAX-CLIENTS/logitesthub"
@@ -157,14 +157,34 @@ if [ "$SSL_MODE" = certbot ]; then
   ask CERTBOT_EMAIL "Email for Let's Encrypt expiry notices" ""
   [ -n "$CERTBOT_EMAIL" ] || die "certbot needs an email" "run again and give an email"
 fi
-# nginx: with a domain every instance can share port 80 (told apart by the domain); without one each needs its own port
+# front web server: Apache when it already runs here (its existing sites stay as they are), otherwise nginx
+if [ -z "${WEB_SERVER:-}" ]; then
+  if systemctl is-active --quiet apache2; then WEB_SERVER=apache; else WEB_SERVER=nginx; fi
+fi
+case "$WEB_SERVER" in apache|nginx) ;; *) die "WEB_SERVER must be apache or nginx (got '$WEB_SERVER')" "run again";; esac
+[ "$WEB_SERVER" = nginx ] && systemctl is-active --quiet apache2 \
+  && die "Apache is running on this server, nginx would clash with it on port 80" "run again with WEB_SERVER=apache (or leave WEB_SERVER empty)"
+echo "  Web server in front of the app: $WEB_SERVER$( [ "$WEB_SERVER" = apache ] && echo ' (already running here; its current sites are not changed)')"
+# with a domain every instance can share port 80 (told apart by the domain); without one each needs its own port.
+# Apache's existing site already owns port 80 without a domain, so ours start at 8080.
 if [ "$SSL_MODE" = certbot ]; then
   NGINX_PORT=80
 else
-  ask NGINX_PORT "Public web port on this server (nginx)" "$( [ -n "$DOMAIN" ] || [ -z "$INSTANCE" ] && echo 80 || echo 8081 )"
+  if [ -n "$DOMAIN" ]; then def_web=80
+  elif [ "$WEB_SERVER" = apache ]; then def_web=$( [ -n "$INSTANCE" ] && echo 8081 || echo 8080 )
+  else def_web=$( [ -n "$INSTANCE" ] && echo 8081 || echo 80 ); fi
+  ask NGINX_PORT "Public web port on this server ($WEB_SERVER)" "$def_web"
 fi
 [[ $APP_PORT =~ ^[0-9]+$ && $NGINX_PORT =~ ^[0-9]+$ ]] || die "ports must be numbers" "run again"
 [ "$APP_PORT" != "$NGINX_PORT" ] || die "app port and web port are both $APP_PORT" "use different ports (app 5050, web 80)"
+if [ "$WEB_SERVER" = apache ] && [ "$NGINX_PORT" = 80 ] && [ -z "$DOMAIN" ]; then
+  die "port 80 is the existing Apache site's; without a domain this app needs its own port" "use web port 8080 (staging 8081), or give a domain"
+fi
+web_proc=$( [ "$WEB_SERVER" = apache ] && echo apache2 || echo nginx )
+port_owner=$(ss -ltnpH "sport = :$NGINX_PORT" 2>/dev/null | grep -o '(("[^"]*' | head -1 | cut -c4- || true)
+if [ -n "$port_owner" ] && [ "$port_owner" != "$web_proc" ]; then
+  die "web port $NGINX_PORT is already used by '$port_owner'" "pick another web port"
+fi
 for other in /etc/logitesthub*/setup.conf; do   # the other instances on this server
   [ -f "$other" ] && [ "$other" != "$SAVED_CONF" ] || continue
   IFS='|' read -r o_app o_web o_dom o_dir < <( set +u; source "$other"; echo "$APP_PORT|${NGINX_PORT:-80}|$DOMAIN|$INSTALL_DIR" )
@@ -220,9 +240,10 @@ ok "$(date)"
 step 3 "System packages (apt)"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
-pkgs=(git curl ca-certificates gnupg python3 python3-venv python3-pip nginx mysql-client)
+pkgs=(git curl ca-certificates gnupg python3 python3-venv python3-pip mysql-client)
+if [ "$WEB_SERVER" = nginx ]; then pkgs+=(nginx); fi   # apache: already installed and running
 [ "$DB_MODE" = local ] && pkgs+=(mysql-server)
-[ "$SSL_MODE" = certbot ] && pkgs+=(certbot python3-certbot-nginx)
+if [ "$SSL_MODE" = certbot ]; then pkgs+=(certbot "python3-certbot-$WEB_SERVER"); fi
 apt-get install -y "${pkgs[@]}"
 ok "installed: ${pkgs[*]}"
 
@@ -421,7 +442,39 @@ if [ "$code" != 200 ]; then
 fi
 ok "app answers on 127.0.0.1:$APP_PORT"
 
-step 13 "nginx (port 80 -> app)"
+step 13 "Web server: $WEB_SERVER, port $NGINX_PORT -> app port $APP_PORT"
+if [ "$WEB_SERVER" = apache ]; then
+  # one extra Apache site for this app; Apache's existing sites (000-default ...) are not touched
+  a2enmod -q proxy proxy_http headers >/dev/null
+  SITE=/etc/apache2/sites-available/$SERVICE.conf
+  LISTEN_LINE=""
+  if ! grep -RhsE "^\s*Listen\s+([^[:space:]]*:)?$NGINX_PORT(\s|$)" /etc/apache2/ports.conf /etc/apache2/sites-enabled \
+       /etc/apache2/conf-enabled --exclude="$SERVICE.conf" >/dev/null; then
+    LISTEN_LINE="Listen $NGINX_PORT"   # port not opened by Apache yet
+  fi
+  cat > "$SITE" <<EOF
+# LogiTestHub ($SERVICE), written by setup-server.sh. HTTPS: certbot (adds a copy for 443) or the AWS load balancer.
+$LISTEN_LINE
+<VirtualHost *:$NGINX_PORT>
+    $( [ -n "$DOMAIN" ] && echo "ServerName $DOMAIN" || echo "# no domain: this port serves only this app" )
+    ProxyRequests Off
+    ProxyPreserveHost On
+    RequestHeader setifempty X-Forwarded-Proto "expr=%{REQUEST_SCHEME}"
+    LimitRequestBody 26214400
+    # Test Assistant / Generate with AI can take minutes; retry=0: no pause after an app restart
+    ProxyPass / http://127.0.0.1:$APP_PORT/ timeout=600 retry=0
+    ProxyPassReverse / http://127.0.0.1:$APP_PORT/
+    ErrorLog \${APACHE_LOG_DIR}/$SERVICE-error.log
+    CustomLog \${APACHE_LOG_DIR}/$SERVICE-access.log combined
+</VirtualHost>
+EOF
+  a2ensite -q "$SERVICE" >/dev/null
+  apache2ctl configtest || die "Apache config test failed" "see the message above; this app's site file: $SITE"
+  systemctl reload apache2
+  code=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: ${DOMAIN:-localhost}" http://127.0.0.1:$NGINX_PORT/login || true)
+  [ "$code" = 200 ] || die "Apache -> app gives HTTP $code" "check: sudo tail -n 30 /var/log/apache2/$SERVICE-error.log"
+  ok "Apache serves the app on port $NGINX_PORT (existing Apache sites unchanged)"
+else
 cat > /etc/nginx/sites-available/$SERVICE <<EOF
 # LogiTestHub. HTTPS comes from certbot (edits this file) or the AWS load balancer in front.
 map \$http_x_forwarded_proto \$${PROTO_VAR} { default \$http_x_forwarded_proto; "" \$scheme; }
@@ -449,16 +502,17 @@ nginx -t || die "nginx config test failed" "see the message above"
 systemctl enable --now nginx >/dev/null; systemctl reload nginx
 code=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: ${DOMAIN:-localhost}" http://127.0.0.1:$NGINX_PORT/login || true)
 [ "$code" = 200 ] || die "nginx -> app gives HTTP $code" "check: sudo tail -n 30 /var/log/nginx/error.log"
-ok "nginx serves the app on port 80"
+ok "nginx serves the app on port $NGINX_PORT"
+fi
 
 step 14 "HTTPS ($SSL_MODE)"
 case "$SSL_MODE" in
   certbot)
-    certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "$CERTBOT_EMAIL" --redirect --keep-until-expiring \
+    certbot "--$WEB_SERVER" -d "$DOMAIN" --non-interactive --agree-tos -m "$CERTBOT_EMAIL" --redirect --keep-until-expiring \
       || die "certbot could not get a certificate for $DOMAIN" "DNS A record of $DOMAIN must point to THIS server's public IP and port 80 must be open to the internet (security group). Private-subnet servers: use SSL_MODE=alb instead"
     ok "certificate installed, auto-renew: systemctl list-timers | grep certbot" ;;
   alb)
-    ok "nginx listens on 80; the AWS load balancer does HTTPS (steps below)" ;;
+    ok "$WEB_SERVER listens on $NGINX_PORT; the AWS load balancer does HTTPS (steps below)" ;;
   none)
     ok "plain http (no certificate)" ;;
 esac
@@ -472,7 +526,7 @@ echo "  Config:    $ENV_FILE, $MGR/data/mysql.json"
 echo "  KEEP SAFE: $MGR/data/env.key (decrypts environment passwords) and secret.key - back them up"
 case "$SSL_MODE" in
   certbot) echo "  Open:      https://$DOMAIN" ;;
-  alb)     echo "  Next:      AWS load balancer -> target group HTTP:80 -> this instance; health check path /login (200)"
+  alb)     echo "  Next:      AWS load balancer -> target group HTTP:$NGINX_PORT -> this instance; health check path /login (200)"
            echo "             HTTPS:443 listener with an ACM certificate for $DOMAIN; HTTP:80 listener redirects to 443"
            echo "             DNS: CNAME $DOMAIN -> the load balancer's DNS name"
            echo "  Open:      https://$DOMAIN" ;;
