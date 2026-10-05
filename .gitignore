@@ -27,3 +27,5 @@ Thumbs.db
 
 # server setup answers (passwords)
 deploy/setup.conf
+deploy/prod.conf
+deploy/staging.conf
