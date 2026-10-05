@@ -57,7 +57,7 @@ echo "---- $(date '+%F %T') setup started (instance: $SERVICE) ----"
 # ---------- answers: saved answers of an earlier run (defaults), then values given on the command line /
 # --config (those win: `sudo DB_MODE=rds bash setup-server.sh` is not overridden by the saved file) ----------
 ANSWER_VARS="APP_USER INSTALL_DIR TIMEZONE APP_PORT NGINX_PORT GITHUB_REPO GITHUB_BRANCH DB_MODE RDS_HOST RDS_PORT RDS_MASTER_USER
-  DB_NAME DB_USER PM_DB_HOST PM_DB_PORT PM_DB_NAME PM_DB_USER DOMAIN SSL_MODE CERTBOT_EMAIL ADMIN_USERNAME ADMIN_NAME WEB_SERVER"
+  DB_NAME DB_USER PM_DB_HOST PM_DB_PORT PM_DB_NAME PM_DB_USER PM_MEMBERS_JSON DOMAIN SSL_MODE CERTBOT_EMAIL ADMIN_USERNAME ADMIN_NAME WEB_SERVER"
 GIVEN=$(for v in $ANSWER_VARS; do [ -n "${!v:-}" ] && declare -p "$v"; done; true)
 if [ -f "$SAVED_CONF" ]; then
   # shellcheck disable=SC1090
@@ -143,6 +143,10 @@ if [ -n "$PM_DB_HOST" ]; then
   ask PM_DB_NAME "PM DB name" "Unified_DB"
   ask PM_DB_USER "PM DB read-only user (SELECT on Members only)" ""
   ask_secret PM_DB_PASSWORD "PM DB read-only password (Enter on a re-run = keep)" "" 0
+  # how PM's members table looks (Logimax PM: Unified_DB.members, sign-in by email, Django pbkdf2 hashes)
+  ask PM_MEMBERS_JSON "PM members table mapping (JSON)" '{"table": "members", "id_column": "member_id", "login_columns": ["email"], "password_column": "password", "name_column": "first_name", "last_name_column": "last_name", "active_column": "is_active", "deleted_column": "deleted_at"}'
+  python3 -c 'import json,sys; m=json.loads(sys.argv[1]); assert isinstance(m, dict) and m.get("table")' "$PM_MEMBERS_JSON" 2>/dev/null \
+    || die "PM members mapping is not valid JSON with a \"table\"" "run again; Enter at that question uses the default"
 fi
 
 echo; echo "  -- Domain / HTTPS --"
@@ -359,7 +363,7 @@ install -d -m 700 -o "$APP_USER" -g "$APP_USER" "$MGR/data"
 DB_HOST="$DB_HOST" DB_PORT="$DB_PORT" DB_USER="$DB_USER" DB_PASSWORD="$DB_PASSWORD" DB_NAME="$DB_NAME" \
 SSL_CA=$( [ "$DB_MODE" = rds ] && echo "$RDS_CA" || true ) \
 PM_DB_HOST="${PM_DB_HOST:-}" PM_DB_PORT="${PM_DB_PORT:-3306}" PM_DB_USER="${PM_DB_USER:-}" \
-PM_DB_PASSWORD="${PM_DB_PASSWORD:-}" PM_DB_NAME="${PM_DB_NAME:-Unified_DB}" OUT="$MGR/data/mysql.json" \
+PM_DB_PASSWORD="${PM_DB_PASSWORD:-}" PM_DB_NAME="${PM_DB_NAME:-Unified_DB}" PM_MEMBERS_JSON="${PM_MEMBERS_JSON:-}" OUT="$MGR/data/mysql.json" \
 python3 - <<'PY'
 import json, os
 e = os.environ
@@ -375,6 +379,8 @@ if e.get('PM_DB_HOST'):
     u = cfg.get('unified') or {}
     pw = e['PM_DB_PASSWORD'] or u.get('password', '')
     u.update({'host': e['PM_DB_HOST'], 'port': int(e['PM_DB_PORT']), 'user': e['PM_DB_USER'], 'password': pw, 'database': e['PM_DB_NAME']})
+    if e.get('PM_MEMBERS_JSON'):
+        u['members'] = json.loads(e['PM_MEMBERS_JSON'])
     if e.get('SSL_CA'):
         u['ssl_ca'] = e['SSL_CA']
     cfg['unified'] = u
