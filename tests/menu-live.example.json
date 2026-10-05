@@ -1,0 +1,12 @@
+{
+  "_about": "Example only. Copy to manager/data/menu-live.json (not in git: holds your own apps' module names) and use your Environment names as keys. Checked by: python manager/manage.py check-menus. 'modules' = modules and sub-modules the menu reader must find; 'baseline' = a saved reading (optional).",
+  "QA": {
+    "app": "My admin app (QA)",
+    "min_modules": 5,
+    "min_subs": 20,
+    "modules": {
+      "Masters": ["Customers", "Products"],
+      "Sales": ["New Invoice", "Invoice List"]
+    }
+  }
+}

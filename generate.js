@@ -10,8 +10,8 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { generateCases, explain, MODEL } = require('./lib/ai');
 
-const VARS_FILE = 'F:/TestMU-Ai/.testmuai/variables/etail.json';
-const LOGIN_HELPER = 'F:/TestMU-Ai/.testmuai/tests/Retail/etail-lot-inward/helpers/login.md';
+const VARS_FILE = process.env.LTH_VARS_FILE || 'F:/TestMU-Ai/.testmuai/variables/etail.json';   // Settings -> System
+const LOGIN_HELPER = require('path').join(process.env.LTH_HELPERS_DIR || 'F:/TestMU-Ai/.testmuai/tests/Retail/etail-lot-inward/helpers', 'login.md');
 const MAX_DIFF_CHARS = 400000;
 
 function parseArgs(argv) {
@@ -25,6 +25,9 @@ function parseArgs(argv) {
     else if (k === '--paths') { a.paths.push(v); i++; }
     else if (k === '--count') { a.count = Number(v) || 6; i++; }
     else if (k === '--name') { a.name = v; i++; }
+    else if (k === '--diff-file') { a.diffFile = v; i++; }
+    else if (k === '--lessons-file') { a.lessons = fs.readFileSync(v, 'utf8'); i++; }   // project lessons from LogiTestHub
+    else if (k === '--project-login') { a.projectLogin = true; }   // the project has a login helper: cases start after login   // diff sent by the lth CLI (made on the developer's PC)
   }
   return a;
 }
@@ -61,8 +64,8 @@ function toMarkdown(c) {
   }
 
   let diff = '';
-  if (args.repo) {
-    diff = readDiff(args.repo, args.base, args.paths);
+  if (args.diffFile || args.repo) {
+    diff = args.diffFile ? fs.readFileSync(args.diffFile, 'utf8') : readDiff(args.repo, args.base, args.paths);
     if (!diff.trim()) console.warn('Note: the diff is empty; generating from the task text only.');
     if (diff.length > MAX_DIFF_CHARS) {
       console.error(`The diff is ${diff.length} characters, too large to send whole. Narrow it with --paths <folder or file>.`);
@@ -71,12 +74,14 @@ function toMarkdown(c) {
   }
 
   const variableNames = Object.keys(JSON.parse(fs.readFileSync(VARS_FILE, 'utf8')));
-  const loginSteps = fs.readFileSync(LOGIN_HELPER, 'utf8').split(/\r?\n/).filter(l => l.trim() && !l.startsWith('#')).join('\n');
+  // With a project login helper the runner signs in by itself, so the cases must not contain login steps.
+  const loginSteps = args.projectLogin ? '' : (fs.existsSync(LOGIN_HELPER)
+    ? fs.readFileSync(LOGIN_HELPER, 'utf8').split(/\r?\n/).filter(l => l.trim() && !l.startsWith('#')).join('\n') : '');
 
   console.log(`Generating ~${args.count} cases with ${MODEL}${diff ? ` from the task + ${diff.split('\n').length} diff lines` : ' from the task'} ...`);
   let result;
   try {
-    result = await generateCases({ requirement: args.task, diff, variableNames, loginSteps, count: args.count });
+    result = await generateCases({ requirement: args.task, diff, variableNames, loginSteps, count: args.count, lessons: args.lessons });
   } catch (e) {
     console.error(explain(e));
     process.exitCode = 1; // not process.exit(): let the SDK close its stream handles first

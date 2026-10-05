@@ -1,3 +1,4 @@
 flask>=3.1
 pymysql>=1.1
 cryptography>=42
+django>=5.2,<6   # only its password hashers: verifies PM (Django) passwords for PM sign-in

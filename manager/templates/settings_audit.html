@@ -1,0 +1,66 @@
+{% extends 'base.html' %}
+{% block title %}Audit Log{% endblock %}
+{% block crumbs %}<span class="tm-crumbs"><b>Settings</b> <span>/</span> Audit Log</span>{% endblock %}
+{% macro qs(extra={}) -%}
+{{ url_for('settings.audit', **dict({'entity': f.entity or None, 'action': f.action or None, 'user': f.user or None, 'result': f.result or None}, **extra)) }}
+{%- endmacro %}
+{% block content %}
+{% include '_settings_tabs.html' %}
+
+<form class="panel set-audit-bar" method="get" action="{{ url_for('settings.audit') }}">
+  <div class="me-auto">
+    <div class="set-intro-title">Audit Log</div>
+    <div class="small text-secondary">Every change: who made it, what changed and what it was before. Kept for {{ days }} days.</div>
+  </div>
+  <select class="form-select form-select-sm" name="entity" aria-label="Filter by what changed" onchange="this.form.submit()">
+    <option value="">All entities</option>{% for o in opts.entity %}<option {{ 'selected' if f.entity == o }}>{{ o }}</option>{% endfor %}</select>
+  <select class="form-select form-select-sm" name="action" aria-label="Filter by action" onchange="this.form.submit()">
+    <option value="">All actions</option>{% for o in opts.action %}<option {{ 'selected' if f.action == o }}>{{ o }}</option>{% endfor %}</select>
+  <select class="form-select form-select-sm" name="user" aria-label="Filter by user" onchange="this.form.submit()">
+    <option value="">Anyone</option>{% for o in opts.username %}<option {{ 'selected' if f.user == o }}>{{ o }}</option>{% endfor %}</select>
+  <select class="form-select form-select-sm" name="result" aria-label="Filter by result" onchange="this.form.submit()">
+    <option value="">Any result</option><option value="ok" {{ 'selected' if f.result == 'ok' }}>Done</option><option value="failed" {{ 'selected' if f.result == 'failed' }}>Refused / failed</option></select>
+  <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('settings.audit') }}" title="Clear filters">Reset</a>
+  <span class="small text-secondary text-nowrap">{{ rows|length }} of {{ total }}</span>
+</form>
+
+<div class="panel p-0">
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0 au-table set-audit">
+      <thead><tr><th class="text-start">When</th><th class="text-start">Who</th><th class="text-start">Action</th><th class="text-start">What</th><th class="text-start">Changes</th><th class="text-start">Result</th></tr></thead>
+      <tbody>
+      {% for r in rows %}
+      {% set ch = r.changes or {} %}
+      <tr>
+        <td class="text-start text-nowrap" title="{{ r.at|dmy(true) }}">{{ r.at|dmy }}<div class="small text-secondary">{{ r.ip or '' }}</div></td>
+        <td class="text-start">{{ r.username or '-' }}</td>
+        <td class="text-start"><code>{{ r.action }}</code></td>
+        <td class="text-start text-nowrap">{{ r.entity }}{% if r.entity_id %} <span class="text-secondary">#{{ r.entity_id }}</span>{% endif %}</td>
+        <td class="text-start set-changes">
+          {% set changed = ch.changed %}
+          {% if changed and changed.created is defined %}<div><span class="set-new">created</span></div>
+          {% elif changed and changed.deleted is defined %}<div><span class="set-old">deleted</span> {{ (changed.deleted.title or changed.deleted.name or changed.deleted.username or '') }}</div>
+          {% elif changed %}
+            {% for k, v in changed.items() %}<div><b>{{ k }}</b>: <span class="set-old">{{ v[0] if v[0] not in (none, '') else '(empty)' }}</span> &rarr; <span class="set-new">{{ v[1] if v[1] not in (none, '') else '(empty)' }}</span></div>{% endfor %}
+          {% endif %}
+          {% if ch.form %}<details><summary class="small text-secondary">Form sent</summary>
+            {% for k, v in ch.form.items() %}<div class="small"><b>{{ k }}</b>: {{ v if v not in (none, '') else '(empty)' }}</div>{% endfor %}</details>{% endif %}
+          {% if not changed and not ch.form %}<span class="text-secondary">-</span>{% endif %}
+        </td>
+        <td class="text-start"><span class="set-res {{ 'bad' if r.result == 'failed' }}">{{ 'Done' if r.result == 'ok' else 'Refused / failed' }}</span>{% if r.message %}<div class="small text-secondary">{{ r.message }}</div>{% endif %}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="text-center text-secondary py-4">Nothing recorded{{ ' for these filters' if f.entity or f.action or f.user or f.result }} yet. Changes made from now on appear here.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% if total > size %}
+<nav class="d-flex justify-content-between align-items-center mt-2 small" aria-label="Pages">
+  <span class="text-secondary">Page {{ page }} of {{ ((total - 1) // size) + 1 }}</span>
+  <span>{% if page > 1 %}<a class="btn btn-sm btn-outline-secondary" href="{{ qs({'page': page - 1}) }}">&larr; Newer</a>{% endif %}
+    {% if page * size < total %}<a class="btn btn-sm btn-outline-secondary" href="{{ qs({'page': page + 1}) }}">Older &rarr;</a>{% endif %}</span>
+</nav>
+{% endif %}
+{% endblock %}

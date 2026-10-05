@@ -1,9 +1,10 @@
 {% extends 'base.html' %}
 {% block title %}Projects{% endblock %}
 {% block content %}
-<div class="d-flex flex-wrap gap-2 align-items-center justify-content-between mb-3">
-  <div><h1 class="h4 mb-0">Projects ({{ projects|length }})</h1><div class="text-secondary small">All your test cases, stored by project</div></div>
-  <button class="btn btn-success" data-bs-toggle="collapse" data-bs-target="#newProject">+ Create Project</button>
+<div class="page-head-row mb-3">
+  <div class="page-head"><h1>Projects ({{ projects|length }})</h1><p>A space to organize your testing by project</p></div>
+  <button class="btn btn-primary btn-lg-soft" data-bs-toggle="collapse" data-bs-target="#newProject">
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Create Project</button>
 </div>
 <div class="collapse mb-3" id="newProject">
   <form method="post" action="{{ url_for('project_new') }}" class="panel row g-2 align-items-end">
@@ -11,17 +12,48 @@
     <div class="col-md-4"><label class="form-label">Name</label><input class="form-control" name="name" required></div>
     <div class="col-md-6"><label class="form-label">Description</label><input class="form-control" name="description"></div>
     <div class="col-md-2"><button class="btn btn-primary w-100">Create</button></div>
+    <div class="col-12"><input type="hidden" name="setup_modules" value="0">
+      <div class="form-check small"><input class="form-check-input" type="checkbox" id="setupMods" name="setup_modules" value="1" checked>
+        <label class="form-check-label" for="setupMods">Next, set up modules &amp; sub-modules (read from the application's menu in one run, or type them)</label></div></div>
   </form>
 </div>
-<div class="list">
+<div class="proj-list">
   {% for p in projects %}
-  <a class="list-row d-block" href="{{ url_for('project', pid=p.id) }}">
-    <div class="fw-semibold text-primary">{{ p.name }}</div>
-    {% if p.description %}<div class="small text-secondary">{{ p.description }}</div>{% endif %}
-    <div class="small text-secondary mt-1">{{ p.n_cases }} test cases · {{ p.n_runs }} runs{% if p.last_update %} · Updated {{ p.last_update[:10] }}{% endif %}</div>
-  </a>
+  {% set busy = (p.last_update and p.last_update >= active_since) or (p.last_run and p.last_run >= active_since) %}
+  <div class="proj-card accent-{{ loop.index0 % 4 }}">
+    <span class="proj-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="url(#projIconG)" stroke-width="1.9" stroke-linejoin="round"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.2h7a2 2 0 0 1 2 2v7.8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></svg></span>
+    <div class="proj-main">
+      <a class="proj-name stretched-link" href="{{ url_for('project', pid=p.id) }}">{{ p.name }}</a>
+      <div class="proj-desc">{{ p.description if p.description else ('Last updated ' ~ p.last_update[:10] if p.last_update else 'No test cases yet') }}</div>
+      <div class="proj-meta">
+        <span title="People who wrote, edited or ran its test cases"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="9" cy="8.5" r="3.5"/><path d="M2.5 19.5a6.5 6.5 0 0 1 13 0M16 5.2a3.5 3.5 0 0 1 0 6.6M18 13.8a6.5 6.5 0 0 1 3.5 5.7"/></svg>{{ p.n_people }} {{ 'member' if p.n_people == 1 else 'members' }}</span>
+        <span><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6v3H9z"/><path d="M15 5.5h2.5A1.5 1.5 0 0 1 19 7v12.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19.5V7a1.5 1.5 0 0 1 1.5-1.5H9"/><path d="m8.5 13 2.2 2.2L15.5 10.5"/></svg>{{ p.n_cases }} test cases</span>
+        <span><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m10 9.2 4.8 2.8-4.8 2.8z"/></svg>{{ p.n_runs }} runs</span>
+        {% if p.created_at %}<span><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg>Created {{ p.created_at[8:10] }}-{{ p.created_at[5:7] }}-{{ p.created_at[:4] }}</span>{% endif %}
+        <span class="proj-status {{ 'on' if busy else ('empty' if not p.n_cases else 'idle') }}" title="{{ 'Test cases changed or run in the last 30 days' if busy else 'No changes or runs in the last 30 days' }}"><i></i>{{ 'Active' if busy else ('Empty' if not p.n_cases else 'Idle') }}</span>
+      </div>
+    </div>
+    <div class="proj-acts">
+      {% if can('cases.edit') %}
+      <a class="btn btn-outline-secondary" href="{{ url_for('project_login', pid=p.id) }}" title="Login steps that run before every test case of this project">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="url(#projIconG)" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4.5 20.5a7.5 7.5 0 0 1 15 0"/></svg>Login helper{% if not p.login_helper %}<span class="proj-warn" title="Not set yet"></span>{% endif %}</a>
+      <a class="btn btn-outline-secondary" href="{{ url_for('modules.setup', pid=p.id) }}" title="Read the application's menu again and add new modules / sub-modules">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="url(#projIconG)" stroke-width="1.9"><rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/></svg>Update modules</a>
+      {% endif %}
+      <div class="dropdown">
+        <button class="proj-more" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="More for {{ p.name }}">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>
+        <div class="dropdown-menu dropdown-menu-end">
+          <a class="dropdown-item" href="{{ url_for('project', pid=p.id) }}">Open test cases</a>
+          <a class="dropdown-item" href="{{ url_for('project', pid=p.id, tab='runs') }}">Run history</a>
+          <a class="dropdown-item" href="{{ url_for('project_health', pid=p.id) }}">Project health</a>
+        </div>
+      </div>
+    </div>
+  </div>
   {% else %}
   <div class="panel text-secondary">No projects yet. Create one, or import existing tests with <code>python manage.py import-folder</code>.</div>
   {% endfor %}
 </div>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs><linearGradient id="projIconG" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3b5bff"/><stop offset=".55" stop-color="#8b2cf5"/><stop offset="1" stop-color="#ff2d8f"/></linearGradient></defs></svg>
 {% endblock %}

@@ -1,0 +1,211 @@
+{% extends 'base.html' %}
+{% block title %}Set up modules · {{ p.name }}{% endblock %}
+{% block crumbs %}<span class="tm-crumbs"><a href="{{ url_for('projects') }}">Test Case</a> <span>/</span> <a href="{{ url_for('project', pid=p.id) }}">{{ p.name }}</a> <span>/</span> <b>Modules</b></span>{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-end gap-2 mb-3">
+  <div>
+    <h1 class="h4 mb-0">{{ 'Project created. ' if new }}{{ 'Update' if n_folders and not new else 'Set up' }} modules &amp; sub-modules</h1>
+    <div class="text-secondary small">Arrange {{ p.name }}'s test cases like the application's own menu: <b>module</b> &rarr; <b>sub-module</b> (for example Retail Catalog &rarr; Category).
+      {% if n_folders %}The project already has {{ n_folders }} folder{{ 's' if n_folders != 1 }}: nothing existing is changed, only missing ones are added.{% endif %}</div>
+  </div>
+  <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('project', pid=p.id) }}">{{ 'Skip for now' if new else 'Back to test cases' }}</a>
+</div>
+
+<section class="panel mb-3 m-file" aria-labelledby="mFileTitle">
+  <div class="d-flex flex-wrap gap-3 align-items-center">
+    <div class="flex-grow-1 min-w-0" style="flex-basis: 420px">
+      <h2 class="h6 mb-1" id="mFileTitle">1 · Import modules file <span class="badge text-bg-success">recommended</span></h2>
+      <div class="small text-secondary">A <code>logitesthub.modules.json</code> made from the application's own source of truth (its menu table or route
+        files), usually by the IDE agent with <code>tester modules build</code>. Exact, with no login and no guessing. The same file can be pushed from
+        the IDE with <code>tester modules push</code>.</div>
+    </div>
+    <div class="d-flex flex-wrap gap-2 align-items-center">
+      <input class="form-control form-control-sm" type="file" id="mFile" accept=".json,application/json" style="max-width: 280px" aria-label="Modules file">
+      <button type="button" class="btn btn-primary btn-sm" id="mFileBtn">Preview file</button>
+    </div>
+  </div>
+</section>
+
+<div class="row g-3 mb-3">
+  <div class="col-lg-6">
+    <section class="panel h-100" aria-labelledby="mRead">
+      <h2 class="h6 mb-1" id="mRead">2 · Or read from the application <span class="badge text-bg-light border">one run</span></h2>
+      <div class="small text-secondary mb-3">Signs in with the environment's URL and login (its own Login steps if set, else eTail's login, else any login form it finds), opens the menu, reads modules and sub-modules, then closes. No AI is used. It never opens a page from the menu or changes data. Takes about a minute.</div>
+      {% if envs %}
+      <div class="d-flex flex-wrap gap-2 align-items-center">
+        <select class="form-select form-select-sm w-auto" id="mEnv" aria-label="Environment">
+          {% for e in envs %}<option value="{{ e.id }}" data-menu="{{ e.menu_url or '' }}" data-steps="{{ '1' if e.login_steps }}" {{ 'selected' if e.is_default }}>{{ e.name }} · {{ e.base_url }}</option>{% endfor %}</select>
+        <button type="button" class="btn btn-primary btn-sm" id="mReadBtn">Read menu</button>
+      </div>
+      <label class="form-label small mt-3 mb-1" for="mMenuUrl">Menu page URL <span class="text-secondary">(optional)</span></label>
+      <input class="form-control form-control-sm" id="mMenuUrl" maxlength="500" placeholder="Blank = the page after login. A path like index.php/admin/dashboard, or a full URL">
+      <div class="form-text" id="mEnvNote"></div>
+      {% else %}
+      <div class="small t-warn">No environment yet. {% if is_admin %}<a href="{{ url_for('environments') }}">Add one</a>{% else %}Ask an admin to add one{% endif %} with the application's URL and login, or type the modules on the right.</div>
+      {% endif %}
+    </section>
+  </div>
+  <div class="col-lg-6">
+    <section class="panel h-100" aria-labelledby="mType">
+      <h2 class="h6 mb-1" id="mType">3 · Or type them</h2>
+      <div class="small text-secondary mb-2">One module per line; indent sub-modules (or start them with <code>-</code>). <code>Module &gt; Sub-module</code> on one line works too.</div>
+      <textarea class="form-control form-control-sm font-monospace mb-2" id="mText" rows="6" spellcheck="false" placeholder="Retail Catalog
+  Metal
+  Category
+  Product
+Inventory
+  Lot Inward
+  Lot Split"></textarea>
+      <button type="button" class="btn btn-outline-secondary btn-sm" id="mParseBtn">Preview</button>
+    </section>
+  </div>
+</div>
+
+<div class="small mb-2" id="mStatus" role="status" aria-live="polite"></div>
+<div class="panel mb-3 m-result" id="mResult" hidden>
+  <div class="d-flex flex-wrap gap-3 align-items-start">
+    <a id="mShotLink" target="_blank" rel="noopener" hidden title="Open the screenshot full size"><img id="mShot" alt="What the menu reader saw" class="m-shot"></a>
+    <div class="flex-grow-1 min-w-0">
+      <div class="fw-semibold" id="mResTitle"></div>
+      <div class="small mt-1" id="mResText"></div>
+      <div class="small text-secondary mt-2" id="mResMeta"></div>
+      <div class="small mt-2">Fix it with: <a href="{{ url_for('environments') }}">Environment settings</a> (URL, login, Login steps, Menu page URL), the Menu page URL box above, or <b>Type them</b>.</div>
+    </div>
+  </div>
+</div>
+
+<form method="post" action="{{ url_for('modules.apply', pid=p.id) }}" id="mForm" hidden>
+  <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="tree" id="mTree">
+  <section class="panel p-0">
+    <div class="au-head flex-wrap gap-2">
+      <b id="mSummary"></b>
+      <span class="d-flex gap-2 align-items-center">
+        <input class="form-control form-control-sm" id="mFilter" placeholder="Filter modules" aria-label="Filter modules" style="width: 200px">
+        <button type="button" class="btn btn-link btn-sm" id="mAll">Select all</button>
+        <button type="button" class="btn btn-link btn-sm" id="mNone">Select none</button>
+        <button class="btn btn-primary btn-sm" id="mCreate">Create</button>
+      </span>
+    </div>
+    <div class="m-tree" id="mList"></div>
+  </section>
+</form>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  var CSRF = {{ csrf|tojson }}, URL_READ = {{ url_for('modules.read', pid=p.id)|tojson }}, URL_PARSE = {{ url_for('modules.parse', pid=p.id)|tojson }};
+  var status = document.getElementById('mStatus'), form = document.getElementById('mForm'), list = document.getElementById('mList');
+  var mods = [], EXISTING = {{ existing|tojson }};   // module (lower case) -> its sub-modules (lower case) already in this project
+  var hasExisting = Object.keys(EXISTING).length > 0;
+  function modExists(m) { return Object.prototype.hasOwnProperty.call(EXISTING, m.name.toLowerCase()); }
+  function subExists(m, sub) { return modExists(m) && EXISTING[m.name.toLowerCase()].indexOf(sub.name.toLowerCase()) > -1; }
+  function tag(exists) { return hasExisting ? (exists ? ' <span class="m-tag old">Already added</span>' : ' <span class="m-tag new">New</span>') : ''; }
+  function say(t, kind) { status.className = 'small mb-2 ' + (kind === 'bad' ? 't-fail' : kind === 'busy' ? 'text-secondary' : 't-pass'); status.textContent = t; }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function render() {
+    list.innerHTML = mods.map(function (m, i) {
+      return '<details class="m-mod' + ((m.subs || []).length ? '' : ' m-leaf') + '" data-name="' + esc(m.name.toLowerCase()) + '"><summary>' +
+        '<input class="form-check-input m-chk" type="checkbox" data-m="' + i + '" checked aria-label="Module ' + esc(m.name) + '"> ' +
+        '<b>' + esc(m.name) + '</b> <span class="text-secondary small">' + (m.subs || []).length + ' sub-module' + ((m.subs || []).length === 1 ? '' : 's') + '</span>' + tag(modExists(m)) +
+        (hasExisting && modExists(m) && (m.subs || []).some(function (x) { return !subExists(m, x); }) ? ' <span class="m-tag new">has new sub-modules</span>' : '') + '</summary>' +
+        '<div class="m-subs">' + (m.subs || []).map(function (s, j) {
+          return '<label class="m-sub' + (hasExisting && subExists(m, s) ? ' m-old' : '') + '"><input class="form-check-input m-schk" type="checkbox" data-m="' + i + '" data-s="' + j + '" checked> ' + esc(s.name) + (hasExisting && !subExists(m, s) ? ' <span class="m-tag new">New</span>' : '') + '</label>';
+        }).join('') + '</div></details>';
+    }).join('');
+    form.hidden = !mods.length; count();
+  }
+  function selected() {
+    return mods.map(function (m, i) {
+      var on = list.querySelector('.m-chk[data-m="' + i + '"]').checked;
+      var subs = (m.subs || []).filter(function (s, j) { return list.querySelector('.m-schk[data-m="' + i + '"][data-s="' + j + '"]').checked; });
+      return on ? { name: m.name, link: m.link || '', subs: subs } : null;
+    }).filter(Boolean);
+  }
+  function count() {   // only what is not in the project yet is created
+    var s = selected();
+    var nm = s.filter(function (m) { return !modExists(m); }).length;
+    var ns = s.reduce(function (a, m) { return a + m.subs.filter(function (x) { return !subExists(m, x); }).length; }, 0);
+    var sum = document.getElementById('mSummary'), btn = document.getElementById('mCreate');
+    if (hasExisting) {
+      sum.textContent = nm + ' new module' + (nm === 1 ? '' : 's') + ' and ' + ns + ' new sub-module' + (ns === 1 ? '' : 's') + ' to add' +
+        (nm + ns ? '' : ': everything selected is already in this project');
+      btn.textContent = 'Add new';
+      btn.disabled = !(nm + ns);
+    } else {
+      var n = s.reduce(function (a, m) { return a + m.subs.length; }, 0);
+      sum.textContent = s.length + ' module' + (s.length === 1 ? '' : 's') + ' and ' + n + ' sub-module' + (n === 1 ? '' : 's') + ' selected';
+      btn.textContent = 'Create';
+      btn.disabled = !s.length;
+    }
+  }
+  list.addEventListener('change', function (e) {
+    if (e.target.classList.contains('m-chk')) list.querySelectorAll('.m-schk[data-m="' + e.target.dataset.m + '"]').forEach(function (x) { x.checked = e.target.checked; });
+    if (e.target.classList.contains('m-schk') && e.target.checked) list.querySelector('.m-chk[data-m="' + e.target.dataset.m + '"]').checked = true;
+    count();
+  });
+  list.addEventListener('click', function (e) { if (e.target.classList.contains('m-chk')) e.stopPropagation(); });
+  document.getElementById('mAll').onclick = function () { list.querySelectorAll('input[type=checkbox]').forEach(function (x) { x.checked = true; }); count(); };
+  document.getElementById('mNone').onclick = function () { list.querySelectorAll('input[type=checkbox]').forEach(function (x) { x.checked = false; }); count(); };
+  document.getElementById('mFilter').addEventListener('input', function () {
+    var q = this.value.trim().toLowerCase();
+    list.querySelectorAll('.m-mod').forEach(function (d) { d.hidden = q && d.dataset.name.indexOf(q) < 0 && d.textContent.toLowerCase().indexOf(q) < 0; });
+  });
+  form.addEventListener('submit', function () { document.getElementById('mTree').value = JSON.stringify(selected()); });
+  function post(url, data, btn, busyText) {
+    btn.disabled = true; say(busyText, 'busy');
+    var isFile = data instanceof FormData;
+    if (isFile) data.append('csrf', CSRF);
+    var body = isFile ? data : new URLSearchParams(Object.assign({ csrf: CSRF }, data));
+    return fetch(url, isFile ? { method: 'POST', body: body } : { method: 'POST', body: body, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } })
+      .then(function (r) { return r.json().catch(function () { return { ok: false, reason: 'Unexpected reply from the server (' + r.status + ').' }; }); })
+      .then(function (j) {
+        result(j);
+        if (!j || !j.ok) throw new Error((j && (j.reason || j.error || j.message)) || 'Failed');
+        mods = j.modules || []; render();
+        var n = mods.reduce(function (a, m) { return a + (m.subs || []).length; }, 0);
+        say('Found ' + mods.length + ' modules and ' + n + ' sub-modules' + (j.env ? ' in ' + j.env : '') + '. Untick what you do not need, then Create.');
+      })
+      .catch(function (e) { say(e.message, 'bad'); })
+      .finally(function () { btn.disabled = false; });
+  }
+  var STAGE = { setup: 'Setup', open: 'Opening the application', login: 'Signing in', menu: 'Reading the menu' };
+  var READER = { 'nested-list': 'nested menu list', 'toggle-panel': 'dropdown / collapsible groups', 'aria-roles': 'menu / tree roles',
+                 'heading-groups': 'headings with links', 'click-dropdowns': 'menus opened by clicking',
+                 'expand-groups': 'sidebar groups opened one by one', 'flat-links': 'plain links' };
+  function result(j) {   // reason / warning + screenshot of what the reader saw (only for "Read menu")
+    var box = document.getElementById('mResult');
+    if (!j || !('stage' in j) || (j.ok && !j.warning)) { box.hidden = true; return; }   // only failures and warnings
+    box.hidden = false;
+    box.className = 'panel mb-3 m-result ' + (j.ok ? 'warn' : 'bad');
+    document.getElementById('mResTitle').textContent = j.ok ? 'Read, with a warning' : 'Could not read the menu (' + (STAGE[j.stage] || j.stage) + ')';
+    document.getElementById('mResText').textContent = j.ok ? j.warning : j.reason;
+    var meta = [];
+    if (j.login) meta.push('Login used: ' + ({ custom: "the environment's Login steps", etail: 'eTail login', generic: 'login form found automatically' }[j.login] || j.login));
+    if (j.strategy) meta.push('Menu read as: ' + (READER[j.strategy] || j.strategy));
+    if (j.url) meta.push('Page: ' + j.url);
+    document.getElementById('mResMeta').textContent = meta.join(' · ');
+    var link = document.getElementById('mShotLink');
+    link.hidden = !j.shot_url;
+    if (j.shot_url) { link.href = j.shot_url; document.getElementById('mShot').src = j.shot_url; }
+  }
+  var envSel = document.getElementById('mEnv'), menuBox = document.getElementById('mMenuUrl');
+  function envChanged() {
+    if (!envSel) return;
+    var o = envSel.options[envSel.selectedIndex];
+    menuBox.value = o.dataset.menu || '';
+    document.getElementById('mEnvNote').textContent = o.dataset.steps ? 'This environment has its own Login steps; they are used to sign in.' : '';
+  }
+  if (envSel) { envSel.addEventListener('change', envChanged); envChanged(); }
+  var rb = document.getElementById('mReadBtn');
+  if (rb) rb.onclick = function () { post(URL_READ, { env_id: envSel.value, menu_url: menuBox.value }, rb, 'Signing in and reading the menu… (about a minute)'); };
+  var pb = document.getElementById('mParseBtn');
+  pb.onclick = function () { post(URL_PARSE, { text: document.getElementById('mText').value }, pb, 'Reading the list…'); };
+  var fb = document.getElementById('mFileBtn'), fi = document.getElementById('mFile');
+  fb.onclick = function () {
+    if (!fi.files.length) { say('Choose a logitesthub.modules.json file first.', 'bad'); return; }
+    var fd = new FormData(); fd.append('file', fi.files[0]);
+    post({{ url_for('modules.parse_file', pid=p.id)|tojson }}, fd, fb, 'Reading the file…');
+  };
+})();
+</script>
+{% endblock %}

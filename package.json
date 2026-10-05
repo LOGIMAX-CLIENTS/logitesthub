@@ -1,17 +1,32 @@
 {
-  "name": "etail-test-ai",
+  "name": "logitesthub-cli",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Tester CLI (tester): plain-English UI tests in a headless browser, results in LogiTestHub",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
-  "author": "",
+  "author": "Logimax Technologies",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.129.0",
     "playwright": "^1.63.0"
+  },
+  "bin": {
+    "tester": "cli/lth.js",
+    "lth": "cli/lth.js"
+  },
+  "files": [
+    "cli/",
+    "lib/",
+    "run.js",
+    "manager/static/logo.svg",
+    "manager/static/logo-lmx-noball.png",
+    "manager/static/logo-lmx-ball.png",
+    "manager/static/playwright-logo.svg"
+  ],
+  "engines": {
+    "node": ">=18"
   }
 }

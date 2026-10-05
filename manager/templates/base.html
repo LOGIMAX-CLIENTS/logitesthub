@@ -1,12 +1,23 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-bs-theme="light" data-accent="{{ accent or 'green' }}">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<script>   // light (white) by default; the top-bar button switches to dark (remembered on this browser). Accent: Profile -> Appearance
+(function () { var t; try { t = localStorage.getItem('lth-theme'); } catch (e) {}
+  document.documentElement.setAttribute('data-bs-theme', t === 'dark' ? 'dark' : 'light');
+  // signed in: remember this user's colour on this browser; sign-in page (nobody signed in yet): use the remembered one
+  try { {% if me %}localStorage.setItem('lth-accent', {{ (accent or 'green')|tojson }});{% else %}var a = localStorage.getItem('lth-accent');
+    if ({{ accents|map(attribute=0)|list|tojson }}.indexOf(a) >= 0) document.documentElement.setAttribute('data-accent', a);{% endif %} } catch (e) {}
+  try { if (localStorage.getItem('lth-side') === 'collapsed') document.documentElement.setAttribute('data-side', 'collapsed'); } catch (e) {} })();
+</script>
 <title>{% block title %}Home{% endblock %} · LogiTestHub</title>
-<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='logo.svg') }}">
+<link rel="icon" type="image/png" sizes="64x64" href="{{ url_for('static', filename='logo-lmx-icon-64.png') }}">
+<link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='logo-lmx-icon-32.png') }}">
+<link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='logo-lmx-icon-16.png') }}">
+<link rel="shortcut icon" href="{{ url_for('static', filename='favicon-lmx.ico') }}">
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-<link href="{{ url_for('static', filename='style.css') }}" rel="stylesheet">
+<link href="{{ static_v('style.css') }}" rel="stylesheet">
 {% block head %}{% endblock %}
 </head>
 <body class="{{ 'with-rail' if me and not public }} {% block bodyclass %}{% endblock %}">
@@ -14,21 +25,21 @@
 {% set ep = request.endpoint or '' %}
 {% set active_pid = p.id if (p is defined and p) else (c.project_id if (c is defined and c) else none) %}
 {% set in_tm = ep in ('projects', 'project', 'case', 'case_new', 'case_edit') %}
-{# Collapsed icon rail; widens on hover (desktop) or with the menu button (touch). Icons are our own set. #}
+{# Wide sidebar on desktop; the menu button folds it into an icon rail (remembered). Small screens: icon rail that widens on hover / the menu button. #}
 <nav class="side" id="side" aria-label="Main">
   <div class="side-brand">
-    <img class="side-mark" src="{{ url_for('static', filename='logo.svg') }}" alt="" width="38" height="38">
-    <span class="side-label side-title"><span class="wm">Logi<b>TestHub</b></span><small>Plan • Test • Track • Deliver</small></span>
+    <img class="side-mark side-mark-lmx" src="{{ url_for('static', filename='logo-lmx-side.png') }}" alt="LMX" width="56" height="20">
+    <span class="side-label side-title"><span class="wm">LogiTest<b>Hub</b></span><small>Faster testing • Stronger products</small></span>
   </div>
   <div class="side-items">
     <a class="side-item {{ 'active' if ep == 'home' }}" href="{{ url_for('home') }}" title="Home">
-      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="8" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="5" rx="1.5"/><rect x="13.5" y="11.5" width="7" height="9" rx="1.5"/><rect x="3.5" y="14.5" width="7" height="6" rx="1.5"/></svg>
+      <span class="side-ic ic-home"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="8" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="5" rx="1.5"/><rect x="13.5" y="11.5" width="7" height="9" rx="1.5"/><rect x="3.5" y="14.5" width="7" height="6" rx="1.5"/></svg></span>
       <span class="side-label">Home</span>
     </a>
     <div class="side-group {{ 'open' if in_tm }}">
       <div class="side-item {{ 'active' if in_tm }}">
         <a class="side-link" href="{{ url_for('projects') }}" title="Test Case">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6v3H9z"/><path d="M15 5.5h2.5A1.5 1.5 0 0 1 19 7v12.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19.5V7a1.5 1.5 0 0 1 1.5-1.5H9"/><path d="m8.5 13 2.2 2.2L15.5 10.5"/></svg>
+          <span class="side-ic ic-cases"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6v3H9z"/><path d="M15 5.5h2.5A1.5 1.5 0 0 1 19 7v12.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19.5V7a1.5 1.5 0 0 1 1.5-1.5H9"/><path d="m8.5 13 2.2 2.2L15.5 10.5"/></svg></span>
           <span class="side-label">Test Case</span>
         </a>
         <button class="side-caret side-label" type="button" aria-label="Show projects" aria-expanded="{{ 'true' if in_tm else 'false' }}"
@@ -43,25 +54,34 @@
         {% endfor %}
       </div>
     </div>
+    {% if can('ai.generate') %}
+    <a class="side-item {{ 'active' if ep.startswith('assistant.') }}" href="{{ url_for('assistant.home') }}" title="Test Assistant">
+      <span class="side-ic ic-assist"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/><path d="M8.5 10.5h7M8.5 13.5h4.5"/></svg></span>
+      <span class="side-label">Test Assistant</span>
+    </a>
+    {% endif %}
     <a class="side-item {{ 'active' if ep == 'runs_list' or ep.startswith('testruns.') }}" href="{{ url_for('testruns.index') }}" title="Test Runs">
-      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m10 9.2 4.8 2.8-4.8 2.8z"/></svg>
+      <span class="side-ic ic-runs"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m10 9.2 4.8 2.8-4.8 2.8z"/></svg></span>
       <span class="side-label">Test Runs</span>
     </a>
-    {% if me.role == 'admin' %}
-    <a class="side-item {{ 'active' if ep == 'users' }}" href="{{ url_for('users') }}" title="Users">
-      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8.5" r="3.5"/><path d="M2.5 19.5a6.5 6.5 0 0 1 13 0"/><path d="M16 5.2a3.5 3.5 0 0 1 0 6.6M18 13.8a6.5 6.5 0 0 1 3.5 5.7"/></svg>
-      <span class="side-label">Users</span>
+    <a class="side-item {{ 'active' if ep.startswith('cli.') }}" href="{{ url_for('cli.page') }}" title="Tester CLI">
+      <span class="side-ic ic-cli"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="3"/><path d="m7.5 10 2.5 2-2.5 2M12.5 15h4"/></svg></span>
+      <span class="side-label">Tester CLI</span>
     </a>
-    <a class="side-item {{ 'active' if ep == 'environments' }}" href="{{ url_for('environments') }}" title="Environments">
-      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01M11 7h6M11 17h6"/></svg>
-      <span class="side-label">Environments</span>
+    {% if is_admin %}
+    <a class="side-item {{ 'active' if ep in ('users', 'environments') or ep.startswith('settings.') }}" href="{{ url_for('users') }}" title="Settings">
+      <span class="side-ic ic-settings"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></span>
+      <span class="side-label">Settings</span>
     </a>
     <a class="side-item {{ 'active' if ep == 'ai_usage' }}" href="{{ url_for('ai_usage') }}" title="AI Usage">
-      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/><path d="m17.5 3 .7 1.6 1.6.7-1.6.7-.7 1.6-.7-1.6-1.6-.7 1.6-.7z" fill="currentColor"/></svg>
+      <span class="side-ic ic-ai"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/><path d="m17.5 3 .7 1.6 1.6.7-1.6.7-.7 1.6-.7-1.6-1.6-.7 1.6-.7z" fill="currentColor"/></svg></span>
       <span class="side-label">AI Usage</span>
     </a>
+
+    {% endif %}
+    {% if can('reports.view') %}
     <a class="side-item {{ 'active' if ep == 'reports.users' }}" href="{{ url_for('reports.users') }}" title="User Report">
-      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6.5A2.5 2.5 0 0 0 4 5.5v13A2.5 2.5 0 0 0 6.5 21h11a2.5 2.5 0 0 0 2.5-2.5V9z"/><path d="M14 3v6h6"/><circle cx="12" cy="12.5" r="2"/><path d="M8.5 18a3.5 3.5 0 0 1 7 0"/></svg>
+      <span class="side-ic ic-report"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6.5A2.5 2.5 0 0 0 4 5.5v13A2.5 2.5 0 0 0 6.5 21h11a2.5 2.5 0 0 0 2.5-2.5V9z"/><path d="M14 3v6h6"/><circle cx="12" cy="12.5" r="2"/><path d="M8.5 18a3.5 3.5 0 0 1 7 0"/></svg></span>
       <span class="side-label">User Report</span>
     </a>
     {% endif %}
@@ -70,7 +90,7 @@
     <div class="dropup dropend">
       <button class="side-item side-cred" type="button" title="Credentials" data-bs-toggle="dropdown" aria-expanded="false"
               data-bs-popper-config='{"strategy":"fixed"}'>
-        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="m10.8 12.2 8.7-8.7M16 7l2.5 2.5M13.5 9.5 15.5 11.5"/></svg>
+        <span class="side-ic ic-cred"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="m10.8 12.2 8.7-8.7M16 7l2.5 2.5M13.5 9.5 15.5 11.5"/></svg></span>
         <span class="side-label">Credentials</span>
         <svg class="side-label ms-auto" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
       </button>
@@ -89,14 +109,52 @@
       </div>
     </div>
   </div>
-  <button class="side-toggle" type="button" aria-label="Expand menu" onclick="document.getElementById('side').classList.toggle('expanded')">
+  <button class="side-toggle" type="button" id="sideToggle" aria-label="Collapse menu">
     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
   </button>
 </nav>
 {% endif %}
 <nav class="topbar">
   <a class="brand wm" href="{{ url_for('home') if me else '#' }}">Logi<b>TestHub</b></a>
+  {% if me and not public %}
+  <form class="top-search" action="{{ url_for('search') }}" method="get" role="search">
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg>
+    <input type="search" name="q" value="{{ q if q is defined else '' }}" placeholder="Search projects, test cases, etc..." aria-label="Search projects and test cases" maxlength="100">
+  </form>
+  {% endif %}
   <div class="crumbs">{% block crumbs %}{% endblock %}</div>
+  <button class="theme-btn" type="button" id="themeBtn" title="Switch to dark mode" aria-label="Switch to dark mode">
+    <svg class="i-moon" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
+    <svg class="i-sun" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/></svg>
+  </button>
+  {% if me and credit_chip %}{% set cc = credit_chip %}
+  <div class="dropdown">
+    <button class="credit-chip {{ 'low' if cc.low }}" type="button" data-bs-toggle="dropdown" aria-expanded="false"
+            title="{{ 'Anthropic credits (estimate)' if cc.kind == 'admin' else 'Your AI use this month' }}">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="6.5" rx="7" ry="3"/><path d="M5 6.5v5c0 1.7 3.1 3 7 3s7-1.3 7-3v-5M5 11.5v5c0 1.7 3.1 3 7 3s7-1.3 7-3v-5"/></svg>
+      {% if cc.kind == 'admin' %}<span>Credits : <b>{{ (cc.balance|inr(1)) if cc.balance is not none else 'not set' }}</b></span>
+      {% else %}<span>AI : <b>{{ cc.used|inr(1) }}</b>{% if cc.limit is not none %} / {{ cc.limit|inr(1) }}{% endif %}</span>{% endif %}
+      <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M6 9h12l-6 7z"/></svg>
+    </button>
+    <div class="dropdown-menu dropdown-menu-end credit-pop">
+      {% if cc.kind == 'admin' %}
+      <div class="cp-row"><span>Credit balance</span><b>{{ (cc.balance|inr(1)) if cc.balance is not none else '—' }}</b></div>
+      <div class="cp-row"><span>Used this month</span><b>{{ cc.month_used|inr(1) }}</b></div>
+      <div class="cp-row"><span>Organisation limit</span><b>{{ (cc.org|inr(1)) if cc.org is not none else 'No limit' }}</b></div>
+      <div class="cp-row"><span>Reserve kept aside</span><b>{{ ([cc.reserve, 0]|max|inr(1)) if cc.reserve is not none else '—' }}</b></div>
+      {% if cc.balance is none %}<div class="cp-note">Record the credits you bought to see the balance.</div>
+      {% elif cc.low %}<div class="cp-note t-warn">Less than 20% of the credits left: top up in the Anthropic Console.</div>{% endif %}
+      <a class="dropdown-item cp-link" href="{{ url_for('ai_usage') }}#budget">{{ 'Add credits / limits' if cc.balance is none else 'Credits & AI usage' }} →</a>
+      {% else %}
+      <div class="cp-row"><span>Used this month</span><b>{{ cc.used|inr(1) }}</b></div>
+      <div class="cp-row"><span>Your limit</span><b>{{ (cc.limit|inr(1)) if cc.limit is not none else 'No limit' }}</b></div>
+      {% if cc.pct is not none %}<div class="bd-meter my-1"><span style="width: {{ cc.pct }}%" class="{{ 'hot' if cc.pct >= 80 }}"></span></div>{% endif %}
+      <div class="cp-note {{ 't-fail' if cc.blocked }}">{{ 'Limit reached: ask your admin for extra. ' if cc.blocked }}Resets on {{ cc.resets }}.</div>
+      <a class="dropdown-item cp-link" href="{{ url_for('profile') }}#my-ai">My AI usage →</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
   {% if me %}
   <div class="dropdown user">
     <button class="user-btn" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Account menu">
@@ -108,7 +166,7 @@
       <div class="user-menu-head"><span class="avatar">{{ me.name[:1]|upper }}</span><div class="min-w-0"><div class="fw-semibold text-truncate">{{ me.name }}</div><div class="small text-secondary">@{{ me.username }} · {{ me.role|capitalize }}</div></div></div>
       <div class="dropdown-divider"></div>
       <a class="dropdown-item" href="{{ url_for('profile') }}">My profile</a>
-      {% if me.role == 'admin' %}
+      {% if is_admin %}
       <a class="dropdown-item" href="{{ url_for('users') }}">Users</a>
       <a class="dropdown-item" href="{{ url_for('users') }}#new">Create account</a>
       {% endif %}
@@ -126,6 +184,35 @@
 </main>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
+(function () {   // light / dark toggle; [data-theme-css] stylesheets (e.g. code highlighting) follow the theme
+  var root = document.documentElement, btn = document.getElementById('themeBtn');
+  function apply(t) {
+    root.setAttribute('data-bs-theme', t);
+    document.querySelectorAll('link[data-theme-css]').forEach(function (l) { l.disabled = l.dataset.themeCss !== t; });
+    if (!btn) return;
+    var label = t === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+    btn.title = label; btn.setAttribute('aria-label', label);
+  }
+  apply(root.getAttribute('data-bs-theme') === 'dark' ? 'dark' : 'light');
+  if (btn) btn.addEventListener('click', function () {
+    var t = root.getAttribute('data-bs-theme') === 'dark' ? 'light' : 'dark';
+    try { localStorage.setItem('lth-theme', t); } catch (e) {}
+    apply(t);
+  });
+})();
+(function () {   // sidebar menu button: desktop folds the wide sidebar (remembered), small screens open the rail
+  var t = document.getElementById('sideToggle'), side = document.getElementById('side'), root = document.documentElement;
+  if (!t) return;
+  t.addEventListener('click', function () {
+    if (window.matchMedia('(min-width: 992px)').matches) {
+      var c = root.getAttribute('data-side') !== 'collapsed';
+      if (c) root.setAttribute('data-side', 'collapsed'); else root.removeAttribute('data-side');
+      try { localStorage.setItem('lth-side', c ? 'collapsed' : 'open'); } catch (e) {}
+      t.setAttribute('aria-label', c ? 'Expand menu' : 'Collapse menu');
+    } else side.classList.toggle('expanded');
+  });
+  if (root.getAttribute('data-side') === 'collapsed') t.setAttribute('aria-label', 'Expand menu');
+})();
 document.querySelectorAll('[data-copy-text]').forEach(function (b) {   // sidebar Credentials: copy username
   b.addEventListener('click', function (e) {
     e.preventDefault(); e.stopPropagation();
@@ -136,6 +223,7 @@ document.querySelectorAll('[data-copy-text]').forEach(function (b) {   // sideba
   });
 });
 </script>
+{% if me and not public %}<script src="{{ static_v('bg-wave.js') }}"></script>{# particle-wave background, dark theme only #}{% endif %}
 {% block scripts %}{% endblock %}
 </body>
 </html>

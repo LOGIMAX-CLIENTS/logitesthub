@@ -124,23 +124,24 @@
   <div class="au-head"><b>By test case</b><span class="small text-secondary">Highest cost first</span></div>
   <div class="table-responsive">
     <table class="table table-sm align-middle mb-0 au-table">
-      <thead><tr><th class="text-start">Test case</th><th class="text-start">Project</th><th class="text-end">Runs with AI</th><th class="text-end">Generated</th><th class="text-end">AI calls</th><th class="text-end">Input</th><th class="text-end">Output</th><th class="text-end">Cost (USD)</th><th class="text-end">Cost (₹)</th><th class="text-start">Last used</th></tr></thead>
+      <thead><tr><th class="text-start">Test case</th><th class="text-start">Project</th><th class="text-end">Runs with AI</th><th class="text-end">Generated</th><th class="text-end">AI calls</th><th class="text-end">Input</th><th class="text-end">Output</th><th class="text-end" title="Tokens read again from Claude's cache (cheaper)">Cache read</th><th class="text-end" title="Tokens written to Claude's cache">Cache write</th><th class="text-end">Cost (USD)</th><th class="text-end">Cost (₹)</th><th class="text-start">Last used</th></tr></thead>
       <tbody>
       {% for r in by_case %}
       <tr>
-        <td class="text-start">{% if r.tc_no %}<a href="{{ url_for('case', cid=r.case_id) }}"><b>TC-{{ r.tc_no }}</b></a> <span class="text-secondary">{{ r.title|truncate(60, True, '…') }}</span>{% else %}<span class="text-secondary">(deleted test case)</span>{% endif %}</td>
+        <td class="text-start">{% if r.tc_no %}<a href="{{ url_for('case', cid=r.case_id) }}"><b>TC-{{ r.tc_no }}</b></a> <span class="text-secondary">{{ r.title|truncate(60, True, '…') }}</span>{% elif r.case_id %}<span class="text-secondary">(deleted test case #{{ r.case_id }})</span>{% else %}<span class="text-secondary">(not linked to a test case{{ ': Test Assistant chats not saved yet' if r.chats }})</span>{% endif %}</td>
         <td class="text-start">{{ r.project or '-' }}</td>
         <td class="text-end">{{ r.runs }}</td><td class="text-end">{{ 'Yes' if r.gens else '' }}</td>
-        <td class="text-end">{{ r.calls or 0 }}</td>
+        <td class="text-end"><a href="{{ url_for('ai_usage_case', cid=r.case_id or 0) }}" title="Every AI call of this test case">{{ r.calls or 0 }}</a></td>
         <td class="text-end">{{ '{:,}'.format(r.tin or 0) }}</td><td class="text-end">{{ '{:,}'.format(r.tout or 0) }}</td>
+        <td class="text-end">{{ '{:,}'.format(r.tcr or 0) }}</td><td class="text-end">{{ '{:,}'.format(r.tcw or 0) }}</td>
         <td class="text-end">{{ r.cost|usd }}</td><td class="text-end">{{ r.cost|inr(inr) }}</td>
         <td class="text-start">{{ r.last_at|ago }}</td>
       </tr>
       {% else %}
-      <tr><td colspan="10" class="text-secondary text-center py-4">No AI usage in this period. Usage appears after runs with AI steps or Generate with AI (needs API credits).</td></tr>
+      <tr><td colspan="12" class="text-secondary text-center py-4">No AI usage in this period. Usage appears after runs with AI steps or Generate with AI (needs API credits).</td></tr>
       {% endfor %}
       </tbody>
-      {% if by_case %}<tfoot><tr><th class="text-start" colspan="4">Total</th><th class="text-end">{{ totals.calls or 0 }}</th><th class="text-end">{{ '{:,}'.format(totals.tin or 0) }}</th><th class="text-end">{{ '{:,}'.format(totals.tout or 0) }}</th><th class="text-end">{{ totals.cost|usd }}</th><th class="text-end">{{ totals.cost|inr(inr) }}</th><th></th></tr></tfoot>{% endif %}
+      {% if by_case %}<tfoot><tr><th class="text-start" colspan="4">Total</th><th class="text-end">{{ totals.calls or 0 }}</th><th class="text-end">{{ '{:,}'.format(totals.tin or 0) }}</th><th class="text-end">{{ '{:,}'.format(totals.tout or 0) }}</th><th class="text-end">{{ '{:,}'.format(by_case|sum(attribute='tcr')) }}</th><th class="text-end">{{ '{:,}'.format(by_case|sum(attribute='tcw')) }}</th><th class="text-end">{{ totals.cost|usd }}</th><th class="text-end">{{ totals.cost|inr(inr) }}</th><th></th></tr></tfoot>{% endif %}
     </table>
   </div>
 </div>

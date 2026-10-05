@@ -1,0 +1,79 @@
+{% extends 'base.html' %}
+{% block title %}Test Assistant activity{% endblock %}
+{% block crumbs %}<span class="tm-crumbs"><b>Test Assistant</b> <span>/</span> Activity · Admin</span>{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap gap-2 align-items-end justify-content-between mb-3">
+  <div>
+    <h1 class="h4 mb-0">Test Assistant activity</h1>
+    <div class="text-secondary small">Who used the Test Assistant, what they asked, which test cases they saved and how their runs went. Admins only.</div>
+  </div>
+  <form method="get" class="d-flex gap-2 align-items-center">
+    <label class="small text-secondary" for="actP">Project</label>
+    <select class="form-select form-select-sm" id="actP" name="project" onchange="this.form.submit()">
+      <option value="">All projects</option>{% for pr in projects %}<option value="{{ pr.id }}" {{ 'selected' if pid == pr.id }}>{{ pr.name }}</option>{% endfor %}</select>
+  </form>
+</div>
+
+<div class="tiles mb-3 au-case-tiles">
+  <div class="tile"><span class="n">{{ users|length }}</span><span>Users</span></div>
+  <div class="tile"><span class="n">{{ total.chats }}</span><span>Conversations · {{ total.messages }} messages</span></div>
+  <div class="tile"><span class="n">{{ total.saved }}</span><span>Test cases saved</span></div>
+  <div class="tile"><span class="n">{{ total.runs }}</span><span>Runs · {{ total.passed }} passed · {{ total.failed }} failed</span></div>
+  <div class="tile"><span class="n">{{ total.tok|tok }}</span><span>AI tokens · {{ total.calls }} calls</span></div>
+  <div class="tile"><span class="n">{{ total.cost|usd }}</span><span>Estimated AI cost · {{ total.cost|inr(inr) }}</span></div>
+</div>
+
+<div class="panel p-0 mb-3">
+  <div class="au-head"><b>By user</b><span class="small text-secondary">Runs = runs of the test cases they saved from their chats</span></div>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0 au-table">
+      <thead><tr><th class="text-start">User</th><th class="text-start">Department</th><th class="text-end">Chats</th><th class="text-end">Messages</th><th class="text-end">Test cases saved</th>
+        <th class="text-end">Runs</th><th class="text-end">Passed</th><th class="text-end">Failed</th><th class="text-end">Other</th>
+        <th class="text-end">AI calls</th><th class="text-end">Tokens</th><th class="text-end">Cost (USD)</th><th class="text-end">Cost (₹)</th><th class="text-start">Last used</th></tr></thead>
+      <tbody>
+      {% for u in users %}
+      <tr>
+        <td class="text-start"><b>{{ u.username }}</b>{% if u.name %} <span class="text-secondary">{{ u.name }}</span>{% endif %}</td>
+        <td class="text-start">{{ u.department or '' }}</td>
+        <td class="text-end">{{ u.chats }}</td><td class="text-end">{{ u.messages }}</td><td class="text-end">{{ u.saved }}</td>
+        <td class="text-end">{{ u.runs }}</td><td class="text-end t-pass">{{ u.passed or 0 }}</td><td class="text-end t-fail">{{ u.failed or 0 }}</td><td class="text-end">{{ u.other or 0 }}</td>
+        <td class="text-end">{{ u.calls }}</td><td class="text-end">{{ '{:,}'.format(u.tok) }}</td>
+        <td class="text-end">{{ u.cost|usd }}</td><td class="text-end">{{ u.cost|inr(inr) }}</td>
+        <td class="text-start text-nowrap">{{ u.last_at|dmy }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="14" class="text-center text-secondary py-4">Nobody has used the Test Assistant yet.</td></tr>
+      {% endfor %}
+      </tbody>
+      {% if users %}<tfoot><tr><th class="text-start">Total</th><th></th><th class="text-end">{{ total.chats }}</th><th class="text-end">{{ total.messages }}</th><th class="text-end">{{ total.saved }}</th>
+        <th class="text-end">{{ total.runs }}</th><th class="text-end">{{ total.passed }}</th><th class="text-end">{{ total.failed }}</th><th></th>
+        <th class="text-end">{{ total.calls }}</th><th class="text-end">{{ '{:,}'.format(total.tok) }}</th><th class="text-end">{{ total.cost|usd }}</th><th class="text-end">{{ total.cost|inr(inr) }}</th><th></th></tr></tfoot>{% endif %}
+    </table>
+  </div>
+</div>
+
+<div class="panel p-0">
+  <div class="au-head"><b>Recent conversations</b><span class="small text-secondary">Open one to read it (read-only for other users' chats)</span></div>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0 au-table">
+      <thead><tr><th class="text-start">Last message</th><th class="text-start">User</th><th class="text-start">Project</th><th class="text-start">Conversation</th>
+        <th class="text-end">Messages</th><th class="text-start">Test case</th><th class="text-start">Last run</th></tr></thead>
+      <tbody>
+      {% for t in recent %}
+      <tr>
+        <td class="text-start text-nowrap">{{ t.updated_at|dmy }}</td>
+        <td class="text-start">{{ t.created_by }}</td>
+        <td class="text-start">{{ t.project }}</td>
+        <td class="text-start"><a href="{{ url_for('assistant.page', pid=t.project_id, t=t.id, who='all') }}">{{ t.title|truncate(90, True, '…') }}</a></td>
+        <td class="text-end">{{ t.messages }}</td>
+        <td class="text-start">{% if t.tc_no %}<a href="{{ url_for('case', cid=t.case_id) }}">TC-{{ t.tc_no }}</a>{% else %}<span class="text-secondary">not saved</span>{% endif %}</td>
+        <td class="text-start">{% if t.last_run %}<a href="{{ url_for('case', cid=t.case_id, run=t.last_run_id) }}"><span class="badge st-{{ t.last_run|lower }}">{{ t.last_run }}</span></a>{% else %}<span class="text-secondary">-</span>{% endif %}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="text-center text-secondary py-4">No conversations yet.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

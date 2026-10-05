@@ -1,0 +1,2070 @@
+{
+  "format": "logitesthub.modules/v1",
+  "project": "Retail",
+  "source": "eTail menu table (dev.retail.logimaxindia.com, settings/menu)",
+  "generated_at": "2026-10-01T12:12:20.732Z",
+  "modules": [
+    {
+      "name": "Dashboard",
+      "link": "admin/dashboard",
+      "subs": []
+    },
+    {
+      "name": "Version",
+      "link": "settings/version/list",
+      "subs": []
+    },
+    {
+      "name": "Metal Rates",
+      "subs": [
+        {
+          "name": "Metal rates",
+          "link": "settings/rate/list"
+        },
+        {
+          "name": "Metal rate Discount",
+          "link": "settings/rate/discount"
+        },
+        {
+          "name": "Old Metal Rate",
+          "link": "admin_ret_catalog/old_metal_rate/list"
+        }
+      ]
+    },
+    {
+      "name": "Catalog Master",
+      "subs": [
+        {
+          "name": "Qc Cancel Reasons",
+          "link": "admin_ret_catalog/ret_qc_cancel_reason/list"
+        },
+        {
+          "name": "Clarity",
+          "link": "clarity/list"
+        },
+        {
+          "name": "Color",
+          "link": "color/list"
+        },
+        {
+          "name": "Counter",
+          "link": "admin_ret_catalog/floor_counter/list"
+        },
+        {
+          "name": "Shape",
+          "link": "admin_ret_catalog/shape/list"
+        },
+        {
+          "name": "Cut",
+          "link": "cut/list"
+        },
+        {
+          "name": "Financial year",
+          "link": "admin_ret_catalog/financial_year/list"
+        },
+        {
+          "name": "Floor",
+          "link": "admin_ret_catalog/branch_floor/list"
+        },
+        {
+          "name": "Hook",
+          "link": "admin_ret_catalog/hook/list"
+        },
+        {
+          "name": "Making Type",
+          "link": "admin_ret_catalog/making_type/list"
+        },
+        {
+          "name": "Material",
+          "link": "admin_ret_catalog/material/list"
+        },
+        {
+          "name": "Material Rate",
+          "link": "admin_ret_catalog/material_rate/list"
+        },
+        {
+          "name": "Purity",
+          "link": "purity/list"
+        },
+        {
+          "name": "Screw",
+          "link": "admin_ret_catalog/screw/list"
+        },
+        {
+          "name": "Stone",
+          "link": "admin_ret_catalog/stone/list"
+        },
+        {
+          "name": "Tag Type",
+          "link": "admin_ret_catalog/tag/list"
+        },
+        {
+          "name": "Tax Group",
+          "link": "admin_ret_catalog/tgrp/list"
+        },
+        {
+          "name": "Tax",
+          "link": "admin_ret_catalog/tax/list"
+        },
+        {
+          "name": "Old Metal Type",
+          "link": "admin_ret_catalog/metal_type/list"
+        },
+        {
+          "name": "Theme",
+          "link": "admin_ret_catalog/theme/list"
+        },
+        {
+          "name": "UOM",
+          "link": "admin_ret_catalog/uom/list"
+        },
+        {
+          "name": "Metal Process Master",
+          "link": "admin_ret_metal_process/metal_process/list"
+        },
+        {
+          "name": "Weight Range",
+          "link": "admin_ret_catalog/weight/list"
+        },
+        {
+          "name": "Stock allotment Settings",
+          "link": "admin_ret_catalog/reorder_settings/list"
+        },
+        {
+          "name": "Re-Order Settings",
+          "link": "admin_ret_catalog/reorder_settings/list"
+        },
+        {
+          "name": "Delivery Location",
+          "link": "admin_ret_catalog/ret_delivery/List"
+        },
+        {
+          "name": "Size",
+          "link": "admin_ret_catalog/ret_size/list"
+        },
+        {
+          "name": "Section",
+          "link": "admin_ret_catalog/ret_section/list"
+        },
+        {
+          "name": "Old Metal Category",
+          "link": "admin_ret_catalog/old_metal_cat/list"
+        },
+        {
+          "name": "Charges",
+          "link": "admin_ret_catalog/charges/list"
+        },
+        {
+          "name": "Attribute",
+          "link": "admin_ret_catalog/attribute/list"
+        },
+        {
+          "name": "Damage Master",
+          "link": "admin_ret_catalog/repair_master/list"
+        },
+        {
+          "name": "Product Division",
+          "link": "product_division/list"
+        },
+        {
+          "name": "Metal Purity Rate Master",
+          "link": "admin_ret_catalog/ret_metalpurity/list"
+        },
+        {
+          "name": "Cash Deposit",
+          "link": "deposit/list"
+        },
+        {
+          "name": "Stock Issue Types",
+          "link": "admin_ret_catalog/stock_issue_type/list"
+        },
+        {
+          "name": "Supplier Catalogue",
+          "link": "admin_ret_supp_catalog/supplier_catalog/list"
+        },
+        {
+          "name": "Discount Master - Stone discount",
+          "link": "admin_ret_catalog/stone_discount/list"
+        },
+        {
+          "name": "CR/DR Ledger",
+          "link": "admin_ret_catalog/ret_crdr_ledger/list"
+        },
+        {
+          "name": "Diamond Master",
+          "link": "admin_ret_catalog/diamond/list"
+        },
+        {
+          "name": "Discount Master - Wastage Discount",
+          "link": "admin_ret_catalog/wastage_discount/list"
+        },
+        {
+          "name": "Diamond Rate Master",
+          "link": "admin_ret_catalog/diamond_rate/list"
+        },
+        {
+          "name": "Selling Diamond Rate Master",
+          "link": "admin_ret_catalog/selling_diamond_rate/list"
+        },
+        {
+          "name": "Pay Device",
+          "link": "admin_ret_catalog/ret_pay_device/list"
+        },
+        {
+          "name": "Account Head",
+          "link": "admin_ret_catalog/ret_account/list"
+        },
+        {
+          "name": "Breakeven Logs",
+          "link": "admin_ret_catalog/ret_breakeven_logs/list"
+        },
+        {
+          "name": "Cash Opening",
+          "link": "admin_opening_master/cash_opening/list"
+        }
+      ]
+    },
+    {
+      "name": "Retail Catalog",
+      "subs": [
+        {
+          "name": "Metal",
+          "link": "admin_ret_catalog/metal/list"
+        },
+        {
+          "name": "Category",
+          "link": "admin_ret_catalog/category/list"
+        },
+        {
+          "name": "Product",
+          "link": "admin_ret_catalog/ret_product/list"
+        },
+        {
+          "name": "Design",
+          "link": "admin_ret_catalog/ret_design/list"
+        },
+        {
+          "name": "Sub Design",
+          "link": "admin_ret_catalog/ret_sub_design/list"
+        },
+        {
+          "name": "Design Mapping",
+          "link": "admin_ret_catalog/ret_products_mapping/list"
+        },
+        {
+          "name": "Sub Design Mapping",
+          "link": "admin_ret_catalog/ret_subdesign_mapping/list"
+        },
+        {
+          "name": "MC & VA Settings",
+          "link": "admin_ret_catalog/wastage_mc_settings/list"
+        },
+        {
+          "name": "Collection Master",
+          "link": "admin_ret_catalog/ret_collection/list"
+        },
+        {
+          "name": "Stone Rate Settings",
+          "link": "admin_ret_catalog/ret_stone_rate_settings/list"
+        },
+        {
+          "name": "Dynamic Day Close",
+          "link": "admin_ret_catalog/day_close/list"
+        },
+        {
+          "name": "Emp Sales Incentive",
+          "link": "emp_incentive"
+        },
+        {
+          "name": "Stock Age Master",
+          "link": "admin_stock_age_master"
+        }
+      ]
+    },
+    {
+      "name": "Purchase Module",
+      "subs": [
+        {
+          "name": "Create Purchase Order",
+          "link": "admin_ret_purchase/purchase/pur_order"
+        },
+        {
+          "name": "GRN Entry",
+          "link": "admin_ret_purchase/grnentry/list"
+        },
+        {
+          "name": "Supplier Bill Entry",
+          "link": "admin_ret_purchase/purchase/list"
+        },
+        {
+          "name": "HM Issue/ Receipt",
+          "link": "admin_ret_purchase/halmarking_issue_receipt/list"
+        },
+        {
+          "name": "QC Issue/Receipt",
+          "link": "admin_ret_purchase/qc_issue_receipt/list"
+        },
+        {
+          "name": "Rate Fix (Against GST Purchase)",
+          "link": "admin_ret_purchase/rate_fixing/list"
+        },
+        {
+          "name": "Smith / Supplier Payment",
+          "link": "admin_ret_purchase/supplier_po_payment/list"
+        },
+        {
+          "name": "Approval Rate Fixing",
+          "link": "admin_ret_purchase/rate_fixing/approval_rate_fixing"
+        },
+        {
+          "name": "Purchase Return",
+          "link": "admin_ret_purchase/purchasereturn/list"
+        },
+        {
+          "name": "Vendor Registration",
+          "link": "admin_ret_catalog/karigar/list"
+        },
+        {
+          "name": "Vendor Approval",
+          "link": "admin_ret_catalog/karigar_approval/list"
+        },
+        {
+          "name": "Supplier Approval Bill Entry",
+          "link": "admin_ret_purchase_approval/approvalstock/list"
+        },
+        {
+          "name": "Order Description",
+          "link": "admin_ret_purchase/order_description/list"
+        },
+        {
+          "name": "Smith Metal Issue",
+          "link": "admin_ret_purchase/karigarmetalissue/list"
+        },
+        {
+          "name": "Debit/Credit Entry",
+          "link": "admin_ret_purchase/credit_debit_entry/list"
+        },
+        {
+          "name": "Approval Stock List",
+          "link": "admin_ret_purchase/approvalstock_tag/list"
+        },
+        {
+          "name": "Approval To Invoice Conversion",
+          "link": "admin_ret_purchase/supplier_rate_cut/list"
+        },
+        {
+          "name": "Smith Company Op balance",
+          "link": "admin_ret_purchase/smith_cmpy_op_bal/list"
+        },
+        {
+          "name": "Common PO Rate Override",
+          "link": "admin_ret_purchase/common_po_rate_override"
+        }
+      ]
+    },
+    {
+      "name": "Inventory",
+      "subs": [
+        {
+          "name": "Lot Inward",
+          "link": "admin_ret_lot/lot_inward/list"
+        },
+        {
+          "name": "Lot Merge",
+          "link": "admin_ret_lot/lot_merge/list"
+        },
+        {
+          "name": "Lot Split",
+          "link": "admin_ret_lot/lot_split/list"
+        },
+        {
+          "name": "Tagging",
+          "link": "admin_ret_tagging/tagging/list"
+        },
+        {
+          "name": "Duplicate Tag",
+          "link": "admin_ret_tagging/tagging/duplicate_print"
+        },
+        {
+          "name": "Bulk Tag Edit",
+          "link": "admin_ret_tagging/tagging/bulk_edit"
+        },
+        {
+          "name": "Bulk Tag Edit Log",
+          "link": "admin_ret_tagging/bulk_tag_edit_log/list"
+        },
+        {
+          "name": "Sub Product Edit",
+          "link": "admin_ret_tagging/tagging/tag_edit"
+        },
+        {
+          "name": "Order Link",
+          "link": "admin_ret_tagging/tagging/tag_link"
+        },
+        {
+          "name": "Lot Generate",
+          "link": "admin_ret_purchase/lot_generate/add"
+        },
+        {
+          "name": "Branch Transfer",
+          "link": "admin_ret_brntransfer/branch_transfer/list"
+        },
+        {
+          "name": "Order Unlink",
+          "link": "admin_ret_tagging/tagging/tag_unlink"
+        },
+        {
+          "name": "Non Tag Receipt",
+          "link": "admin_ret_purchase/nontag_receipt/list"
+        },
+        {
+          "name": "BT Approval",
+          "link": "admin_ret_brntransfer/branch_transfer/approval_list"
+        },
+        {
+          "name": "Re-Tagging",
+          "link": "admin_ret_tagging/retagging/list"
+        },
+        {
+          "name": "Old Sale Import",
+          "link": "admin_ret_reports/old_sale_report/list"
+        },
+        {
+          "name": "Tag Collection Mapping",
+          "link": "admin_ret_tagging/collection_mapping/list"
+        },
+        {
+          "name": "Old Tag Import",
+          "link": "admin_ret_reports/old_tag_import_report/list"
+        }
+      ]
+    },
+    {
+      "name": "VS Appointment",
+      "subs": [
+        {
+          "name": "Slot Creation",
+          "link": "videoshopping_appt/appt_slots"
+        },
+        {
+          "name": "New Request",
+          "link": "videoshopping_appt/appt_approval_list"
+        },
+        {
+          "name": "All Requests",
+          "link": "videoshopping_appt/get_appt_request"
+        }
+      ]
+    },
+    {
+      "name": "Customer Orders",
+      "subs": [
+        {
+          "name": "Create Order",
+          "link": "admin_ret_order/order/list"
+        },
+        {
+          "name": "Order Advance Details",
+          "link": "admin_ret_reports/order_advance/list"
+        },
+        {
+          "name": "Karigar Allotment",
+          "link": "admin_ret_order/customer_neworders/list"
+        },
+        {
+          "name": "Order Status Report",
+          "link": "admin_ret_reports/order_status/list"
+        }
+      ]
+    },
+    {
+      "name": "POS Management",
+      "subs": [
+        {
+          "name": "POS Settings",
+          "link": "admin_pos/posSettings"
+        },
+        {
+          "name": "Transaction Log",
+          "link": "admin_pos/posTransactions"
+        },
+        {
+          "name": "Settlement Summary",
+          "link": "admin_pos/posSettlementPage"
+        }
+      ]
+    },
+    {
+      "name": "Service Bill",
+      "subs": [
+        {
+          "name": "New BIll",
+          "link": "admin_ret_billing/service_bill/add"
+        },
+        {
+          "name": "Search Bill",
+          "link": "admin_ret_billing/service_bill/list"
+        }
+      ]
+    },
+    {
+      "name": "Sales Transfer",
+      "subs": [
+        {
+          "name": "Sales Item Transfer",
+          "link": "admin_ret_sales_transfer/sales_transfer/add"
+        },
+        {
+          "name": "Sales Transfer List",
+          "link": "admin_ret_sales_transfer/sales_transfer/list"
+        },
+        {
+          "name": "Sales Return Transfer",
+          "link": "admin_ret_sales_transfer/sales_transfer/ret_add"
+        }
+      ]
+    },
+    {
+      "name": "Section Transfer",
+      "subs": [
+        {
+          "name": "Section Item Transfer",
+          "link": "admin_ret_section_transfer/ret_section_transfer/list"
+        }
+      ]
+    },
+    {
+      "name": "Offer Management",
+      "subs": [
+        {
+          "name": "Offer Master",
+          "link": "admin_ret_offer/offer_master/list"
+        },
+        {
+          "name": "Offer Mapping",
+          "link": "admin_ret_offer/offer_mapping/list"
+        }
+      ]
+    },
+    {
+      "name": "Estimation",
+      "subs": [
+        {
+          "name": "Add Estimation",
+          "link": "admin_ret_estimation/estimation/add"
+        },
+        {
+          "name": "Estimation List",
+          "link": "admin_ret_estimation/estimation/list"
+        },
+        {
+          "name": "Estimate Discount Approval",
+          "link": "admin_ret_eda/eda/list"
+        }
+      ]
+    },
+    {
+      "name": "Billing",
+      "link": "admin_ret_billing/billing/list",
+      "subs": [
+        {
+          "name": "New Bill",
+          "link": "admin_ret_billing/billing/add"
+        },
+        {
+          "name": "Bill No Settings",
+          "link": "admin_ret_billing/bill_number_format/add"
+        },
+        {
+          "name": "Search Bill",
+          "link": "admin_ret_billing/billing/list"
+        },
+        {
+          "name": "Issue",
+          "link": "admin_ret_billing/issue/list"
+        },
+        {
+          "name": "Receipt",
+          "link": "admin_ret_billing/receipt/list"
+        },
+        {
+          "name": "Ledger Adjustment",
+          "link": "admin_ret_billing/bank_ledger_transfer/list"
+        },
+        {
+          "name": "Approval Bills",
+          "link": "admin_ret_billing/billing/approvallist"
+        },
+        {
+          "name": "Jewel Not Delivered",
+          "link": "admin_ret_billing/item_delivery/list"
+        },
+        {
+          "name": "Bill Split",
+          "link": "admin_ret_billing/bill_split/list"
+        },
+        {
+          "name": "Denomination",
+          "link": "admin_ret_billing/cash_collection/list"
+        }
+      ]
+    },
+    {
+      "name": "Vouchers",
+      "subs": [
+        {
+          "name": "Sales Based Voucher and Settings",
+          "link": "admin_gift_vocuher/gift_voucher_settings/list"
+        },
+        {
+          "name": "Paid / Free Voucher and Settings",
+          "link": "admin_gift_vocuher/gift_master/list"
+        },
+        {
+          "name": "Print Paid / Free Vouchers",
+          "link": "admin_gift_vocuher/gift_issue/add"
+        }
+      ]
+    },
+    {
+      "name": "Stock Ageing",
+      "subs": [
+        {
+          "name": "Green Tagging",
+          "link": "admin_ret_tagging/tagging/tag_mark"
+        },
+        {
+          "name": "Stock Age Analysis",
+          "link": "admin_ret_reports/stock_age/list"
+        },
+        {
+          "name": "Stock Age Analysis Dynamic",
+          "link": "admin_ret_reports/stock_age/dynamic"
+        },
+        {
+          "name": "Green Tag Report",
+          "link": "admin_ret_reports/green_tag/list"
+        },
+        {
+          "name": "GT Incentive Report",
+          "link": "admin_ret_reports/incentive_report/list"
+        },
+        {
+          "name": "GT Sales Return Report",
+          "link": "admin_ret_reports/gt_return_report/list"
+        }
+      ]
+    },
+    {
+      "name": "Sales Report",
+      "subs": [
+        {
+          "name": "Cash Abstract",
+          "link": "admin_ret_reports/cash_abstract/list"
+        },
+        {
+          "name": "Detailed Sales-item wise",
+          "link": "admin_ret_reports/item_sales_detail/list"
+        },
+        {
+          "name": "Bill Wise Transaction",
+          "link": "admin_ret_reports/bill_wise_transcation/list"
+        },
+        {
+          "name": "Partly Sold",
+          "link": "admin_ret_reports/partly_sold/list"
+        },
+        {
+          "name": "E-Invoice Report",
+          "link": "admin_ret_reports/irn_report/list"
+        },
+        {
+          "name": "Home BIill Report",
+          "link": "admin_ret_reports/home_bill/list"
+        },
+        {
+          "name": "Card Receipts Report",
+          "link": "admin_ret_reports/card_payment/list"
+        },
+        {
+          "name": "Cancelled Bills",
+          "link": "admin_ret_reports/cancelled_bills/list"
+        },
+        {
+          "name": "Discount Report",
+          "link": "admin_ret_reports/bill_discount/list"
+        },
+        {
+          "name": "B2B GST BILLS REPORT",
+          "link": "admin_ret_reports/gst_bills/list"
+        },
+        {
+          "name": "Closed Chit Report",
+          "link": "admin_ret_reports/chit_closing_details/list"
+        },
+        {
+          "name": "Old Metal Purchase",
+          "link": "admin_ret_reports/old_metal_purchase/list"
+        },
+        {
+          "name": "Sales Return Report",
+          "link": "admin_ret_reports/sales_return/list"
+        },
+        {
+          "name": "Employee Sales Referal and sales return",
+          "link": "admin_ret_reports/employee_sales_referal_and_sales_return/list"
+        },
+        {
+          "name": "Old Metal P&L Report",
+          "link": "admin_ret_reports/old_metal_analyse/list"
+        },
+        {
+          "name": "Old Metal Profit &Loss Report",
+          "link": "admin_ret_reports/old_metal_pl_report/list"
+        },
+        {
+          "name": "Advance Detailed Report",
+          "link": "admin_ret_reports/advance_total_details/list"
+        },
+        {
+          "name": "OLD METAL PROFIT LOSS REPORT",
+          "link": "admin_ret_reports/old_metal_pl_report/list"
+        },
+        {
+          "name": "Voucher Issued / Received",
+          "link": "admin_ret_reports/gift_voucher/list"
+        },
+        {
+          "name": "Tag Wise Profit",
+          "link": "admin_ret_reports/tagwiseprofit/list"
+        },
+        {
+          "name": "Lot wise sales Report",
+          "link": "admin_ret_reports/lot_history/list"
+        },
+        {
+          "name": "Pay Device Report",
+          "link": "admin_ret_reports/pay_device/list"
+        },
+        {
+          "name": "Weight Range Wise Sales",
+          "link": "admin_ret_reports/weight_range_sales/list"
+        },
+        {
+          "name": "Item Delivery Report",
+          "link": "admin_ret_reports/item_delivery_report/list"
+        },
+        {
+          "name": "Emp Incentive Report",
+          "link": "reports/emp_sales_incentive"
+        },
+        {
+          "name": "Detailed Day transaction Report",
+          "link": "admin_ret_reports/detailed_day_transaction_report/list"
+        },
+        {
+          "name": "Sales Transfer Reports",
+          "link": "admin_ret_reports/sales_transfer_report/list"
+        }
+      ]
+    },
+    {
+      "name": "Purchase Report",
+      "subs": [
+        {
+          "name": "Supplier Bills",
+          "link": "admin_ret_reports/purchase/list"
+        },
+        {
+          "name": "GRN Bills",
+          "link": "admin_ret_reports/grnbills/list"
+        },
+        {
+          "name": "Purchase Order",
+          "link": "admin_ret_purchase/purchase/order_status"
+        },
+        {
+          "name": "Purchase Payments",
+          "link": "admin_ret_reports/popayments/list"
+        },
+        {
+          "name": "Item Wise Report",
+          "link": "admin_ret_reports/purchase_itemwise/list"
+        },
+        {
+          "name": "Purchase Items QC",
+          "link": "admin_ret_reports/qcstatus/list"
+        },
+        {
+          "name": "Purchase HM Status",
+          "link": "admin_ret_reports/pohmstatus/list"
+        },
+        {
+          "name": "Approval Stock Report",
+          "link": "admin_ret_reports/approvalstock/list"
+        },
+        {
+          "name": "Smith Metal Issue",
+          "link": "admin_ret_reports/karigar_metal_issue/list"
+        },
+        {
+          "name": "Smith Ledger",
+          "link": "/admin_ret_reports/smithtransaction/list"
+        },
+        {
+          "name": "Contract Price Report",
+          "link": "admin_ret_reports/supplier_contract_wise/list"
+        },
+        {
+          "name": "Supplier Outstanding Ledger",
+          "link": "admin_ret_reports/supplier_unified_transaction/list"
+        },
+        {
+          "name": "Rate Fixed Report",
+          "link": "admin_ret_reports/rate_fixed/list"
+        },
+        {
+          "name": "Selling V.A & M.C Report",
+          "link": "admin_ret_reports/weight_rage_report/list"
+        },
+        {
+          "name": "Supplier Ledger",
+          "link": "admin_ret_reports/suppliertransaction/list"
+        },
+        {
+          "name": "Rate Unfixing Report",
+          "link": "admin_ret_reports/unfixing_report/list"
+        },
+        {
+          "name": "Supplier Approval Ledger",
+          "link": "admin_ret_reports/supplier_approval_transaction/list"
+        },
+        {
+          "name": "Purchase Return",
+          "link": "admin_ret_reports/purchase_return/list"
+        },
+        {
+          "name": "Smith Transactions",
+          "link": "/admin_ret_reports/smithalltransactions/list"
+        },
+        {
+          "name": "H.O Vault Report",
+          "link": "admin_ret_purchase/headoffice_valut_report/list"
+        },
+        {
+          "name": "Lot merge Reports",
+          "link": "admin_ret_reports/lot_merge_report/list"
+        },
+        {
+          "name": "Lot Split Reports",
+          "link": "admin_ret_reports/lot_split_report/list"
+        },
+        {
+          "name": "Weight Gain / Loss Report",
+          "link": "admin_ret_purchase/weight_gain_loss/list"
+        },
+        {
+          "name": "Approval Unfixing Report",
+          "link": "admin_ret_purchase/approval_unfixing_report/list"
+        },
+        {
+          "name": "Approval Fixing Report",
+          "link": "admin_ret_purchase/approval_rate_fixed/list"
+        },
+        {
+          "name": "Common PO Report",
+          "link": "admin_ret_purchase/common_po_report/list"
+        },
+        {
+          "name": "Supplier Settlement Report",
+          "link": "admin_ret_purchase/supplier_settlement_report/list"
+        }
+      ]
+    },
+    {
+      "name": "Stock Issue / Receipt",
+      "subs": [
+        {
+          "name": "Stock Issue",
+          "link": "admin_ret_stock_issue/stock_issue/list"
+        }
+      ]
+    },
+    {
+      "name": "Stock Report",
+      "subs": [
+        {
+          "name": "Lotwise",
+          "link": "admin_ret_reports/lot_wise/list"
+        },
+        {
+          "name": "Lot Vs Tagged Vault",
+          "link": "admin_ret_reports/lottagvault/list"
+        },
+        {
+          "name": "Branch Transfer Details",
+          "link": "admin_ret_reports/branch_trans/list"
+        },
+        {
+          "name": "Other Issue",
+          "link": "admin_ret_reports/other_issue/list"
+        },
+        {
+          "name": "Re-Order Items",
+          "link": "admin_ret_reports/reorder_items/list"
+        },
+        {
+          "name": "Available Stock - Design Wise",
+          "link": "admin_ret_reports/tag_items_designwise/list"
+        },
+        {
+          "name": "Branch Re-Order Items",
+          "link": "admin_ret_reports/branchreorder_items/list"
+        },
+        {
+          "name": "Available stock",
+          "link": "admin_ret_reports/tagged_item_report/list"
+        },
+        {
+          "name": "Reorder Report",
+          "link": "admin_ret_reports/reorder_report/list"
+        },
+        {
+          "name": "Available Stock-Stone Items",
+          "link": "admin_ret_reports/tag_stone/list"
+        },
+        {
+          "name": "Available App Stock - Design Wise",
+          "link": "admin_ret_reports/approvaltag_items_designwise/list"
+        },
+        {
+          "name": "Stock In and Out Report - NEW",
+          "link": "admin_ret_reports/stock_details_v1/list"
+        },
+        {
+          "name": "Stock In and Out Report - OLD",
+          "link": "admin_ret_reports/stock_details_v2/list"
+        },
+        {
+          "name": "SectionWise Stock Report",
+          "link": "admin_ret_reports/section_stock_inout/list"
+        },
+        {
+          "name": "Reserver Order - Available Stock",
+          "link": "admin_ret_reports/stock_reserve_order/list"
+        },
+        {
+          "name": "Section Transfer Report",
+          "link": "admin_ret_reports/section_transfer/list"
+        },
+        {
+          "name": "Approval In Out Report",
+          "link": "admin_ret_reports/approvalstock_details/list"
+        },
+        {
+          "name": "Employee Wise Tag",
+          "link": "admin_ret_reports/employee_wise_tag/list"
+        },
+        {
+          "name": "Stock Issue Report",
+          "link": "admin_ret_reports/stock_issue_report/list"
+        },
+        {
+          "name": "Retag Report",
+          "link": "admin_ret_purchase/retagging_report/list"
+        },
+        {
+          "name": "Branch Vault Report",
+          "link": "admin_ret_reports/branch_vault_report/list"
+        },
+        {
+          "name": "H.O Daily Stock Book",
+          "link": "admin_ret_reports/ho_daily_stock_book/list"
+        },
+        {
+          "name": "Purchase Transaction",
+          "link": "admin_ret_reports/purchaseTransaction/list"
+        }
+      ]
+    },
+    {
+      "name": "Repair Orders",
+      "subs": [
+        {
+          "name": "Create Order",
+          "link": "admin_ret_order/repair_order/list"
+        },
+        {
+          "name": "Karigar Allotment",
+          "link": "admin_ret_order/neworders/list"
+        },
+        {
+          "name": "Repair Order Status",
+          "link": "admin_ret_order/repair_order/repair_order_status"
+        },
+        {
+          "name": "Repair Order Stock Report",
+          "link": "admin_ret_reports/repair_order/list"
+        },
+        {
+          "name": "Metal Issue Receipt",
+          "link": "admin_ret_purchase/metal_issue_receipt/add"
+        }
+      ]
+    },
+    {
+      "name": "TALLY IMPORT",
+      "subs": [
+        {
+          "name": "Sales Import",
+          "link": "admin_ret_reports/sales_import/list"
+        },
+        {
+          "name": "Purchase Import",
+          "link": "admin_ret_reports/purchase_import/list"
+        },
+        {
+          "name": "Sales Payment Mode Import",
+          "link": "admin_ret_reports/payment_mode_import/list"
+        }
+      ]
+    },
+    {
+      "name": "Tally Verification",
+      "link": "admin_ret_reports/gst_abstract/list",
+      "subs": [
+        {
+          "name": "Sales Abstract",
+          "link": "admin_ret_reports/gst_abstract/list"
+        },
+        {
+          "name": "Receipt / Payment Register",
+          "link": "admin_ret_reports/receipts_ledger_statement/list"
+        },
+        {
+          "name": "Purchase Import",
+          "link": "admin_ret_reports/purchase_import/list"
+        },
+        {
+          "name": "Sales Payment Mode Import",
+          "link": "admin_ret_reports/payment_mode_import/list"
+        },
+        {
+          "name": "Material Out Register",
+          "link": "admin_ret_reports/karigar_metal_issue/list"
+        },
+        {
+          "name": "Material In Register",
+          "link": "admin_ret_reports/grnbills/list"
+        },
+        {
+          "name": "Sales Register",
+          "link": "admin_ret_reports/gst_abstract/list"
+        },
+        {
+          "name": "Credit Note Register",
+          "link": "admin_ret_reports/sales_return_abstract/list"
+        },
+        {
+          "name": "Category wise BT Report",
+          "link": "admin_ret_reports/categorywise_bt_report/list"
+        }
+      ]
+    },
+    {
+      "name": "MIS Reports",
+      "subs": [
+        {
+          "name": "Stock ratio availability",
+          "link": "admin_ret_reports/stock_ratio_avail/list"
+        },
+        {
+          "name": "Bill Copy Details",
+          "link": "admin_ret_reports/copy_bill_details/list"
+        },
+        {
+          "name": "CASH BOOK",
+          "link": "admin_ret_reports/cash_book/list"
+        },
+        {
+          "name": "Other Issue",
+          "link": "admin_ret_reports/other_issue/list"
+        },
+        {
+          "name": "Tag Movement History",
+          "link": "admin_ret_reports/tag_history/list"
+        },
+        {
+          "name": "Customer & Tag History",
+          "link": "admin_ret_reports/customer_history/list"
+        },
+        {
+          "name": "Sales Comparision",
+          "link": "admin_ret_reports/sales_comparision/list"
+        },
+        {
+          "name": "Tag History",
+          "link": "admin_ret_reports/tagging_history/list"
+        },
+        {
+          "name": "Unbilled Estimation",
+          "link": "admin_ret_reports/unbilled_estimation/list"
+        },
+        {
+          "name": "Month on Month Sales Comparision",
+          "link": "admin_ret_reports/monthly_slaes_comparision/list"
+        },
+        {
+          "name": "Karigar Wise Sales",
+          "link": "admin_ret_reports/karigar_wise_sales/list"
+        },
+        {
+          "name": "Stock and Sales Report",
+          "link": "admin_ret_reports/stock_and_sales_report/list"
+        },
+        {
+          "name": "Karigar Wise Sales Detail",
+          "link": "admin_ret_reports/karigar_wise_sales_detail/list"
+        },
+        {
+          "name": "Profile Update Log",
+          "link": "admin_ret_reports/customer_edit_log/list"
+        },
+        {
+          "name": "Bank Ledger Report",
+          "link": "admin_ret_reports/ledger_report/list"
+        },
+        {
+          "name": "Customer Ledger",
+          "link": "admin_ret_reports/customer_ledger_statement/list"
+        },
+        {
+          "name": "Stock Rotation Report",
+          "link": "admin_ret_reports/inventory_turnover/list"
+        },
+        {
+          "name": "Customer Sales Analysis",
+          "link": "admin_ret_reports/customer_sales_analysis/list"
+        },
+        {
+          "name": "Advance Transfer",
+          "link": "admin_ret_reports/advance_transfer_details/list"
+        },
+        {
+          "name": "Customer Database",
+          "link": "admin_ret_reports/customer_detail/list"
+        },
+        {
+          "name": "Areawise Chit & Sales Report",
+          "link": "admin_ret_reports/sales_analysis_report/list"
+        },
+        {
+          "name": "Cash Deposit Report",
+          "link": "admin_ret_reports/deposit_report/list"
+        },
+        {
+          "name": "Wishlist",
+          "link": "admin_ret_wishlist/wishlist/list"
+        },
+        {
+          "name": "Supplier Catalogue Wishlist",
+          "link": "admin_ret_wishlist/wishlist/supplier"
+        },
+        {
+          "name": "Factsheet List",
+          "link": "admin_ret_wishlist/wishlist/factsheet"
+        },
+        {
+          "name": "Enquiry List",
+          "link": "admin_ret_wishlist/wishlist/enquiry"
+        },
+        {
+          "name": "Duplicate Tag Print Log",
+          "link": "admin_ret_reports/duplicate_tag_print_log/list"
+        },
+        {
+          "name": "Expense Report",
+          "link": "admin_ret_reports/petty_cash_report/list"
+        },
+        {
+          "name": "Sales Return GST Abstract",
+          "link": "admin_ret_reports/sales_return_gst_abstract/list"
+        },
+        {
+          "name": "GST Abstract V3",
+          "link": "admin_ret_reports/gst_abstract_v3/list"
+        }
+      ]
+    },
+    {
+      "name": "Credit Issue & Received",
+      "subs": [
+        {
+          "name": "Today Issue and Received",
+          "link": "admin_ret_reports/credit_issued/list"
+        },
+        {
+          "name": "Credit History Details",
+          "link": "admin_ret_reports/credit_history/list"
+        },
+        {
+          "name": "Credit Pending Report",
+          "link": "admin_ret_reports/credit_pending/list"
+        },
+        {
+          "name": "Tobe History Details",
+          "link": "admin_ret_reports/tobe_history/list"
+        },
+        {
+          "name": "Tobe Pending Report",
+          "link": "admin_ret_reports/tobe_pending/list"
+        }
+      ]
+    },
+    {
+      "name": "Auditor Report",
+      "subs": [
+        {
+          "name": "PAN Bill Details",
+          "link": "admin_ret_reports/pan_bill_details/list"
+        },
+        {
+          "name": "Monthly Sales Report",
+          "link": "admin_ret_reports/monthly_sales/list"
+        },
+        {
+          "name": "Repair GST Abstract",
+          "link": "admin_ret_reports/repair_gst_abstract/list"
+        }
+      ]
+    },
+    {
+      "name": "Old Metal Process",
+      "subs": [
+        {
+          "name": "Pocketing Entry",
+          "link": "admin_ret_metal_process/metal_pocket/list"
+        },
+        {
+          "name": "Process Issue / Receipt",
+          "link": "admin_ret_metal_process/metal_process_issue/list"
+        },
+        {
+          "name": "Metal Process Report",
+          "link": "admin_ret_metal_process/process_report/list"
+        },
+        {
+          "name": "Metal Process Detailed Report",
+          "link": "admin_ret_metal_process/process_report/detailed_report"
+        }
+      ]
+    },
+    {
+      "name": "Stock Audit",
+      "subs": [
+        {
+          "name": "Stock Checking -Tag Scan",
+          "link": "admin_ret_reports/scan_report/list"
+        },
+        {
+          "name": "Scanned & Unscanned Details",
+          "link": "admin_ret_reports/scan_report/scanned_details"
+        },
+        {
+          "name": "Physical Stock Entry",
+          "link": "admin_ret_catalog/employee_stock_product/add"
+        },
+        {
+          "name": "Physical Stock Report",
+          "link": "admin_ret_reports/employee_product_report/list"
+        },
+        {
+          "name": "Physical Stock Inspect",
+          "link": "admin_ret_reports/physical_stock_inspect_report/list"
+        }
+      ]
+    },
+    {
+      "name": "Task Tracker",
+      "subs": [
+        {
+          "name": "Task List",
+          "link": "admin_ret_task/task/list"
+        },
+        {
+          "name": "Notice Board",
+          "link": "admin_ret_task/notice_board/list"
+        }
+      ]
+    },
+    {
+      "name": "CRM Module",
+      "subs": [
+        {
+          "name": "Feedback Master",
+          "link": "admin_ret_catalog/feedback/list"
+        },
+        {
+          "name": "Customer Database",
+          "link": "admin_ret_reports/telecalling/list"
+        },
+        {
+          "name": "Feedback Report",
+          "link": "admin_ret_reports/feedback_report/list"
+        }
+      ]
+    },
+    {
+      "name": "Accounts Stock",
+      "subs": [
+        {
+          "name": "Metal Stock Report",
+          "link": "admin_ret_reports/metal_stock_details/list"
+        },
+        {
+          "name": "Available Stock Details",
+          "link": "admin_ret_reports/metal_available_stock_details/list"
+        },
+        {
+          "name": "Re-Tagging Report",
+          "link": "admin_ret_reports/retag_report/list"
+        }
+      ]
+    },
+    {
+      "name": "Order Management",
+      "link": "6",
+      "subs": [
+        {
+          "name": "Cart",
+          "link": "admin_ret_order/cart/list"
+        },
+        {
+          "name": "Cart Status",
+          "link": "admin_ret_order/cart/cart_status"
+        }
+      ]
+    },
+    {
+      "name": "Accounts Reports",
+      "subs": [
+        {
+          "name": "Sales Abstract GST",
+          "link": "admin_ret_reports/gst_abstract/list"
+        },
+        {
+          "name": "Scheme Wise Opening & Closing",
+          "link": "reports/collection_report"
+        },
+        {
+          "name": "Sales Return Abstract",
+          "link": "admin_ret_reports/sales_return_abstract/list"
+        },
+        {
+          "name": "Card Collection Report",
+          "link": "admin_ret_reports/card_collection_report/list"
+        },
+        {
+          "name": "Cheque Collection Report",
+          "link": "admin_ret_reports/cheque_collection_report/list"
+        },
+        {
+          "name": "Net Banking Collection Report",
+          "link": "admin_ret_reports/netbanking_collection_report/list"
+        },
+        {
+          "name": "Advance Receipt & Utilized Report",
+          "link": "admin_ret_reports/advance_receipt_report/list"
+        },
+        {
+          "name": "Bank Ledger Report",
+          "link": "admin_ret_reports/ledger_report/list"
+        },
+        {
+          "name": "Day Transactions",
+          "link": "admin_ret_reports/daytransactions/list"
+        },
+        {
+          "name": "Categorywise BT Report",
+          "link": "admin_ret_reports/categorywise_bt_report/list"
+        },
+        {
+          "name": "Categorywise Stock Report",
+          "link": "admin_ret_reports/categorywise_stock_report/list"
+        },
+        {
+          "name": "GSTR1 Sales Report",
+          "link": "admin_ret_reports/gstr1_sales/list"
+        },
+        {
+          "name": "Book Stock",
+          "link": "admin_ret_reports/bookstocks/list"
+        },
+        {
+          "name": "GSTR2 Purchase Report",
+          "link": "admin_ret_reports/gstr2_purchase/list"
+        },
+        {
+          "name": "EDA Item Wise Report",
+          "link": "admin_ret_eda/sales_report/list"
+        },
+        {
+          "name": "EDA Purchase Report",
+          "link": "admin_ret_eda/purchase_report/list"
+        },
+        {
+          "name": "EDA Partly Sold Report",
+          "link": "admin_ret_eda/partly_sold_report/list"
+        },
+        {
+          "name": "HSN Code sales abstract",
+          "link": "admin_ret_reports/gst_abstract_with_return/list"
+        },
+        {
+          "name": "Receipt Ledger",
+          "link": "admin_ret_reports/receipts_ledger_statement/list"
+        },
+        {
+          "name": "CategoryWise Day Transaction",
+          "link": "admin_ret_reports/categorywise_day_transaction/list"
+        },
+        {
+          "name": "GSTR1 Report",
+          "link": "admin_ret_reports/gst_r1/list"
+        },
+        {
+          "name": "Sales Abstract GST Bils",
+          "link": "admin_ret_reports/gst_abstract_bills/list"
+        },
+        {
+          "name": "Sales and Purchase",
+          "link": "admin_ret_reports/sales_purchase/list"
+        }
+      ]
+    },
+    {
+      "name": "Other Inventory Module",
+      "subs": [
+        {
+          "name": "Inventory Category",
+          "link": "admin_ret_other_inventory/inventory_category/list"
+        },
+        {
+          "name": "Packaging Item Size",
+          "link": "admin_ret_other_inventory/item_size/list"
+        },
+        {
+          "name": "Inventory Type",
+          "link": "admin_ret_other_inventory/other_inventory/list"
+        },
+        {
+          "name": "Product Mapping",
+          "link": "admin_ret_other_inventory/product_mapping/list"
+        },
+        {
+          "name": "Purchase Entry",
+          "link": "admin_ret_other_inventory/purchase_entry/list"
+        },
+        {
+          "name": "Packaging Item Issue",
+          "link": "admin_ret_other_inventory/issue_item/list"
+        },
+        {
+          "name": "Tagging",
+          "link": "admin_ret_other_inventory/product_details/list"
+        }
+      ]
+    },
+    {
+      "name": "Other Inventory Report",
+      "subs": [
+        {
+          "name": "Stock In & Out Report",
+          "link": "admin_ret_other_inventory/stock_details/list"
+        },
+        {
+          "name": "Available Stock Item Wise",
+          "link": "admin_ret_other_inventory/available_stock/list"
+        },
+        {
+          "name": "Reorder Report",
+          "link": "admin_ret_other_inventory/reorder_report/list"
+        }
+      ]
+    },
+    {
+      "name": "Masters",
+      "subs": [
+        {
+          "name": "Scheme",
+          "link": "scheme"
+        },
+        {
+          "name": "Purchase Plan",
+          "link": "crm_mas_scheme/sch_list"
+        },
+        {
+          "name": "Scheme Group",
+          "link": "account/scheme_group/list"
+        },
+        {
+          "name": "Customer",
+          "link": "customer"
+        },
+        {
+          "name": "Employee",
+          "link": "employee"
+        },
+        {
+          "name": "Customer Profile",
+          "link": "customer/cus_profile"
+        },
+        {
+          "name": "Department",
+          "link": "settings/dept"
+        },
+        {
+          "name": "Upload Apk",
+          "link": "admin_dashboard/Upload_apk"
+        },
+        {
+          "name": "Designation",
+          "link": "settings/design"
+        },
+        {
+          "name": "Profession",
+          "link": "settings/profession"
+        },
+        {
+          "name": "Bank",
+          "link": "settings/bank/list"
+        },
+        {
+          "name": "Payment Mode",
+          "link": "settings/paymode/list"
+        },
+        {
+          "name": "Drawee Account",
+          "link": "settings/drawee/list"
+        },
+        {
+          "name": "Bank Ledger Master",
+          "link": "settings/ledger/list"
+        },
+        {
+          "name": "Weight",
+          "link": "settings/weight"
+        },
+        {
+          "name": "Scheme Classification",
+          "link": "settings/classification"
+        },
+        {
+          "name": "Wallet Plan",
+          "link": "wallet/master/list"
+        },
+        {
+          "name": "Branch",
+          "link": "branch/list"
+        },
+        {
+          "name": "Wallet Category",
+          "link": "wallet/category/list"
+        },
+        {
+          "name": "Wallet Category Settings",
+          "link": "wallet/category/setting/list"
+        },
+        {
+          "name": "Villages/Zone allocation",
+          "link": "settings/village"
+        },
+        {
+          "name": "Zones",
+          "link": "customer/zone/list"
+        },
+        {
+          "name": "Web Registered Devices",
+          "link": "admin_ret_catalog/web_devices/list"
+        },
+        {
+          "name": "Gift",
+          "link": "settings/gift/list"
+        }
+      ]
+    },
+    {
+      "name": "Payment",
+      "subs": [
+        {
+          "name": "Scheme Payment",
+          "link": "payment/list"
+        },
+        {
+          "name": "Post Dated Payment",
+          "link": "postdated/payment/list"
+        },
+        {
+          "name": "Create Payment",
+          "link": "pp_payment/payment/Add"
+        },
+        {
+          "name": "Verify Payment",
+          "link": "verify/online/payment"
+        },
+        {
+          "name": "Payment Approval",
+          "link": "online/payment"
+        },
+        {
+          "name": "Sync Gateway Settlement",
+          "link": "admin_payment/gtway_settlement/sync_view"
+        }
+      ]
+    },
+    {
+      "name": "Manage Scheme",
+      "subs": [
+        {
+          "name": "Manage Account",
+          "link": "account/new"
+        },
+        {
+          "name": "Create Account",
+          "link": "account/add"
+        },
+        {
+          "name": "Closed Account",
+          "link": "account/close"
+        },
+        {
+          "name": "Plan Accounts",
+          "link": "pp_account/account/list"
+        },
+        {
+          "name": "Account Approval",
+          "link": "account/scheme_reg/list"
+        },
+        {
+          "name": "Manage Account list",
+          "link": "account/list"
+        },
+        {
+          "name": "Gift Issue",
+          "link": "admin_manage/gift_issue_form"
+        },
+        {
+          "name": "Customer Scheme Enquiry",
+          "link": "reports/sch_enquiry/list"
+        }
+      ]
+    },
+    {
+      "name": "Settlement",
+      "subs": [
+        {
+          "name": "Pre-Settlement",
+          "link": "settlement/weight/add"
+        },
+        {
+          "name": "Post-Settlement",
+          "link": "settlement/weight/list"
+        }
+      ]
+    },
+    {
+      "name": "CRM Catalog",
+      "subs": [
+        {
+          "name": "Category List",
+          "link": "catalog/category/list"
+        },
+        {
+          "name": "Product",
+          "link": "catalog/product/list"
+        }
+      ]
+    },
+    {
+      "name": "Promotions",
+      "subs": [
+        {
+          "name": "Offers",
+          "link": "settings/offers"
+        },
+        {
+          "name": "New arrivals",
+          "link": "settings/new_arrivals"
+        },
+        {
+          "name": "Send Notification",
+          "link": "send/sendnotification"
+        }
+      ]
+    },
+    {
+      "name": "Agent",
+      "subs": [
+        {
+          "name": "Agent",
+          "link": "agent"
+        },
+        {
+          "name": "Agent Referral Report",
+          "link": "agent/agent_report/list"
+        },
+        {
+          "name": "Agent Settlement",
+          "link": "agent/agent_settlement/list"
+        },
+        {
+          "name": "Summary",
+          "link": "agent/agent_report/summary"
+        },
+        {
+          "name": "Agent KYC",
+          "link": "reports/kyc_data/list/2"
+        }
+      ]
+    },
+    {
+      "name": "SMS",
+      "subs": [
+        {
+          "name": "Quick SMS",
+          "link": "sms/send"
+        },
+        {
+          "name": "Group SMS",
+          "link": "sms/send/group"
+        },
+        {
+          "name": "SMS Delivery Report",
+          "link": "reports/msg91_delivery/List"
+        }
+      ]
+    },
+    {
+      "name": "E-mail",
+      "subs": [
+        {
+          "name": "Email",
+          "link": "email/compose"
+        },
+        {
+          "name": "Group Email",
+          "link": "email/group"
+        }
+      ]
+    },
+    {
+      "name": "Chit Reports",
+      "subs": [
+        {
+          "name": "Gift - Yet To Issue",
+          "link": "reports/get_yet_to_issue"
+        },
+        {
+          "name": "Scheme A/c Ledger - Old",
+          "link": "reports/payment_datewise"
+        },
+        {
+          "name": "Source wise Report",
+          "link": "reports/scheme_payment_daterange"
+        },
+        {
+          "name": "Mode-wise Pay Summary",
+          "link": "reports/payment_modewise"
+        },
+        {
+          "name": "Collection - Employee wise",
+          "link": "reports/payment_employee_wise"
+        },
+        {
+          "name": "Collection - Online Payments",
+          "link": "reports/online_payment_report"
+        },
+        {
+          "name": "Chit Old Metal Report",
+          "link": "reports/old_metal_report"
+        },
+        {
+          "name": "Collection - Online /Offline Mode Wise",
+          "link": "reports/payment_online_offline_collec_data"
+        },
+        {
+          "name": "Scheme Wise Mode Wise Report",
+          "link": "reports/payment_modeandgroupwise_data"
+        },
+        {
+          "name": "Gift Report",
+          "link": "reports/gift_report"
+        },
+        {
+          "name": "Renewal/Live Report",
+          "link": "reports/renewal_live_report"
+        },
+        {
+          "name": "Customer Unpaid Report",
+          "link": "reports/payment_details"
+        },
+        {
+          "name": "BirthDay/Wedding Day",
+          "link": "reports/customer_wishes/0"
+        },
+        {
+          "name": "Member Report",
+          "link": "reports/member_report"
+        },
+        {
+          "name": "Maturity Report",
+          "link": "reports/maturity_report"
+        },
+        {
+          "name": "Customer Outstanding Payment Report",
+          "link": "reports/scheme_customer_daterange"
+        },
+        {
+          "name": "Employee collection Summary",
+          "link": "reports/employee_wise_collection"
+        },
+        {
+          "name": "Wallet Unregistered Customer",
+          "link": "admin_settings/get_reports"
+        },
+        {
+          "name": "Employee wise Sch Accounts Report",
+          "link": "reports/Employee_account"
+        },
+        {
+          "name": "Closed Account Report",
+          "link": "reports/closed_acc_report"
+        },
+        {
+          "name": "Akshaya Thiruthiyai Spl - Report",
+          "link": "reports/get_purchase_payment"
+        },
+        {
+          "name": "Payment Cancel Report",
+          "link": "reports/payment_cancel_report"
+        },
+        {
+          "name": "Auto Debit Subscription Status Report",
+          "link": "reports/get_autodebit_subscription"
+        },
+        {
+          "name": "Chit Analysis Report",
+          "link": "reports/customer_account_details/list"
+        },
+        {
+          "name": "Staff Incentive Report",
+          "link": "admin_ret_reports/staff_incentive_report/list"
+        }
+      ]
+    },
+    {
+      "name": "Manage Wallet",
+      "subs": [
+        {
+          "name": "Wallet Account",
+          "link": "wallet/account/list"
+        },
+        {
+          "name": "Wallet Transaction",
+          "link": "wallet/transaction/list"
+        }
+      ]
+    },
+    {
+      "name": "Wallet Report",
+      "subs": [
+        {
+          "name": "Wallet transaction Detail",
+          "link": "reports/interwalTrans_list"
+        },
+        {
+          "name": "Employee referral report",
+          "link": "reports/employee_ref_success"
+        },
+        {
+          "name": "Customer referral report",
+          "link": "reports/cus_ref_success"
+        }
+      ]
+    },
+    {
+      "name": "Settings",
+      "subs": [
+        {
+          "name": "Menus",
+          "link": "settings/menu/list"
+        },
+        {
+          "name": "Import",
+          "link": "settings/import/account"
+        },
+        {
+          "name": "Profile",
+          "link": "settings/profile/list"
+        },
+        {
+          "name": "General",
+          "link": "settings/general/edit/1"
+        },
+        {
+          "name": "Payment gateway",
+          "link": "settings/payment"
+        },
+        {
+          "name": "Company",
+          "link": "settings/company/list"
+        },
+        {
+          "name": "Employee Settings",
+          "link": "admin_employee/employee_settings/list"
+        },
+        {
+          "name": "Retail Settings",
+          "link": "settings/retail_setting/list"
+        },
+        {
+          "name": "Permission",
+          "link": "settings/access/view"
+        },
+        {
+          "name": "IRN Settings",
+          "link": "admin_irn_settings"
+        },
+        {
+          "name": "Services",
+          "link": "sms/service/list"
+        },
+        {
+          "name": "Set_notify",
+          "link": "settings/notification/list"
+        },
+        {
+          "name": "Notification",
+          "link": "notification/list"
+        },
+        {
+          "name": "Modules",
+          "link": "settings/module/list"
+        },
+        {
+          "name": "Terms and Conditions",
+          "link": "settings/terms_and_conditions/list"
+        },
+        {
+          "name": "Dayclose Settings",
+          "link": "settings/dayclose/list"
+        },
+        {
+          "name": "ACL Audit Log",
+          "link": "settings/acl/audit_log"
+        }
+      ]
+    },
+    {
+      "name": "Tool Inter Tables",
+      "link": "reports/inter_table/list",
+      "subs": []
+    },
+    {
+      "name": "Customer KYC/Feedback",
+      "subs": [
+        {
+          "name": "Customer KYC",
+          "link": "reports/kyc_data/list/1"
+        },
+        {
+          "name": "Customer Feedback",
+          "link": "reports/customer_enquiry"
+        }
+      ]
+    },
+    {
+      "name": "Log",
+      "subs": [
+        {
+          "name": "Log History",
+          "link": "log/list"
+        },
+        {
+          "name": "Developer Log",
+          "link": "form_logger/list"
+        },
+        {
+          "name": "Change History",
+          "link": "admin_field_audit/change_history/list"
+        }
+      ]
+    },
+    {
+      "name": "Edit Acc/Payments",
+      "link": "reports/edit_acc_pay",
+      "subs": []
+    },
+    {
+      "name": "App Config Setting",
+      "link": "admin_settings/config_setting",
+      "subs": []
+    },
+    {
+      "name": "Pre Booking",
+      "subs": [
+        {
+          "name": "Create/Pay Booking",
+          "link": "admin_adv_booking/lock_gold_view"
+        },
+        {
+          "name": "Bookings",
+          "link": "admin_adv_booking/booked_acc_list"
+        },
+        {
+          "name": "Payments",
+          "link": "admin_adv_booking/bookings_list"
+        },
+        {
+          "name": "Booking Master",
+          "link": "admin_adv_booking/plan_list"
+        }
+      ]
+    },
+    {
+      "name": "Loyalty",
+      "link": "admin_ret_loyalty",
+      "subs": [
+        {
+          "name": "Loyalty Settings",
+          "link": "admin_ret_loyalty/settings"
+        },
+        {
+          "name": "Category Eligibility",
+          "link": "admin_ret_loyalty/eligibility"
+        },
+        {
+          "name": "Points Ledger",
+          "link": "admin_ret_loyalty/ledger"
+        },
+        {
+          "name": "Points Report",
+          "link": "admin_ret_loyalty/report"
+        },
+        {
+          "name": "Manual Adjustment",
+          "link": "admin_ret_loyalty/adjustment"
+        },
+        {
+          "name": "Reversal Approvals",
+          "link": "admin_ret_loyalty/approvals"
+        }
+      ]
+    },
+    {
+      "name": "NetSuite Sync Review",
+      "link": "admin_netsuite_review",
+      "subs": []
+    }
+  ]
+}

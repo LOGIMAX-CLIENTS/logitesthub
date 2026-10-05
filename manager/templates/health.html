@@ -1,0 +1,49 @@
+{% extends 'base.html' %}
+{% block title %}Test Health · {{ p.name }}{% endblock %}
+{% block crumbs %}<span class="tm-crumbs"><a href="{{ url_for('projects') }}">Test Case</a> <span>/</span> <a href="{{ url_for('project', pid=p.id) }}">{{ p.name }}</a> <span>/</span> <b>Test Health</b></span>{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap gap-2 align-items-end justify-content-between mb-3">
+  <div><h1 class="h4 mb-0">Test Health</h1>
+    <div class="text-secondary small">Which test cases fail, which ones are flaky (pass one time, fail the next), and why. Based on each case's last {{ window }} runs.</div></div>
+  <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('project', pid=p.id) }}">← Back to {{ p.name }}</a>
+</div>
+
+<div class="hist-stats">
+  <div class="hs"><span>Test cases</span><b>{{ s.cases }}</b></div>
+  <div class="hs"><span>Passing now</span><b class="t-pass">{{ s.passing }}</b></div>
+  <div class="hs"><span>Failing now</span><b class="t-fail">{{ s.failing }}</b></div>
+  <div class="hs"><span>Flaky</span><b class="t-warn">{{ s.flaky }}</b></div>
+  <div class="hs"><span>Never run</span><b>{{ s.never }}</b></div>
+  <div class="hs"><span>Pass rate (all runs)</span><b>{{ (s.pass_pct ~ '%') if s.pass_pct is not none else '-' }}</b></div>
+</div>
+
+<div class="hl-filters">
+  {% for k, label in [('all', 'All'), ('failing', 'Failing now'), ('flaky', 'Flaky'), ('never', 'Never run')] %}
+  <a class="hl-chip {{ 'active' if show == k }}" href="{{ url_for('project_health', pid=p.id, show=None if k == 'all' else k) }}">{{ label }} <span>{{ counts[k] }}</span></a>
+  {% endfor %}
+</div>
+
+<div class="panel p-0 hist-wrap">
+<table class="table table-sm align-middle mb-0 hist-table">
+  <thead><tr>
+    <th class="text-start">Test case</th><th class="text-start">Folder</th><th class="text-start">Last {{ window }} runs (newest right)</th>
+    <th class="text-end">Runs</th><th class="text-end">Pass rate</th><th class="text-end">Avg time</th><th class="text-start">Last failure</th>
+  </tr></thead>
+  <tbody>
+  {% for r in rows %}
+  <tr class="hist-row" onclick="location.href='{{ url_for('case', cid=r.id, tab='runs') }}'">
+    <td class="text-start"><a href="{{ url_for('case', cid=r.id, tab='runs') }}"><b>TC-{{ r.tc_no }}</b></a> {{ r.title }}
+      {% if r.state == 'failing' %}<span class="hl-tag hl-fail">Failing</span>{% elif r.state == 'flaky' %}<span class="hl-tag hl-flaky" title="Passed and failed within its last {{ window }} runs">Flaky</span>{% elif r.state == 'never' %}<span class="hl-tag">Never run</span>{% endif %}</td>
+    <td class="text-start text-secondary text-nowrap">{{ r.folder or '-' }}</td>
+    <td class="text-start"><span class="hl-strip">{% for x in r.recent %}<a class="hl-dot st-{{ x.status|lower }}" href="{{ url_for('case', cid=r.id, run=x.id) }}" title="Run #{{ x.id }} · {{ x.status }} · {{ x.started_at[:16] }}" onclick="event.stopPropagation()"></a>{% endfor %}</span></td>
+    <td class="text-end">{{ r.runs }}</td>
+    <td class="text-end">{{ (r.pass_pct ~ '%') if r.pass_pct is not none else '-' }}</td>
+    <td class="text-end text-nowrap">{{ r.avg_ms|secs if r.avg_ms else '-' }}</td>
+    <td class="text-start hist-why">{% if r.last_fail %}<span class="hist-at">{{ r.last_fail.started_at[:10] }}{% if r.last_fail.fail_step %} · step {{ r.last_fail.fail_step }}{% endif %}:</span>
+      {{ r.last_fail.fail_reason or r.last_fail.error or r.last_fail.status }}{% else %}<span class="text-secondary">-</span>{% endif %}</td>
+  </tr>
+  {% else %}<tr><td colspan="7" class="text-start text-secondary">Nothing here.</td></tr>{% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

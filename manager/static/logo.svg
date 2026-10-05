@@ -1,14 +1,24 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <title>LogiTestHub</title>
   <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f3dc97"/><stop offset=".55" stop-color="#d4af37"/><stop offset="1" stop-color="#a8841c"/></linearGradient>
-    <linearGradient id="n" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#17404d"/><stop offset="1" stop-color="#0a1c24"/></linearGradient>
-    <linearGradient id="t" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#22b3a6"/><stop offset="1" stop-color="#0e6f7a"/></linearGradient>
+    <linearGradient id="lg" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#3b5bff"/><stop offset=".35" stop-color="#8b2cf5"/>
+      <stop offset=".68" stop-color="#ff2d8f"/><stop offset="1" stop-color="#ffa21f"/>
+    </linearGradient>
+    <linearGradient id="ls" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#8b2cf5" stop-opacity="0"/><stop offset="1" stop-color="#ff2d8f"/>
+    </linearGradient>
+    <linearGradient id="lh" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".55"/><stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
   </defs>
-  <path d="M32 4 56 18v28L32 60 8 46V18Z" fill="url(#n)"/>
-  <path d="M32 10 50.5 21v22L32 54 13.5 43V21Z" fill="none" stroke="url(#g)" stroke-width="2"/>
-  <g stroke="url(#g)" stroke-width="1.6" opacity=".8"><path d="M32 32 32 15M32 32 47 41M32 32 17 41"/></g>
-  <circle cx="32" cy="15" r="3" fill="url(#g)"/><circle cx="47" cy="41" r="3" fill="url(#g)"/><circle cx="17" cy="41" r="3" fill="url(#g)"/>
-  <circle cx="32" cy="32" r="9" fill="url(#t)"/>
-  <path d="M28 32.2 31 35.2 36.5 29" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- speed lines -->
+  <g stroke="url(#ls)" stroke-width="2.6" stroke-linecap="round">
+    <path d="M3 21h15M7 28h13M1 35h16M5 47h9"/>
+  </g>
+  <!-- slanted L -->
+  <path d="M34 6h16L33.5 39H58l-7.5 15H10Z" fill="url(#lg)" stroke="url(#lg)" stroke-width="2.4" stroke-linejoin="round"/>
+  <!-- gloss -->
+  <path d="M35.5 8.5h11L39 23H28.2Z" fill="url(#lh)"/>
+  <path d="M35 41.5h19.5l-2.2 4.5H32.8Z" fill="#fff" opacity=".22"/>
 </svg>

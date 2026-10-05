@@ -1,0 +1,106 @@
+{% extends 'base.html' %}
+{% block title %}Tester CLI{% endblock %}
+{% block crumbs %}<span class="tm-crumbs"><b>Tester CLI</b></span>{% endblock %}
+{% set install = 'npm install -g ' ~ server ~ '/cli/tester.tgz' %}
+{% set login_cmd = 'tester login --server ' ~ server ~ ' --username ' ~ me.username ~ ' --key <your access key>' %}
+{% macro cmd(text, label='Copy') %}
+<div class="cli-cmd"><code>{{ text }}</code>
+  <button class="cli-copy" type="button" data-copy-text="{{ text }}" aria-label="{{ label }}" title="Copy">
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
+  </button></div>
+{% endmacro %}
+{% block content %}
+<div class="cli-hero">
+  <div class="cli-icon"><svg viewBox="0 0 48 48" width="56" height="56" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="9" width="38" height="30" rx="7"/><path d="m14 20 6 5-6 5M24 31h10"/></svg></div>
+  <h1>Tester CLI</h1>
+  <p>Describe the test in plain English and run it from your terminal, your CI, or your own AI agent.
+    Headless browser on your PC, video and step screenshots saved in LogiTestHub.</p>
+  <div class="cli-seg" role="tablist">
+    <a role="tab" class="{{ 'active' if tab == 'humans' }}" href="{{ url_for('cli.page') }}" aria-selected="{{ 'true' if tab == 'humans' else 'false' }}">For Humans</a>
+    <a role="tab" class="{{ 'active' if tab == 'agents' }}" href="{{ url_for('cli.page', tab='agents') }}" aria-selected="{{ 'true' if tab == 'agents' else 'false' }}">For Agents</a>
+  </div>
+  <div class="cli-install">
+    <span class="cli-pm">npm</span>
+    {{ cmd(install, 'Copy install command') }}
+  </div>
+  <div class="cli-sub">v{{ version }} · needs Node.js 18 or newer · works on Windows, macOS and Linux</div>
+  {% if local_only %}<div class="cli-sub t-warn">This address works only on the LogiTestHub PC itself. From other PCs, use this PC's network address instead of localhost.</div>{% endif %}
+</div>
+
+{% if tab == 'humans' %}
+<div class="cli-steps">
+  <div class="cli-step"><span class="cli-n">1</span><div>
+    <h2>Install the browser (once)</h2>
+    <p>Downloads the headless Chromium that runs your tests.</p>
+    {{ cmd('tester setup') }}</div></div>
+  <div class="cli-step"><span class="cli-n">2</span><div>
+    <h2>Log in</h2>
+    <p>Use your username and <b>access key</b> from <a href="{{ url_for('profile') }}#access-key">Profile → Username and Access Key</a>{% if my_key %} (yours ends in <code>…{{ my_key.key_hint }}</code>){% else %}. You don't have one yet: create it there first{% endif %}.
+      The AI key stays on the LogiTestHub server; AI use counts against your monthly AI limit.</p>
+    {{ cmd(login_cmd) }}</div></div>
+  <div class="cli-step"><span class="cli-n">3</span><div>
+    <h2>Run a test in plain English</h2>
+    <p>One step per line or sentence. <code>--project</code> saves the run (video, screenshots) in that project, folder <b>CLI runs</b>.</p>
+    {{ cmd('tester run "Type admin into the Username field. Type {{password}} into the Password field. Click the Login button. Assert the text \'Dashboard\' is visible." --url https://your-site/admin/ --secret password=xxxx --project 1') }}
+    <p class="mt-2 mb-1">Or run a saved test case, or a <code>_test.md</code> file:</p>
+    {{ cmd('tester run --case 23 --url https://your-site/admin/') }}</div></div>
+  <div class="cli-step"><span class="cli-n">4</span><div>
+    <h2>Generate test cases for your change</h2>
+    <p>Run it inside your git repository: <code>--diff</code> sends your uncommitted changes (or <code>--diff main</code> for the branch) so the cases cover the code you touched. They are saved for review, not run.</p>
+    {{ cmd('tester generate "GRN entry must block negative pcs across lots" --project 1 --diff') }}</div></div>
+</div>
+
+<div class="panel cli-ref">
+  <h2 class="h6 mb-2">All commands</h2>
+  <table class="table table-sm align-middle mb-0">
+    <tbody>
+      <tr><td class="text-start"><code>tester projects</code> / <code>tester cases &lt;project id&gt;</code></td><td class="text-start">List projects and their test cases (with ids)</td></tr>
+      <tr><td class="text-start"><code>tester run … --headed</code></td><td class="text-start">Watch the browser instead of headless</td></tr>
+      <tr><td class="text-start"><code>--var k=v</code> · <code>--secret k=v</code> · <code>--vars file.json</code></td><td class="text-start">Values for <code>{{ '{{' }}placeholders{{ '}}' }}</code>; secrets are masked in logs, report and video captions</td></tr>
+      <tr><td class="text-start"><code>--no-upload</code> · <code>--no-ai</code></td><td class="text-start">Keep the run only on this PC · skip AI steps</td></tr>
+      <tr><td class="text-start"><code>tester usage</code></td><td class="text-start">Your AI use and limit this month</td></tr>
+      <tr><td class="text-start"><code>tester whoami</code> · <code>tester logout</code></td><td class="text-start">Who is logged in · remove the access key from this PC</td></tr>
+    </tbody>
+  </table>
+  <div class="small text-secondary mt-2">Runs are kept on your PC in <code>~/.lth/runs</code> (open <code>report.html</code>). Update the CLI by running the install command again.</div>
+</div>
+
+{% else %}
+<div class="cli-steps">
+  <div class="cli-step"><span class="cli-n">1</span><div>
+    <h2>Give your agent the CLI</h2>
+    <p>Install and log in once on the machine where the agent (Claude Code, Cursor, CI job) runs, as in <a href="{{ url_for('cli.page') }}">For Humans</a>.
+      In CI, set <code>LTH_SERVER</code>, <code>LTH_USER</code> and <code>LTH_KEY</code> as secret environment variables instead of <code>tester login</code>.</p>
+    <p><b>Claude Code:</b> add the <code>/tester</code> skill, then restart Claude Code. It then knows how to run, read and report tests, and learns from failures (lessons shared with the team) (type <code>/tester</code>, or just ask it to test a page).</p>
+    {{ cmd('tester skill install') }}</div></div>
+  <div class="cli-step"><span class="cli-n">2</span><div>
+    <h2>Paste this into your agent's instructions</h2>
+    <p>For example in <code>CLAUDE.md</code> or <code>AGENTS.md</code> of your repository.</p>
+{% set agent_md %}## UI testing with LogiTestHub (Tester CLI)
+- After changing UI code, verify it with `tester`. Always add `--json`; read `status`, `url` and `report` from the output.
+- Never write login steps: the project's login helper runs first (pass `--var username=... --secret password=...`). Testing the login page itself: `login: none` in the case front matter.
+- Write tests as short plain-English steps, one per sentence: Navigate to … / Type … into the … field / Select '…' from the … dropdown / Click the … button / Assert the text '…' is visible.
+- Run: `tester run "<steps>" --url <site base url> --project <id> --json`
+- Saved case: `tester run --case <id> --url <site base url> --json` (find ids with `tester cases <project id> --json`).
+- New cases for a change: `tester generate "<what changed>" --project <id> --diff --json`, then ask the user to review them.
+- Exit codes: 0 passed, 1 failed, 3 partial (some steps need AI), 4 AI limit reached (stop and tell the user), 2 other error.
+- Pass passwords only with `--secret name=value`; never print the access key or secrets.
+- Before writing or running a test: `tester lessons <project> --json` and follow every lesson.
+- On failure, open the `url` / `report`, find why (app bug, test out of date, environment, test data, how we test), fix it, run again until it passes, then record it: `tester lesson add --project <id> --kind <kind> --title "<what went wrong>" --avoid "<rule for next time>" --json`.{% endset %}
+    <div class="cli-agent"><pre>{{ agent_md|forceescape }}</pre>
+      <button class="cli-copy" type="button" data-copy-text="{{ agent_md|forceescape }}" title="Copy">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg> Copy</button></div></div></div>
+  <div class="cli-step"><span class="cli-n">3</span><div>
+    <h2>What the agent gets back</h2>
+{% set sample %}{
+  "ok": true,
+  "status": "FAILED",
+  "report": "C:\\Users\\you\\.lth\\runs\\2026-10-01-17-20-11-cli\\report.html",
+  "run_id": 512,
+  "case_id": 201,
+  "url": "{{ server }}/cases/201?run=512"
+}{% endset %}
+    <div class="cli-agent"><pre>{{ sample|forceescape }}</pre></div></div></div>
+</div>
+{% endif %}
+{% endblock %}

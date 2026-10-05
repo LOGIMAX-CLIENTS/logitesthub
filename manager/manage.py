@@ -4,6 +4,7 @@
   python manage.py set-password <username>
   python manage.py import-folder --project Retail --path F:/TestMU-Ai/.testmuai/tests/Retail
   python manage.py import-runs                 # attach existing runs/ folders to imported cases
+  python manage.py check-menus                 # menu reader regression: sample apps + live Dev / PM
 """
 import argparse
 import getpass
@@ -25,8 +26,8 @@ def create_user(args):
         if con.execute('SELECT 1 FROM users WHERE username=?', (args.username,)).fetchone():
             sys.exit(f'User {args.username} already exists.')
         con.execute('INSERT INTO users(username, name, pw_hash, role, created_at) VALUES (?,?,?,?,?)',
-                    (args.username, args.name, generate_password_hash(pw), 'admin' if args.admin else 'member', db.now()))
-    print(f'Created {"admin" if args.admin else "member"} {args.username}.')
+                    (args.username, args.name, generate_password_hash(pw), 'superadmin' if args.admin else 'member', db.now()))
+    print(f'Created {"Super Admin" if args.admin else "member"} {args.username}.')
 
 
 def set_password(args):
@@ -108,6 +109,72 @@ def import_runs(_args):
     print(f'{linked} runs linked, {skipped} skipped (no matching case).')
 
 
+def check_menus(args):
+    """Menu reader regression: the sample apps (tests/menu-regression.js), then live environments listed in
+    manager/data/menu-live.json (per installation, not in git; see tests/menu-live.example.json).
+    Exit code 1 when anything fails."""
+    import json
+    import subprocess
+    import modules
+    import settings
+    root = db.RUNNER_DIR
+    failed = 0
+    if not args.live_only:
+        print('== Sample menus and logins (tests/menu-regression.js)')
+        rc = subprocess.run(['node', os.path.join(root, 'tests', 'menu-regression.js')], cwd=root).returncode
+        failed += rc != 0
+    if args.samples_only:
+        sys.exit(1 if failed else 0)
+    live_file = os.path.join(db.DATA, 'menu-live.json')   # names the installation's own apps: kept out of git
+    if not os.path.isfile(live_file):
+        print('\n== Live environments: skipped, no manager/data/menu-live.json (copy tests/menu-live.example.json)')
+        sys.exit(1 if failed else 0)
+    with open(live_file, encoding='utf-8') as f:
+        live = {k: v for k, v in json.load(f).items() if not k.startswith('_')}
+    con = db.connect()
+    settings.apply_system(con)
+    envs_by_name = {r['name']: r['id'] for r in con.execute('SELECT id, name FROM environments')}
+    print('\n== Live environments (manager/data/menu-live.json)')
+    for name, exp in live.items():
+        if args.env and name != args.env:
+            continue
+        if name not in envs_by_name:
+            print(f'SKIP  {name}: no Environment with this name (Settings -> Environments)')
+            continue
+        r = modules.crawl(envs_by_name[name])
+        errs = []
+        mods = {m['name']: {s['name'] for s in m['subs']} for m in r.get('modules', [])}
+        nsubs = sum(len(v) for v in mods.values())
+        if not r.get('ok'):
+            errs.append(f"not read ({r.get('stage')}): {r.get('reason')}")
+        if len(mods) < exp.get('min_modules', 1):
+            errs.append(f"{len(mods)} modules, expected at least {exp['min_modules']}")
+        if nsubs < exp.get('min_subs', 0):
+            errs.append(f"{nsubs} sub-modules, expected at least {exp['min_subs']}")
+        for m, subs in exp.get('modules', {}).items():
+            if m not in mods:
+                errs.append(f'module "{m}" missing')
+            else:
+                errs += [f'"{m}" lacks "{x}"' for x in subs if x not in mods[m]]
+        if exp.get('baseline'):
+            path = os.path.join(root, exp['baseline'])
+            if os.path.isfile(path):
+                with open(path, encoding='utf-8') as f:
+                    base = json.load(f)
+                lost = [f"{m['name']} > {x['name']}" for m in base.get('modules', []) if m['subs'] or m['link']
+                        for x in ([{'name': None}] if m['name'] not in mods else [s for s in m['subs'] if s['name'] not in mods[m['name']]])]
+                lost = [x.replace(' > None', ' (whole module)') for x in lost]
+                if lost:
+                    errs.append(f'{len(lost)} item(s) from the saved reading are missing: ' + ', '.join(lost[:8]) + (' ...' if len(lost) > 8 else ''))
+        failed += bool(errs)
+        print(f"{'FAIL' if errs else 'PASS'}  {name} ({exp.get('app', '')}): {len(mods)} modules, {nsubs} sub-modules, "
+              f"login: {r.get('login')}, read as: {r.get('strategy')}")
+        for e in errs:
+            print('        - ' + e)
+    print('\nALL MENU CHECKS PASSED' if not failed else f'\n{failed} CHECK GROUP(S) FAILED')
+    sys.exit(1 if failed else 0)
+
+
 def main():
     db.init()
     p = argparse.ArgumentParser()
@@ -127,6 +194,11 @@ def main():
     i.set_defaults(fn=import_folder)
     r = sub.add_parser('import-runs')
     r.set_defaults(fn=import_runs)
+    cm = sub.add_parser('check-menus', help='menu reader regression: sample apps + live environments')
+    cm.add_argument('--samples-only', action='store_true')
+    cm.add_argument('--live-only', action='store_true')
+    cm.add_argument('--env', help='only this live environment')
+    cm.set_defaults(fn=check_menus)
     args = p.parse_args()
     args.fn(args)
 

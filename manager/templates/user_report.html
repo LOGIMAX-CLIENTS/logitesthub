@@ -34,6 +34,7 @@
     <label for="f1">From</label><input class="form-control form-control-sm" id="f1" type="date" name="from" value="{{ d_from }}" max="{{ d_to }}" required>
     <label for="f2">To</label><input class="form-control form-control-sm" id="f2" type="date" name="to" value="{{ d_to }}" min="{{ d_from }}" max="{{ today }}" required>
     <label for="f3">Project</label><select class="form-select form-select-sm" id="f3" name="project"><option value="">All</option>{% for p in projects %}<option value="{{ p.id }}" {{ 'selected' if pid == p.id }}>{{ p.name }}</option>{% endfor %}</select>
+    {% if not detail %}<label for="f4">Department</label><select class="form-select form-select-sm" id="f4" name="dept"><option value="">All</option>{% for d in departments %}<option {{ 'selected' if dept == d }}>{{ d }}</option>{% endfor %}<option value="-" {{ 'selected' if dept == '-' }}>Not set</option></select>{% endif %}
     <button class="btn btn-primary btn-sm">Apply</button><a class="btn btn-link btn-sm px-1" href="{{ url_for('reports.users', detail=detail or None, user=user or None) }}">Reset</a>
   </div>
 </form>
@@ -50,11 +51,12 @@
   <div class="au-head"><b>By user</b><span class="small text-secondary">Cases by who created them · runs by who ran them · tokens by who used them · cost is an estimate</span></div>
   <div class="table-responsive rep-scroll">
     <table class="table table-sm align-middle mb-0 au-table">
-      <thead><tr><th class="text-start">User</th><th class="text-end">Test cases created</th><th class="text-end">Test runs</th><th class="text-end">Passed</th><th class="text-end">Failed</th><th class="text-end">Other</th><th class="text-end">AI calls</th><th class="text-end">Input tokens</th><th class="text-end">Output tokens</th><th class="text-end">Total tokens</th><th class="text-end">Cost (USD)</th><th class="text-end">Cost (₹)</th></tr></thead>
+      <thead><tr><th class="text-start">User</th><th class="text-start">Department</th><th class="text-end">Test cases created</th><th class="text-end">Test runs</th><th class="text-end">Passed</th><th class="text-end">Failed</th><th class="text-end">Other</th><th class="text-end">AI calls</th><th class="text-end">Input tokens</th><th class="text-end">Output tokens</th><th class="text-end">Total tokens</th><th class="text-end">Cost (USD)</th><th class="text-end">Cost (₹)</th></tr></thead>
       <tbody>
       {% for r in rows %}
       <tr>
         <td class="text-start">{% if r.username %}<b>{{ r.username }}</b>{% if r.name %} <span class="text-secondary">{{ r.name }}</span>{% endif %}{% if not r.is_user %} <span class="text-secondary small">(system)</span>{% endif %}{% else %}<span class="text-secondary">(not recorded)</span>{% endif %}</td>
+        <td class="text-start">{{ r.department or '' }}</td>
         <td class="text-end">{% if r.cases %}<a href="{{ link({'detail': 'cases', 'user': r.key}) }}"><b>{{ r.cases }}</b></a>{% else %}0{% endif %}</td>
         <td class="text-end">{% if r.runs %}<a href="{{ link({'detail': 'runs', 'user': r.key}) }}"><b>{{ r.runs }}</b></a>{% else %}0{% endif %}</td>
         <td class="text-end">{% if r.passed %}<a class="t-pass" href="{{ link({'detail': 'runs', 'user': r.key, 'status': 'PASSED'}) }}">{{ r.passed }}</a>{% else %}0{% endif %}</td>
@@ -68,10 +70,10 @@
         <td class="text-end">{{ r.cost|inr(inr) }}</td>
       </tr>
       {% else %}
-      <tr><td colspan="12" class="text-secondary text-center py-4">No users yet.</td></tr>
+      <tr><td colspan="13" class="text-secondary text-center py-4">No users{{ ' in this department' if dept else ' yet' }}.</td></tr>
       {% endfor %}
       </tbody>
-      {% if rows %}<tfoot><tr><th class="text-start">Total</th><th class="text-end">{{ total.cases }}</th><th class="text-end">{{ total.runs }}</th><th class="text-end">{{ total.passed }}</th><th class="text-end">{{ total.failed }}</th><th class="text-end">{{ total.other }}</th><th class="text-end">{{ total.calls }}</th><th class="text-end">{{ '{:,}'.format(total.tin) }}</th><th class="text-end">{{ '{:,}'.format(total.tout) }}</th><th class="text-end">{{ '{:,}'.format(total.tin + total.tout) }}</th><th class="text-end">{{ total.cost|usd }}</th><th class="text-end">{{ total.cost|inr(inr) }}</th></tr></tfoot>{% endif %}
+      {% if rows %}<tfoot><tr><th class="text-start">Total</th><th></th><th class="text-end">{{ total.cases }}</th><th class="text-end">{{ total.runs }}</th><th class="text-end">{{ total.passed }}</th><th class="text-end">{{ total.failed }}</th><th class="text-end">{{ total.other }}</th><th class="text-end">{{ total.calls }}</th><th class="text-end">{{ '{:,}'.format(total.tin) }}</th><th class="text-end">{{ '{:,}'.format(total.tout) }}</th><th class="text-end">{{ '{:,}'.format(total.tin + total.tout) }}</th><th class="text-end">{{ total.cost|usd }}</th><th class="text-end">{{ total.cost|inr(inr) }}</th></tr></tfoot>{% endif %}
     </table>
   </div>
 </div>

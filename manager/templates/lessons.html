@@ -1,0 +1,91 @@
+{% extends 'base.html' %}
+{% block title %}Lessons · {{ p.name }}{% endblock %}
+{% block crumbs %}<span class="tm-crumbs"><a href="{{ url_for('project', pid=p.id) }}">{{ p.name }}</a> <span>/</span> <b>Lessons</b></span>{% endblock %}
+{% block content %}
+{% macro fields(l=None, pre='n') %}
+  <div class="row g-2">
+    <div class="col-md-3"><label class="form-label" for="{{ pre }}Kind">Kind</label>
+      <select class="form-select form-select-sm" id="{{ pre }}Kind" name="kind" required>
+        {% for k, label, help in kinds %}<option value="{{ k }}" title="{{ help }}" {{ 'selected' if l and l.kind == k }}>{{ label }}</option>{% endfor %}</select></div>
+    <div class="col-md-9"><label class="form-label" for="{{ pre }}Title">What went wrong (one line)</label>
+      <input class="form-control form-control-sm" id="{{ pre }}Title" name="title" maxlength="200" required value="{{ l.title if l else '' }}"
+             placeholder="e.g. Branch dropdown is Select2: 'Select ... from the Branch dropdown' fails"></div>
+    <div class="col-md-4"><label class="form-label" for="{{ pre }}Sym">How it showed up</label>
+      <textarea class="form-control form-control-sm" id="{{ pre }}Sym" name="symptom" rows="3" maxlength="2000"
+                placeholder="Error message / failing step">{{ l.symptom or '' if l else '' }}</textarea></div>
+    <div class="col-md-4"><label class="form-label" for="{{ pre }}Fix">Fix</label>
+      <textarea class="form-control form-control-sm" id="{{ pre }}Fix" name="fix" rows="3" maxlength="2000"
+                placeholder="What was changed (code or test step)">{{ l.fix or '' if l else '' }}</textarea></div>
+    <div class="col-md-4"><label class="form-label" for="{{ pre }}Avoid">How to avoid it next time</label>
+      <textarea class="form-control form-control-sm" id="{{ pre }}Avoid" name="avoid" rows="3" maxlength="2000"
+                placeholder="The rule the next test should follow">{{ l.avoid or '' if l else '' }}</textarea></div>
+    <div class="col-md-2"><label class="form-label" for="{{ pre }}Case">Test case id</label>
+      <input class="form-control form-control-sm" id="{{ pre }}Case" name="case_id" inputmode="numeric" value="{{ l.case_id or '' if l else '' }}"></div>
+    <div class="col-md-2"><label class="form-label" for="{{ pre }}Run">Run id</label>
+      <input class="form-control form-control-sm" id="{{ pre }}Run" name="run_id" inputmode="numeric" value="{{ l.run_id or '' if l else '' }}"></div>
+  </div>
+{% endmacro %}
+
+<div class="d-flex flex-wrap gap-2 align-items-end justify-content-between mb-3">
+  <div><h1 class="h4 mb-0">Lessons learned</h1>
+    <div class="text-secondary small">Why tests failed and how to avoid it. The Test Assistant, Generate with AI and the <code>/tester</code> skill read these, so the same mistake does not happen twice. App bugs are kept here for the record but not sent to the AI.</div></div>
+  {% if can('cases.edit') %}<button class="btn btn-success" type="button" data-bs-toggle="collapse" data-bs-target="#newLesson">+ Add Lesson</button>{% endif %}
+</div>
+
+{% if can('cases.edit') %}
+<div class="collapse mb-3" id="newLesson">
+  <form method="post" action="{{ url_for('lessons.new', pid=p.id) }}" class="panel" autocomplete="off">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    {{ fields() }}
+    <button class="btn btn-primary btn-sm mt-3">Save lesson</button>
+  </form>
+</div>
+{% endif %}
+
+<div class="d-flex flex-wrap gap-2 align-items-center mb-2 small">
+  <a class="btn btn-sm {{ 'btn-primary' if not kind else 'btn-outline-secondary' }}" href="{{ url_for('lessons.page', pid=p.id, all='1' if show_all else None) }}">All <span class="ms-1">{{ counts.values()|sum }}</span></a>
+  {% for k, label, help in kinds %}<a class="btn btn-sm {{ 'btn-primary' if kind == k else 'btn-outline-secondary' }}" title="{{ help }}"
+     href="{{ url_for('lessons.page', pid=p.id, kind=k, all='1' if show_all else None) }}">{{ label }} <span class="ms-1">{{ counts[k] }}</span></a>{% endfor %}
+  <a class="ms-auto" href="{{ url_for('lessons.page', pid=p.id, kind=kind or None, all=None if show_all else '1') }}">{{ 'Hide archived' if show_all else 'Show archived' }}</a>
+</div>
+
+<div class="panel p-0">
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead><tr><th class="text-start">Kind</th><th class="text-start">What went wrong</th><th class="text-start">How to avoid it</th>
+        <th class="text-end">Seen</th><th class="text-start">Test case / run</th><th class="text-start">By</th><th class="text-start">Updated</th><th></th></tr></thead>
+      <tbody>
+      {% for l in lessons %}
+      <tr class="{{ 'text-secondary' if not l.active }}">
+        <td class="text-start text-nowrap"><span class="badge text-bg-{{ {'app_bug': 'danger', 'test_outdated': 'warning', 'environment': 'info', 'test_data': 'secondary', 'agent_mistake': 'primary'}[l.kind] or 'secondary' }}">{{ kind_label[l.kind] or l.kind }}</span>{% if not l.active %} <span class="badge text-bg-light">Archived</span>{% endif %}</td>
+        <td class="text-start"><b>{{ l.title }}</b>{% if l.symptom %}<div class="small text-secondary" style="white-space: pre-line">{{ l.symptom }}</div>{% endif %}
+          {% if l.fix %}<div class="small" style="white-space: pre-line"><span class="text-secondary">Fix:</span> {{ l.fix }}</div>{% endif %}</td>
+        <td class="text-start small" style="white-space: pre-line">{{ l.avoid or '' }}</td>
+        <td class="text-end">{{ l.hits }}</td>
+        <td class="text-start text-nowrap small">{% if l.case_id %}<a href="{{ url_for('case', cid=l.case_id, run=l.run_id) if l.run_id else url_for('case', cid=l.case_id) }}">case {{ l.case_id }}{% if l.run_id %} · run {{ l.run_id }}{% endif %}</a>{% elif l.run_id %}run {{ l.run_id }}{% endif %}</td>
+        <td class="text-start small">{{ l.updated_by or l.created_by or '' }}{% if l.source == 'cli' %} <span class="text-secondary">(CLI)</span>{% endif %}</td>
+        <td class="text-start small text-nowrap">{{ l.updated_at|dmy }}</td>
+        <td class="text-end text-nowrap">{% if can('cases.edit') %}
+          <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#le{{ l.id }}">Edit</button>
+          <form class="d-inline" method="post" action="{{ url_for('lessons.update', pid=p.id, lid=l.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}">
+            <input type="hidden" name="action" value="{{ 'archive' if l.active else 'restore' }}"><button class="btn btn-sm btn-link">{{ 'Archive' if l.active else 'Restore' }}</button></form>
+          {% if is_admin %}<form class="d-inline" method="post" action="{{ url_for('lessons.update', pid=p.id, lid=l.id) }}" onsubmit="return confirm('Delete this lesson?')">
+            <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="delete"><button class="btn btn-sm btn-link text-danger">Delete</button></form>{% endif %}
+        {% endif %}</td>
+      </tr>
+      {% if can('cases.edit') %}
+      <tr class="collapse {{ 'show' if edit_id == l.id }}" id="le{{ l.id }}"><td colspan="8">
+        <form method="post" action="{{ url_for('lessons.update', pid=p.id, lid=l.id) }}" class="p-2" autocomplete="off">
+          <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="save">
+          {{ fields(l, 'e' ~ l.id) }}
+          <button class="btn btn-primary btn-sm mt-2">Save</button>
+        </form></td></tr>
+      {% endif %}
+      {% else %}
+      <tr><td colspan="8" class="text-center text-secondary py-4">No lessons yet. When a test fails and you find why, add it here (or the <code>/tester</code> skill adds it with <code>tester lesson add</code>).</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

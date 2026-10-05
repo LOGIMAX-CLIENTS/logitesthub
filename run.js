@@ -11,16 +11,18 @@ const { writeReport } = require('./lib/report');
 const { parseCase } = require('./lib/testcase');
 const { showIntro } = require('./lib/intro');
 const { aiStep, explain, MODEL: AI_MODEL } = require('./lib/ai');
+const dbsteps = require('./lib/dbsteps');
 
-const DEFAULT_VARS = 'F:/TestMU-Ai/.testmuai/variables/etail.json';
+const DEFAULT_VARS = process.env.LTH_VARS_FILE || 'F:/TestMU-Ai/.testmuai/variables/etail.json';   // Settings -> System
 
 function parseArgs(argv) {
-  const a = { file: null, base: null, vars: DEFAULT_VARS, headed: false, ai: !!process.env.ANTHROPIC_API_KEY };
+  const a = { file: null, base: null, vars: DEFAULT_VARS, headed: false, ai: !!(process.env.ANTHROPIC_API_KEY || process.env.LTH_SERVER) };   // LTH_SERVER: AI via the LogiTestHub server (lth CLI)
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--vars') a.vars = argv[++i];
     else if (argv[i] === '--base') a.base = argv[++i];   // folder for @import paths (the case's original folder)
     else if (argv[i] === '--headed') a.headed = true;
     else if (argv[i] === '--no-ai') a.ai = false;
+    else if (argv[i] === '--login') a.login = argv[++i];   // project login helper file, put before the case's steps
     else a.file = argv[i];
   }
   return a;
@@ -33,10 +35,12 @@ function parseArgs(argv) {
     process.exit(2);
   }
   const { vars, secretValues } = loadVars(args.vars);
+  for (const [k, v] of Object.entries(await dbsteps.loadMemory())) if (!(k in vars) && v != null) vars[k] = String(v);   // {{last_lot}} from an earlier test
   const mask = makeMasker(secretValues);
   let tc;
   try {
-    tc = parseCase(fs.readFileSync(args.file, 'utf8'), args.base || path.dirname(path.resolve(args.file)));
+    const loginText = args.login && fs.existsSync(args.login) ? fs.readFileSync(args.login, 'utf8') : '';
+    tc = parseCase(fs.readFileSync(args.file, 'utf8'), args.base || path.dirname(path.resolve(args.file)), loginText);
   } catch (e) {
     console.error(e.message);   // e.g. "Helper not found: ../helpers/login.md" -> shown as the run's error
     process.exit(3);
@@ -44,7 +48,7 @@ function parseArgs(argv) {
 
   const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
   const slug = path.basename(args.file).replace(/_test\.md$|\.md$/, '').slice(0, 40);
-  const runDir = path.join(__dirname, 'runs', `${stamp}-${slug}`);
+  const runDir = path.join(process.env.LTH_RUNS_DIR || path.join(__dirname, 'runs'), `${stamp}-${slug}`);   // lth CLI: ~/.lth/runs
   fs.mkdirSync(runDir, { recursive: true });
   const log = fs.createWriteStream(path.join(runDir, 'events.ndjson'));
   const emit = ev => { log.write(JSON.stringify(ev) + '\n'); };
@@ -100,6 +104,29 @@ function parseArgs(argv) {
           r.ai = explain(e);
           if (/no API credits|API key invalid/.test(r.ai)) args.ai = false; // stop retrying every step
         }
+      }
+    } else if (action.kind === 'sqlRemember' || action.kind === 'sqlAssert') {
+      try {
+        const res = await dbsteps.query(action.sql);
+        const got = res.value == null ? '(empty)' : res.value;
+        if (action.kind === 'sqlRemember') {
+          if (res.value == null) throw new Error(`The query returned nothing to remember as ${action.name}`);
+          vars[action.name] = res.value;
+          await dbsteps.remember(action.name, res.value);
+          r.db = `${action.name} = ${res.value}`;
+        } else if (action.rows) {
+          r.db = `${res.count} row(s)`;
+          if (action.rows === 'none' ? res.count !== 0 : res.count === 0) throw new Error(`Expected the query to return ${action.rows === 'none' ? 'no rows' : 'a row'}, got ${res.count}`);
+        } else {
+          r.db = `returned ${got}`;
+          const ok = action.contains ? String(res.value ?? '').includes(action.value) : String(res.value ?? '') === action.value;
+          if (!ok) throw new Error(`Database returned "${got}", expected ${action.contains ? 'it to contain ' : ''}"${action.value}"`);
+        }
+        r.status = 'passed';
+      } catch (e) {
+        r.status = 'failed';
+        r.error = mask(e.message.split('\n')[0]);
+        failed = true;
       }
     } else {
       try {

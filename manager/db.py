@@ -1,7 +1,10 @@
 """MySQL storage for the Test Manager (projects, folders, test cases, runs, users).
 
-Connection settings: data/mysql.json ({host, port, user, password, database}),
-overridable with LTH_DB_HOST / LTH_DB_PORT / LTH_DB_USER / LTH_DB_PASSWORD / LTH_DB_NAME.
+Connection settings: data/mysql.json, one entry per database (like CodeIgniter's $db['default'] / $db['unified']):
+  {"default": {host, port, user, password, database},      <- LogiTestHub's own DB (read/write)
+   "unified": {host, port, user, password, database, ...}}  <- Unified_DB (PM Members), read-only, optional
+A flat {host, port, ...} file is still read as "default". Env overrides: LTH_DB_HOST / _PORT / _USER /
+_PASSWORD / _NAME for default, LTH_UNIFIED_DB_HOST / ... for unified. See mysql.example.json.
 Call sites keep the sqlite3-style API: '?' placeholders, row['col'] / row[0], and
 `with con:` = one transaction (commit on success, rollback on error; the connection stays open).
 """
@@ -178,17 +181,36 @@ class Connection:
         return False
 
 
-def db_config():
-    cfg = {'host': '127.0.0.1', 'port': 3306, 'user': 'root', 'password': '', 'database': 'logitesthub'}
+DB_DEFAULTS = {
+    'default': {'host': '127.0.0.1', 'port': 3306, 'user': 'root', 'password': '', 'database': 'logitesthub'},
+    'unified': {'host': '', 'port': 3306, 'user': '', 'password': '', 'database': 'Unified_DB'},
+    #'unified': {'host': 'pm-logimax-prod-db.cdk8wggounv9.ap-south-1.rds.amazonaws.com', 'port': 3306, 'user': 'admin_pm_logimax', 'password': 'rDrERv80CQyZEeE4QTy2', 'database': 'Unified_DB'},
+}
+DB_ENV_PREFIX = {'default': 'LTH_DB_', 'unified': 'LTH_UNIFIED_DB_'}
+
+
+def db_config(name='default'):
+    """Settings of one named connection. Unknown name -> KeyError."""
+    cfg = dict(DB_DEFAULTS[name])
     if os.path.isfile(DB_CONFIG):
         with open(DB_CONFIG, encoding='utf-8') as f:
-            cfg.update(json.load(f))
-    for key, env in (('host', 'LTH_DB_HOST'), ('port', 'LTH_DB_PORT'), ('user', 'LTH_DB_USER'),
-                     ('password', 'LTH_DB_PASSWORD'), ('database', 'LTH_DB_NAME')):
-        if os.environ.get(env):
-            cfg[key] = os.environ[env]
+            raw = json.load(f)
+        named = isinstance(raw.get('default'), dict)
+        if named:
+            cfg.update(raw.get(name) or {})
+        elif name == 'default':   # old flat file = the default connection
+            cfg.update(raw)
+    pre = DB_ENV_PREFIX[name]
+    for key, env in (('host', 'HOST'), ('port', 'PORT'), ('user', 'USER'), ('password', 'PASSWORD'), ('database', 'NAME')):
+        if os.environ.get(pre + env):
+            cfg[key] = os.environ[pre + env]
     cfg['port'] = int(cfg['port'])
     return cfg
+
+
+def configured(name):
+    cfg = db_config(name)
+    return bool(cfg['host'] and cfg['user'] and cfg['database'])
 
 
 def now():
@@ -205,11 +227,16 @@ def to_local(iso_utc):
         return now()
 
 
-def connect():
-    cfg = db_config()
+def connect(name='default', read_only=False):
+    """connect() = LogiTestHub's own DB. connect('unified', read_only=True) = Unified_DB (PM Members)."""
+    cfg = db_config(name)
     raw = pymysql.connect(host=cfg['host'], port=cfg['port'], user=cfg['user'], password=cfg['password'],
                           database=cfg['database'], charset='utf8mb4', autocommit=True,
-                          cursorclass=pymysql.cursors.DictCursor, connect_timeout=10)
+                          cursorclass=pymysql.cursors.DictCursor, connect_timeout=10 if name == 'default' else 6,
+                          read_timeout=None if name == 'default' else 8)
+    if read_only:
+        with raw.cursor() as cur:
+            cur.execute('SET SESSION TRANSACTION READ ONLY')   # any write on this connection fails
     return Connection(raw)
 
 
@@ -225,6 +252,31 @@ def init():
                     "AND TABLE_NAME='ai_credits' AND COLUMN_NAME='rate_inr'")
         if not cur.fetchone()['n']:
             cur.execute('ALTER TABLE ai_credits ADD COLUMN rate_inr DOUBLE NULL AFTER amount_usd')
+        # Why a run failed, kept on the run so history lists can show it without reading files
+        cur.execute("SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() "
+                    "AND TABLE_NAME='runs' AND COLUMN_NAME='fail_reason'")
+        if not cur.fetchone()['n']:
+            cur.execute('ALTER TABLE runs ADD COLUMN fail_step INT NULL, ADD COLUMN fail_text VARCHAR(500) NULL, '
+                        'ADD COLUMN fail_reason VARCHAR(500) NULL')
+            cur.execute("SELECT id, run_dir FROM runs WHERE run_dir IS NOT NULL AND status IN ('FAILED', 'PARTIAL')")
+            for r in cur.fetchall():
+                f = run_failure(read_run_events(r['run_dir'])[1]) if os.path.isdir(r['run_dir']) else None
+                if f:
+                    cur.execute('UPDATE runs SET fail_step=%s, fail_text=%s, fail_reason=%s WHERE id=%s',
+                                (f['step'], f['text'], f['reason'], r['id']))
+        # Login helper per project: put in front of every case of that project when it runs
+        cur.execute("SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() "
+                    "AND TABLE_NAME='projects' AND COLUMN_NAME='login_helper'")
+        if not cur.fetchone()['n']:
+            cur.execute('ALTER TABLE projects ADD COLUMN login_helper TEXT NULL')
+        # PM sign-in: 'local' accounts keep their own password; 'pm' accounts store none (PM checks it)
+        cur.execute("SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() "
+                    "AND TABLE_NAME='users' AND COLUMN_NAME='pm_member_id'")
+        if not cur.fetchone()['n']:
+            cur.execute("ALTER TABLE users ADD COLUMN auth_source VARCHAR(8) NOT NULL DEFAULT 'local' AFTER role, "
+                        "ADD COLUMN pm_member_id VARCHAR(64) NULL AFTER auth_source, "
+                        "ADD COLUMN pm_login VARCHAR(254) NULL AFTER pm_member_id, "
+                        "ADD UNIQUE KEY uq_users_pm (pm_member_id)")
     finally:
         con.close()
 
@@ -239,10 +291,24 @@ def case_title(content, fallback='Untitled test'):
 def get_or_create_folder(con, project_id, name):
     if not name:
         return None
-    row = con.execute('SELECT id FROM folders WHERE project_id=? AND name=?', (project_id, name)).fetchone()
+    row = con.execute('SELECT id FROM folders WHERE project_id=? AND ((parent_id=0 AND name=?) OR import_key=?) '
+                      'ORDER BY import_key IS NULL LIMIT 1', (project_id, name, name)).fetchone()   # import_key: moved under a module
     if row:
         return row['id']
-    return con.execute('INSERT INTO folders(project_id, name) VALUES (?,?)', (project_id, name)).lastrowid
+    return con.execute('INSERT INTO folders(project_id, parent_id, name) VALUES (?,0,?)', (project_id, name)).lastrowid
+
+
+def login_helper_file(con, project_id):
+    """The project's login helper written to a temp file for run.js / codegen.js --login (caller deletes it),
+    or None when the project has none."""
+    import tempfile
+    row = con.execute('SELECT login_helper FROM projects WHERE id=?', (project_id,)).fetchone() if project_id else None
+    if not row or not (row['login_helper'] or '').strip():
+        return None
+    fd, path = tempfile.mkstemp(suffix='_login.md', dir=DATA)
+    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+        f.write(row['login_helper'])
+    return path
 
 
 def add_case(con, project_id, folder_id, title, content, user, source_path=None):
@@ -258,10 +324,10 @@ VAR_RE = re.compile(r'\{\{\s*([\w.-]+)\s*\}\}')
 VARS_FILE = 'F:/TestMU-Ai/.testmuai/variables/etail.json'
 
 
-def load_vars(path=VARS_FILE):
+def load_vars(path=None):
     """Same rules as the runner's lib/vars.js: {key: {value, secret}} with nested {{refs}} resolved.
-    Returns (values, secret_values)."""
-    with open(path, encoding='utf-8') as f:
+    Returns (values, secret_values). Default: the Variables file from Settings -> System."""
+    with open(path or VARS_FILE, encoding='utf-8') as f:
         raw = json.load(f)
     vals = {k: str(v.get('value', '') if isinstance(v, dict) else v) for k, v in raw.items()}
     for _ in range(5):
@@ -296,16 +362,60 @@ def read_run_events(run_dir):
     return summary, steps
 
 
+def explain_step_error(text, error, status='failed'):
+    """The runner's technical error -> one plain sentence a tester understands."""
+    e, t = (error or '').strip(), (text or '').strip()
+    if status == 'needs-ai':
+        return 'This step is written in free text, so it needs AI, and AI was not available for this run' + (
+            f' ({e.replace("AI: ", "")}).' if e else '.') + ' Rewrite it in a standard step sentence, or run with AI credits.'
+    m = re.search(r'Expected title (?:is|contains) "(.*?)", got "(.*?)"', e)
+    if m:
+        hint = ' The browser is still on the login page: sign-in failed or the session ended.' if 'login' in m.group(2).lower() else ''
+        return f'The page title was "{m.group(2)}", but the test expected "{m.group(1)}". The app did not reach that page.{hint}'
+    m = re.match(r"assert (?:the )?text ['\"](.+?)['\"] is visible", t, re.I)
+    if m and 'timeout' in e.lower():
+        return f'The text "{m.group(1)}" did not appear on the screen within 10 seconds.'
+    m = re.search(r'Expected (.+?) \(.*?\) to (show|contain) "(.*?)", got "(.*?)"', e)
+    if m:
+        want = f'"{m.group(3)}"' if m.group(3) else 'empty'
+        return f'The {m.group(1)} showed "{m.group(4)}", but the test expected it to {m.group(2)} {want}.'
+    m = re.search(r'Dropdown "(.+?)".*has no options', e)
+    if m:
+        return f'The {m.group(1)} was empty, so nothing could be selected: the data it lists is missing, or it loads from an earlier choice.'
+    m = re.search(r'"(.+?)" .*not found', e)
+    if m:
+        return f'"{m.group(1)}" was not found on the page: it is missing, hidden, or named differently now.'
+    if 'URL' in e and 'contain' in e:
+        return f'The page address was not the expected one. {e}'
+    if 'timeout' in e.lower():
+        return 'The page did not respond in time (waited 10 seconds) for this step.'
+    if 'NaN' in e or 'undefined' in e:
+        return f'The page shows an invalid value: {e}'
+    return e or 'This step failed.'
+
+
+def run_failure(steps):
+    """First failed step (else the first step that needed AI) -> {step, text, reason}, or None."""
+    s = next((x for x in steps if x.get('status') == 'failed'), None) or \
+        next((x for x in steps if x.get('status') == 'needs-ai'), None)
+    if not s:
+        return None
+    return {'step': s.get('n'), 'text': (s.get('text') or '')[:500],
+            'reason': explain_step_error(s.get('text'), s.get('error') or s.get('ai'), s.get('status'))[:500]}
+
+
 def record_finished_run(con, run_id, run_dir):
-    summary, _ = read_run_events(run_dir)
+    summary, steps = read_run_events(run_dir)
     if not summary:
         con.execute("UPDATE runs SET status='ERROR', run_dir=?, error=? WHERE id=?",
                     (run_dir, 'Runner produced no result', run_id))
         return
     con.execute(
-        'UPDATE runs SET status=?, run_dir=?, duration_ms=?, passed=?, failed=?, needs_ai=?, skipped=?, total=? WHERE id=?',
+        'UPDATE runs SET status=?, run_dir=?, duration_ms=?, passed=?, failed=?, needs_ai=?, skipped=?, total=?, '
+        'fail_step=?, fail_text=?, fail_reason=? WHERE id=?',
         (summary['status'], run_dir, summary.get('durationMs'), summary.get('passed'), summary.get('failed'),
-         summary.get('needsAI'), summary.get('skipped'), summary.get('total'), run_id))
+         summary.get('needsAI'), summary.get('skipped'), summary.get('total'),
+         *((lambda f: (f['step'], f['text'], f['reason']) if f else (None, None, None))(run_failure(steps))), run_id))
     ai = summary.get('aiTokens') or {}
     if ai.get('calls') or ai.get('in') or ai.get('out'):
         run = con.execute('SELECT r.run_by, c.id AS case_id, c.project_id FROM runs r JOIN cases c ON c.id=r.case_id '

@@ -1,0 +1,87 @@
+{% extends 'base.html' %}
+{% block title %}Roles & Permissions{% endblock %}
+{% block crumbs %}<span class="tm-crumbs"><b>Settings</b> <span>/</span> Roles &amp; Permissions</span>{% endblock %}
+{% block content %}
+{% include '_settings_tabs.html' %}
+
+<section class="panel set-intro">
+  <div class="set-intro-ico"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4.5 6v5.5c0 4.6 3.2 8.3 7.5 9.5 4.3-1.2 7.5-4.9 7.5-9.5V6z"/></svg></div>
+  <div class="flex-grow-1">
+    <div class="set-intro-title">Role &amp; access control matrix</div>
+    <div class="small text-secondary">Which role may do what. {% if is_super %}Click any cell to allow or remove it; it takes effect immediately, on the web and from the CLI.{% else %}Only a Super Admin can change this matrix.{% endif %} Super Admin always has everything. Everyone can view projects, test cases and run results.</div>
+  </div>
+  {% if is_super %}<form method="post" action="{{ url_for('settings.roles_reset') }}" onsubmit="return confirm('Put every permission back to the defaults?')">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn btn-sm btn-outline-secondary">Reset to defaults</button></form>{% endif %}
+</section>
+
+<div class="panel p-0">
+  <div class="table-responsive">
+    <table class="table align-middle mb-0 set-matrix">
+      <thead><tr>
+        <th class="text-start">Permission</th>
+        {% for key, label, desc in roles %}
+        <th class="text-center" title="{{ desc }}"><div class="set-role-ico set-role-{{ key }}" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">{{ role_icons[key]|safe }}</svg></div><div class="set-role set-role-{{ key }}">{{ label }}</div><div class="set-role-n">{{ counts.get(key, 0) }} user{{ 's' if counts.get(key, 0) != 1 }}</div></th>
+        {% endfor %}
+      </tr></thead>
+      <tbody>
+      {% for key, label, desc in perms %}
+      <tr>
+        <td class="text-start"><div class="fw-semibold">{{ label }}</div><div class="small text-secondary">{{ desc }}</div><code class="set-key">{{ key }}</code></td>
+        {% for role, rlabel, _ in roles %}
+        {% set on = role == 'superadmin' or key in matrix[role] %}
+        <td class="text-center">
+          {% if role in editable and is_super %}
+          <button type="button" class="set-cell {{ 'on' if on }}" data-role="{{ role }}" data-perm="{{ key }}" aria-pressed="{{ 'true' if on else 'false' }}"
+                  aria-label="{{ rlabel }}: {{ label }}" title="{{ 'Allowed' if on else 'Not allowed' }}{{ ' (default)' if (key in defaults[role]) == on else ' (changed)' }} - click to change">
+            {% if on %}<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 12.5 4 4 8-9"/></svg>{% else %}<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M7 7l10 10M17 7 7 17"/></svg>{% endif %}
+          </button>
+          {% else %}
+          {% if on %}<span class="set-cell on locked" title="{{ 'Super Admin always has this' if role == 'superadmin' else 'Allowed (only a Super Admin can change this)' }}"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 12.5 4 4 8-9"/></svg></span>
+          {% else %}<span class="set-cell locked" title="Not allowed (only a Super Admin can change this)"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M7 7l10 10M17 7 7 17"/></svg></span>{% endif %}
+          {% endif %}
+        </td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+      {% for flabel, fdesc, who in [
+          ('Settings: users, departments, environments, AI credits & AI Usage', 'Admin and Super Admin. Cannot be given to other roles.', ('admin', 'superadmin')),
+          ('Roles & Permissions, System settings, Super Admin accounts', 'Super Admin only. Cannot be given to other roles.', ('superadmin',)),
+      ] %}
+      <tr class="set-fixed">
+        <td class="text-start"><div class="fw-semibold">{{ flabel }}</div><div class="small text-secondary">{{ fdesc }}</div></td>
+        {% for role, rlabel, _ in roles %}<td class="text-center">{% if role in who %}<span class="set-cell on locked"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 12.5 4 4 8-9"/></svg></span>{% else %}<span class="set-cell locked"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M7 7l10 10M17 7 7 17"/></svg></span>{% endif %}</td>{% endfor %}
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+<div class="small text-secondary mt-2" id="setMsg" role="status" aria-live="polite">Change a user's role on the <a href="{{ url_for('users') }}">Users</a> tab. Every change here is recorded in the <a href="{{ url_for('settings.audit') }}">Audit Log</a>.</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  var URL_ = {{ url_for('settings.roles_toggle')|tojson }}, CSRF = {{ csrf|tojson }}, msg = document.getElementById('setMsg');
+  var ON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 12.5 4 4 8-9"/></svg>';
+  var OFF = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M7 7l10 10M17 7 7 17"/></svg>';
+  document.querySelectorAll('button.set-cell').forEach(function (b) {
+    b.addEventListener('click', function () {
+      if (b.disabled) return;
+      b.disabled = true; b.classList.add('busy');
+      var body = new URLSearchParams({ csrf: CSRF, role: b.dataset.role, perm: b.dataset.perm });
+      fetch(URL_, { method: 'POST', body: body, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } })
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (res) {
+          if (!res.ok || !res.j || !res.j.ok) throw new Error((res.j && res.j.message) || 'Could not save');
+          var on = !!res.j.allowed;
+          b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); b.innerHTML = on ? ON : OFF;
+          b.title = (on ? 'Allowed' : 'Not allowed') + ' - click to change';
+          msg.textContent = 'Saved: ' + b.getAttribute('aria-label') + ' is now ' + (on ? 'allowed.' : 'not allowed.');
+        })
+        .catch(function (e) { msg.textContent = 'Not saved: ' + e.message + '. Reload the page and try again.'; })
+        .finally(function () { b.disabled = false; b.classList.remove('busy'); });
+    });
+  });
+})();
+</script>
+{% endblock %}

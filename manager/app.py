@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 
 from flask import (Flask, abort, flash, g, redirect, render_template, request,
                    send_from_directory, session, url_for)
@@ -19,6 +20,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 import db
 import envs
+import pm_auth
 import pricing
 import services
 
@@ -47,6 +49,7 @@ with open(_key_file) as f:
     app.secret_key = f.read().strip()
 app.config.update(MAX_CONTENT_LENGTH=10 * 1024 * 1024,   # CLI AI steps send a screenshot
                   SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Lax',
+                  PERMANENT_SESSION_LIFETIME=14 * 24 * 3600,   # "Remember me" on the sign-in page
                   TEMPLATES_AUTO_RELOAD=True)   # page edits show on refresh, no restart
 
 SAFE_FILE = re.compile(r'^[\w.-]+$')
@@ -71,8 +74,9 @@ def _close(_exc):
 def login_required(fn):
     @functools.wraps(fn)
     def wrapper(*a, **kw):
-        if not session.get('uid') or not current_user():   # also signs out a removed account
-            session.pop('uid', None)
+        u = current_user() if session.get('uid') else None
+        if not u or not _pm_still_ok(u):   # also signs out a removed account / a member made inactive in PM
+            session.clear()
             return redirect(url_for('login', next=request.path))
         return fn(*a, **kw)
     return wrapper
@@ -82,7 +86,7 @@ def admin_required(fn):
     @functools.wraps(fn)
     @login_required
     def wrapper(*a, **kw):
-        if current_user()['role'] != 'admin':
+        if not settings.is_admin(current_user()['role']):
             abort(403)
         return fn(*a, **kw)
     return wrapper
@@ -109,7 +113,25 @@ def _globals():
     nav_projects = con().execute('SELECT id, name FROM projects ORDER BY name').fetchall() if me else []
     env_list = envs.all_envs(con()) if me else []
     my_key = con().execute('SELECT key_hint FROM api_keys WHERE user_id=?', (me['id'],)).fetchone() if me else None
-    return {'csrf': session['csrf'], 'me': me, 'nav_projects': nav_projects, 'my_key': my_key, 'env_list': env_list}
+    return {'csrf': session['csrf'], 'me': me, 'nav_projects': nav_projects, 'my_key': my_key, 'env_list': env_list,
+            'credit_chip': credit_chip(me) if me else None}
+
+
+def credit_chip(me):
+    """Top-bar credits chip: admins see the Anthropic credit balance, members their own AI use this month."""
+    import budget
+    try:
+        if settings.is_admin(me['role']):
+            pl = budget.plan(con())
+            return {'kind': 'admin', 'balance': pl['balance_inr'], 'month_used': pl['org_used_inr'],
+                    'org': pl['org_effective_inr'], 'reserve': pl['reserve_inr'],
+                    'low': pl['balance_inr'] is not None and pl['credits']['added_usd'] and
+                           pl['credits']['remaining_usd'] < 0.2 * pl['credits']['added_usd']}
+        s = budget.status(con(), me)
+        return {'kind': 'member', 'used': s['used_inr'], 'limit': s['limit_inr'], 'pct': s['pct'],
+                'resets': s['resets_on'], 'blocked': not s['ok'], 'low': bool(s['warn'] or not s['ok'])}
+    except Exception:   # never break a page because of the chip
+        return None
 
 
 def project_or_404(pid):
@@ -163,17 +185,96 @@ app.jinja_env.filters['ago'] = time_ago
 
 # ---------------------------------------------------------------- auth
 
+PM_RECHECK = 600            # seconds between PM 'still active?' checks for a signed-in PM account
+LOGIN_FAILS = {}            # (login, ip) -> [failure times]; slows down password guessing (also against PM)
+LOGIN_LOCK = threading.Lock()
+
+
+def _pm_still_ok(u):
+    if u.get('auth_source') != 'pm':
+        return True
+    now = time.time()
+    if now - session.get('pm_checked', 0) < PM_RECHECK:
+        return True
+    ok = pm_auth.still_active(u['pm_member_id'])
+    if ok is False:
+        return False
+    session['pm_checked'] = now   # True, or PM unreachable (None): keep the session, ask again later
+    return True
+
+
+def _throttled(key):
+    now = time.time()
+    with LOGIN_LOCK:
+        LOGIN_FAILS[key] = [t for t in LOGIN_FAILS.get(key, []) if now - t < 300]
+        return len(LOGIN_FAILS[key]) >= 8
+
+
+def _failed(key):
+    with LOGIN_LOCK:
+        LOGIN_FAILS.setdefault(key, []).append(time.time())
+
+
+def _pm_user(m):
+    """Find / create the LogiTestHub account for a verified PM member. No PM password is stored."""
+    c = con()
+    with c:
+        u = c.execute('SELECT * FROM users WHERE pm_member_id=?', (m['pm_id'],)).fetchone()
+        if u:
+            c.execute('UPDATE users SET pm_login=? WHERE id=?', (m['login'][:254], u['id']))
+            return u
+        base = re.sub(r'[^A-Za-z0-9._-]', '', m['username'].split('@')[0])[:50] or 'pm-user'
+        same = c.execute('SELECT * FROM users WHERE username=?', (base,)).fetchone()
+        if same and same['auth_source'] == 'local' and same['pm_member_id'] is None and not settings.is_admin(same['role']):
+            # an existing LogiTestHub member with the same username: link it (keeps role, runs, cases, key)
+            c.execute("UPDATE users SET auth_source='pm', pm_member_id=?, pm_login=?, pw_hash='!' WHERE id=?",
+                      (m['pm_id'], m['login'][:254], same['id']))
+            return c.execute('SELECT * FROM users WHERE id=?', (same['id'],)).fetchone()
+        username, n = base, 1
+        while c.execute('SELECT 1 FROM users WHERE username=?', (username,)).fetchone():   # local admin keeps its name
+            n += 1
+            username = f'{base}{n}'
+        c.execute("INSERT INTO users(username, name, pw_hash, role, auth_source, pm_member_id, pm_login, created_at) "
+                  "VALUES (?,?,'!','member','pm',?,?,?)", (username, m['name'], m['pm_id'], m['login'][:254], db.now()))
+        return c.execute('SELECT * FROM users WHERE pm_member_id=?', (m['pm_id'],)).fetchone()
+
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
+    pm_on = pm_auth.enabled()
     if request.method == 'POST':
-        u = con().execute('SELECT * FROM users WHERE username=?', (request.form.get('username', '').strip(),)).fetchone()
-        if u and check_password_hash(u['pw_hash'], request.form.get('password', '')):
+        login_id, pw = request.form.get('username', '').strip(), request.form.get('password', '')
+        key = (login_id.lower(), request.remote_addr)
+        if _throttled(key):
+            flash('Too many wrong attempts. Wait 5 minutes and try again.', 'danger')
+            return render_template('login.html', pm_on=pm_on), 429
+        user, msg = None, 'Wrong username or password.'
+        # 1. local LogiTestHub accounts (the backup admin keeps working when PM is down)
+        u = con().execute("SELECT * FROM users WHERE username=? AND auth_source='local'", (login_id,)).fetchone()
+        if u and u['pw_hash'] != '!' and check_password_hash(u['pw_hash'], pw):
+            user = u
+        # 2. PM account: PM says who you are and whether you are active; LogiTestHub keeps its own role
+        elif pm_on:
+            try:
+                m = pm_auth.authenticate(login_id, pw)
+                if m == 'inactive':
+                    msg = 'Your PM account is inactive, so LogiTestHub sign-in is blocked. Contact your admin.'
+                elif m:
+                    m['login'] = login_id
+                    user = _pm_user(m)
+            except pm_auth.PMUnavailable as e:
+                app.logger.warning('PM sign-in unavailable: %s', e)
+                msg = 'PM sign-in is unavailable right now. Try again later, or use a local LogiTestHub account.'
+        if user:
             session.clear()
-            session['uid'] = u['id']
+            session['uid'] = user['id']
+            session['pm_checked'] = time.time()
+            session.permanent = request.form.get('remember') == '1'   # unticked: signed out when the browser closes
             nxt = request.args.get('next', '')
             return redirect(nxt if nxt.startswith('/') and not nxt.startswith('//') else url_for('home'))
-        flash('Wrong username or password.', 'danger')
-    return render_template('login.html')
+        _failed(key)
+        flash(msg, 'danger')
+    return render_template('login.html', pm_on=pm_on)
 
 
 @app.route('/logout', methods=['POST'])
@@ -210,6 +311,15 @@ def profile():
                 with con():
                     con().execute('UPDATE users SET name=? WHERE id=?', (name, me['id']))
                 flash('Profile updated.', 'success')
+        elif action == 'accent':
+            accent = request.form.get('accent', '')
+            if accent not in settings.ACCENT_KEYS:
+                flash('Pick one of the colours shown.', 'danger')
+            else:
+                with con():
+                    con().execute('UPDATE users SET accent=? WHERE id=?', (accent, me['id']))
+                flash('Colour saved.', 'success')
+            return redirect(url_for('profile') + '#appearance')
         elif action in ('key_new', 'key_revoke'):
             import api
             with con():
@@ -220,6 +330,8 @@ def profile():
                     api.revoke_key(con(), me['id'])
                     flash('Access key revoked. The CLI / IDE can no longer connect with it.', 'success')
             return redirect(url_for('profile') + '#access-key')
+        elif action == 'password' and me['auth_source'] == 'pm':
+            flash('You sign in with your PM account: change the password in PM.', 'danger')
         elif action == 'password':
             if not check_password_hash(me['pw_hash'], request.form.get('current', '')):
                 flash('Current password is wrong.', 'danger')
@@ -247,7 +359,7 @@ def profile():
 @admin_required
 def users():
     import budget
-    rows = con().execute('SELECT id, username, name, role, created_at FROM users ORDER BY username').fetchall()
+    rows = con().execute('SELECT id, username, name, role, department, auth_source, pm_login, created_at FROM users ORDER BY username').fetchall()
     ai = {r['id']: budget.status(con(), r) for r in rows}
     return render_template('users.html', users=rows, min_pw=MIN_PW, ai=ai,
                            default_limit=budget.get_setting(con(), budget.S_USER_DEFAULT), plan=budget.plan(con()))
@@ -275,21 +387,29 @@ def user_ai_extra(uid):
     val, err = _inr_or_none(request.form.get('amount_inr'))
     note = request.form.get('note', '').strip()[:255]
     pl = budget.plan(con())
+    over = pl['reserve_inr'] is not None and val is not None and val > pl['reserve_inr'] + 0.005
+    # a super admin may go past the reserve (ticked "add anyway"); admins stay within it
+    override = over and settings.is_super(current_user()['role']) and request.form.get('override') == '1'
     if err or not val or val > 100000:
         flash('Enter the extra amount in rupees (1 to 1,00,000).', 'danger')
-    elif pl['reserve_inr'] is not None and val > pl['reserve_inr'] + 0.005:
+    elif over and not override:
         flash(f'Only {budget.inr(max(0, pl["reserve_inr"]))} is left in the reserve. Add Anthropic credits on the AI Usage page, '
-              f'or give a smaller extra.', 'danger')
+              f'or give a smaller extra' + ('. As super admin, tick "Add anyway" to go past the reserve.' if settings.is_super(current_user()['role']) else '.'),
+              'danger')
     elif not note:
         flash('Add a short reason (e.g. "GRN release testing") so the AI Usage report explains the extra spend.', 'danger')
     else:
+        if override:   # visible in the AI Usage report next to the extra
+            note = (note + ' [over reserve by super admin]')[:255]
         with con():
             con().execute('INSERT INTO ai_topups(user_id, month, amount_inr, note, added_by, at) VALUES (?,?,?,?,?,?)',
                           (uid, budget.this_month(), val, note, current_user()['username'], db.now()))
         s = budget.status(con(), u)
         left = budget.plan(con())['reserve_inr']
-        flash(f'Added {budget.inr(val)} extra AI budget for "{u["username"]}" this month (from the reserve'
-              + (f', {budget.inr(left)} left' if left is not None else '') + '). '
+        flash(f'Added {budget.inr(val)} extra AI budget for "{u["username"]}" this month '
+              + (f'(past the reserve by {budget.inr(val - max(0, pl["reserve_inr"]))}: it uses credit already promised to the team, '
+                 'so keep an eye on the balance). ' if override else
+                 '(from the reserve' + (f', {budget.inr(left)} left' if left is not None else '') + '). ')
               + (f'New limit {budget.inr(s["limit_inr"])}, resets {s["resets_on"]}.' if s['limit_inr'] is not None
                  else 'They have no limit, so the extra only shows in the report.'), 'success')
     return redirect(url_for('users'))
@@ -330,7 +450,12 @@ def user_ai_limit(uid):
 def user_new():
     f = request.form
     username, name = f.get('username', '').strip(), f.get('name', '').strip()[:60]
-    role = 'admin' if f.get('role') == 'admin' else 'member'
+    import settings
+    role = f.get('role') if f.get('role') in settings.ROLE_KEYS else 'member'
+    if role == 'superadmin' and not settings.is_super(current_user()['role']):
+        flash('Only a Super Admin can create another Super Admin.', 'danger')
+        return redirect(url_for('users'))
+    dept = f.get('department') if f.get('department') in settings.DEPARTMENTS else None
     problem = (None if USERNAME_RE.match(username) else
                'Username: 3-30 letters, numbers, dot, dash or underscore.') or \
               (None if name else 'Full name is required.') or \
@@ -341,8 +466,8 @@ def user_new():
         flash(problem, 'danger')
     else:
         with con():
-            con().execute('INSERT INTO users(username, name, pw_hash, role, created_at) VALUES (?,?,?,?,?)',
-                          (username, name, generate_password_hash(f['password']), role, db.now()))
+            con().execute('INSERT INTO users(username, name, pw_hash, role, department, created_at) VALUES (?,?,?,?,?,?)',
+                          (username, name, generate_password_hash(f['password']), role, dept, db.now()))
         flash(f'Account "{username}" created. Share the password with them privately.', 'success')
     return redirect(url_for('users'))
 
@@ -351,7 +476,11 @@ def user_new():
 @admin_required
 def user_reset_password(uid):
     u = con().execute('SELECT * FROM users WHERE id=?', (uid,)).fetchone() or abort(404)
-    problem = _password_problem(request.form.get('password', ''), request.form.get('confirm', ''))
+    if settings.is_super(u['role']) and not settings.is_super(current_user()['role']):
+        flash("Only a Super Admin can reset a Super Admin's password.", 'danger')
+        return redirect(url_for('users'))
+    problem = ('@%s signs in with PM: the password is managed in PM.' % u['username'] if u['auth_source'] == 'pm'
+               else _password_problem(request.form.get('password', ''), request.form.get('confirm', '')))
     if problem:
         flash(problem, 'danger')
     else:
@@ -364,14 +493,19 @@ def user_reset_password(uid):
 @app.route('/users/<int:uid>/role', methods=['POST'])
 @admin_required
 def user_role(uid):
+    import settings
     u = con().execute('SELECT * FROM users WHERE id=?', (uid,)).fetchone() or abort(404)
+    new = request.form.get('role')
     if u['id'] == current_user()['id']:
         flash('You cannot change your own role.', 'danger')
+    elif new not in settings.ROLE_KEYS:
+        flash('Unknown role.', 'danger')
+    elif not settings.is_super(current_user()['role']) and (settings.is_super(u['role']) or new == 'superadmin'):
+        flash('Only a Super Admin can give or take away the Super Admin role.', 'danger')
     else:
-        new = 'member' if u['role'] == 'admin' else 'admin'
         with con():
             con().execute('UPDATE users SET role=? WHERE id=?', (new, uid))
-        flash(f'"{u["username"]}" is now {new}.', 'success')
+        flash(f'"{u["username"]}" is now {settings.ROLE_LABEL[new]}.', 'success')
     return redirect(url_for('users'))
 
 
@@ -381,6 +515,8 @@ def user_delete(uid):
     u = con().execute('SELECT * FROM users WHERE id=?', (uid,)).fetchone() or abort(404)
     if u['id'] == current_user()['id']:
         flash('You cannot remove your own account.', 'danger')
+    elif settings.is_super(u['role']) and not settings.is_super(current_user()['role']):
+        flash('Only a Super Admin can remove a Super Admin.', 'danger')
     else:
         with con():
             con().execute('DELETE FROM users WHERE id=?', (uid,))
@@ -408,7 +544,7 @@ def home():
     only = c.execute('SELECT id FROM projects LIMIT 2').fetchall()
     cases_url = url_for('project', pid=only[0]['id']) if len(only) == 1 else url_for('projects')
     ai_daily = None
-    if current_user()['role'] == 'admin':   # AI spend is admin-only, like the AI Usage report
+    if settings.is_admin(current_user()['role']):   # AI spend is admin-only, like the AI Usage report
         from datetime import date, timedelta
         import pricing
         start = date.today() - timedelta(days=29)
@@ -450,12 +586,37 @@ def runs_list():
 @app.route('/projects')
 @login_required
 def projects():
+    from datetime import date, timedelta
     rows = con().execute(
         'SELECT p.*, (SELECT COUNT(*) FROM cases c WHERE c.project_id=p.id) AS n_cases, '
         '(SELECT COUNT(*) FROM runs r JOIN cases c ON c.id=r.case_id WHERE c.project_id=p.id) AS n_runs, '
-        '(SELECT MAX(c.updated_at) FROM cases c WHERE c.project_id=p.id) AS last_update '
+        '(SELECT MAX(c.updated_at) FROM cases c WHERE c.project_id=p.id) AS last_update, '
+        '(SELECT MAX(r.started_at) FROM runs r JOIN cases c ON c.id=r.case_id WHERE c.project_id=p.id) AS last_run, '
+        # people who wrote, edited or ran this project's test cases
+        '(SELECT COUNT(DISTINCT u) FROM (SELECT c.created_by AS u FROM cases c WHERE c.project_id=p.id '
+        '  UNION SELECT c.updated_by FROM cases c WHERE c.project_id=p.id '
+        '  UNION SELECT r.run_by FROM runs r JOIN cases c ON c.id=r.case_id WHERE c.project_id=p.id) x WHERE u IS NOT NULL) AS n_people '
         'FROM projects p ORDER BY p.name').fetchall()
-    return render_template('projects.html', projects=rows)
+    active_since = (date.today() - timedelta(days=30)).isoformat()
+    return render_template('projects.html', projects=rows, active_since=active_since)
+
+
+@app.route('/search')
+@login_required
+def search():
+    q = request.args.get('q', '').strip()[:100]
+    found = {'projects': [], 'cases': []}
+    if q:
+        like = '%' + q.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'
+        found['projects'] = con().execute(
+            'SELECT id, name, description FROM projects WHERE name LIKE ? OR description LIKE ? ORDER BY name LIMIT 20',
+            (like, like)).fetchall()
+        m = re.fullmatch(r'(?i)(?:tc-?)?(\d{1,7})', q)   # "TC-12" / "12" also finds by test case number
+        found['cases'] = con().execute(
+            'SELECT c.id, c.tc_no, c.title, p.name AS project FROM cases c JOIN projects p ON p.id=c.project_id '
+            'WHERE c.title LIKE ? OR c.tc_no=? ORDER BY c.updated_at DESC LIMIT 50',
+            (like, int(m.group(1)) if m else -1)).fetchall()
+    return render_template('search.html', q=q, found=found)
 
 
 @app.route('/projects/new', methods=['POST'])
@@ -472,7 +633,66 @@ def project_new():
     except Exception:
         flash(f'A project named "{name}" already exists.', 'danger')
         return redirect(url_for('projects'))
+    if '1' in request.form.getlist('setup_modules') or 'setup_modules' not in request.form:   # next: modules -> sub-modules
+        return redirect(url_for('modules.setup', pid=pid, new=1))
     return redirect(url_for('project', pid=pid))
+
+
+HEALTH_WINDOW = 10   # a case is judged on its last N finished runs
+
+
+@app.route('/projects/<int:pid>/health')
+@login_required
+def project_health(pid):
+    """Test Health: failing now, flaky (passed and failed within the last runs), never run, and why."""
+    p = project_or_404(pid)
+    cases = con().execute(
+        'SELECT c.id, c.tc_no, c.title, f.name AS folder FROM cases c LEFT JOIN folders f ON f.id=c.folder_id '
+        'WHERE c.project_id=? AND (c.folder_id IS NULL OR f.archived=0) ORDER BY c.tc_no', (pid,)).fetchall()
+    by_case = {}
+    for r in con().execute(
+            "SELECT r.id, r.case_id, r.status, r.duration_ms, r.started_at, r.fail_step, r.fail_reason, r.error "
+            "FROM runs r JOIN cases c ON c.id=r.case_id WHERE c.project_id=? "
+            "AND r.status IN ('PASSED', 'FAILED', 'PARTIAL', 'ERROR') ORDER BY r.id DESC", (pid,)):
+        by_case.setdefault(r['case_id'], []).append(r)
+    rows, all_runs, all_pass = [], 0, 0
+    for c in cases:
+        runs = by_case.get(c['id'], [])
+        last = runs[:HEALTH_WINDOW]
+        statuses = {r['status'] for r in last}
+        times = [r['duration_ms'] for r in last if r['duration_ms']]
+        passed = sum(r['status'] == 'PASSED' for r in runs)
+        all_runs, all_pass = all_runs + len(runs), all_pass + passed
+        state = ('never' if not runs else 'failing' if runs[0]['status'] != 'PASSED'
+                 else 'flaky' if 'PASSED' in statuses and statuses - {'PASSED'} else 'passing')
+        rows.append(dict(c, runs=len(runs), recent=list(reversed(last)), state=state,
+                         pass_pct=round(100 * passed / len(runs)) if runs else None,
+                         avg_ms=int(sum(times) / len(times)) if times else None,
+                         last_fail=next((r for r in runs if r['status'] != 'PASSED'), None)))
+    counts = {k: sum(r['state'] == k for r in rows) for k in ('failing', 'flaky', 'never', 'passing')}
+    counts['all'] = len(rows)
+    show = request.args.get('show') if request.args.get('show') in ('failing', 'flaky', 'never') else 'all'
+    order = {'failing': 0, 'flaky': 1, 'passing': 2, 'never': 3}
+    shown = sorted((r for r in rows if show == 'all' or r['state'] == show),
+                   key=lambda r: (order[r['state']], r['pass_pct'] if r['pass_pct'] is not None else 101, r['tc_no']))
+    s = {'cases': len(rows), 'passing': counts['passing'], 'failing': counts['failing'], 'flaky': counts['flaky'],
+         'never': counts['never'], 'pass_pct': round(100 * all_pass / all_runs) if all_runs else None}
+    return render_template('health.html', p=p, rows=shown, s=s, counts=counts, show=show, window=HEALTH_WINDOW)
+
+
+@app.route('/projects/<int:pid>/login-helper', methods=['GET', 'POST'])
+@login_required
+def project_login(pid):
+    """Login steps put in front of every case of the project when it runs (web, Test Runs, tester run)."""
+    p = project_or_404(pid)
+    if request.method == 'POST':
+        steps = request.form.get('login_helper', '').replace('\r\n', '\n').strip()[:4000]
+        with con():
+            con().execute('UPDATE projects SET login_helper=? WHERE id=?', (steps or None, pid))
+        flash('Login helper saved: it now runs before every test case of this project.' if steps
+              else 'Login helper removed: test cases must sign in themselves.', 'success')
+        return redirect(url_for('project_login', pid=pid))
+    return render_template('project_login.html', p=p)
 
 
 @app.route('/projects/<int:pid>')
@@ -484,9 +704,9 @@ def project(pid):
     q = request.args.get('q', '').strip()
     # n = cases in folder, ran = cases in folder run at least once (shown as ran/n)
     folders = con().execute(
-        'SELECT f.*, COUNT(c.id) AS n, COUNT(DISTINCT r.case_id) AS ran FROM folders f '
+        'SELECT f.*, COUNT(DISTINCT c.id) AS n, COUNT(DISTINCT r.case_id) AS ran FROM folders f '
         'LEFT JOIN cases c ON c.folder_id=f.id LEFT JOIN runs r ON r.case_id=c.id '
-        'WHERE f.project_id=? GROUP BY f.id ORDER BY f.name', (pid,)).fetchall()
+        'WHERE f.project_id=? GROUP BY f.id ORDER BY f.sort, f.name', (pid,)).fetchall()
     active_folders = [f for f in folders if not f['archived']]
     archived_folders = [f for f in folders if f['archived']]
     current = next((f for f in folders if f['id'] == folder_id), None)
@@ -507,8 +727,9 @@ def project(pid):
     if tab == 'cases':
         where, params = [live if not folder_id else 'c.project_id=?'], [pid]
         if folder_id:
-            where.append('c.folder_id=?')
-            params.append(folder_id)
+            ids = modules.descendants(con(), pid, folder_id)
+            where.append(f'c.folder_id IN ({",".join("?" * len(ids))})')
+            params += ids
         if q:
             where.append("(c.title LIKE ? OR CONCAT('TC-', c.tc_no) LIKE ?)")
             params += [f'%{q}%', f'%{q}%']
@@ -535,8 +756,16 @@ def project(pid):
         tag_map = {r['id']: case_tags(r['content']) for r in rows}
         all_tags = sorted({t for ts in tag_map.values() for t in ts})
         cases = [r for r in rows if not f['tag'] or f['tag'] in tag_map[r['id']]]
-        all_authors = [r[0] for r in con().execute(
-            'SELECT DISTINCT created_by FROM cases WHERE project_id=? AND created_by IS NOT NULL ORDER BY 1', (pid,))]
+        # User filter: everyone who created a case in this project, shown by name; you first
+        me_name = current_user()['username']
+        counts = {r['created_by']: r['n'] for r in con().execute(
+            'SELECT created_by, COUNT(*) AS n FROM cases WHERE project_id=? AND created_by IS NOT NULL '
+            'GROUP BY created_by', (pid,))}
+        people = [{'username': u['username'], 'name': u['name'], 'n': counts.pop(u['username'], 0)}
+                  for u in con().execute('SELECT username, name FROM users')]
+        people += [{'username': k, 'name': None, 'n': v} for k, v in counts.items()]   # 'import', removed accounts
+        all_authors = sorted(people, key=lambda r: (r['username'] != me_name, r['username'] == 'import',
+                                                    (r['name'] or r['username']).lower()))
         if request.args.get('view') == 'dups':
             dups = find_duplicates(pid)
     else:
@@ -547,10 +776,29 @@ def project(pid):
         runs = con().execute(
             'SELECT r.*, cs.title, cs.tc_no FROM runs r JOIN cases cs ON cs.id=r.case_id '
             f'WHERE {" AND ".join(where)} ORDER BY r.id DESC LIMIT 200', params).fetchall()
+    # "All Test Cases" opens on what you ran today; a folder, a search, a filter or "Show all" lists everything.
+    today_view = (tab == 'cases' and not folder_id and not q and not any(v for k, v in f.items() if k != 'sort')
+                  and request.args.get('all') != '1' and request.args.get('view') != 'dups')
+    mine = {}
+    if tab == 'cases':
+        rows_today = con().execute(
+            'SELECT r.case_id, COUNT(*) AS n, MAX(r.id) AS last_id FROM runs r JOIN cases c ON c.id=r.case_id '
+            'WHERE c.project_id=? AND r.run_by=? AND r.started_at >= ? GROUP BY r.case_id',
+            (pid, current_user()['username'], db.now()[:10])).fetchall()
+        if rows_today:
+            last = {r['id']: r for r in con().execute(
+                f'SELECT id, status, started_at FROM runs WHERE id IN ({",".join("?" * len(rows_today))})',
+                [r['last_id'] for r in rows_today])}
+            mine = {r['case_id']: dict(n=r['n'], last_id=r['last_id'], status=last[r['last_id']]['status'],
+                                       at=last[r['last_id']]['started_at']) for r in rows_today}
+        if today_view:   # today's cases first, latest run on top; the rest stay in the page for instant search
+            cases = sorted(cases, key=lambda c: -mine[c['id']]['last_id'] if c['id'] in mine else 0)
     return render_template('project.html', p=p, tab=tab, folders=active_folders, archived=archived_folders,
                            current=current, cases=cases, runs=runs, folder_id=folder_id, q=q, total=total,
                            n_runs=n_runs, f=f, sorts=SORTS, status_filters=STATUS_FILTERS, all_tags=all_tags,
-                           all_authors=all_authors, dups=dups, view=request.args.get('view', ''))
+                           all_authors=all_authors, dups=dups, view=request.args.get('view', ''),
+                           today_view=today_view, mine=mine, mods=modules.tree(active_folders),
+                           folder_labels=modules.label_map(folders))
 
 
 SORTS = {   # key -> (label, ORDER BY); fixed whitelist, never built from the request
@@ -686,8 +934,8 @@ def cases_bulk(pid):
             with con():
                 rid = con().execute('INSERT INTO runs(case_id, status, started_at, run_by, env_name) VALUES (?,?,?,?,?)',
                                     (r['id'], 'running', db.now(), current_user()['username'], env['name'] if env else None)).lastrowid
-            threading.Thread(target=_run_case, args=(rid, r['content'], not b['ok'], case_base_dir(r), env['id'] if env else None),
-                             daemon=True).start()
+            threading.Thread(target=_run_case, args=(rid, r['content'], not b['ok'], case_base_dir(r), env['id'] if env else None,
+                                                     pid), daemon=True).start()
             started += 1
         flash(f'Queued {started} run(s) on {env["name"] if env else "the default environment"}. They run one after another on this PC.'
               + (' ' + b['message'] + ' AI steps will be skipped.' if not b['ok'] else ''), 'warning' if not b['ok'] else 'info')
@@ -705,10 +953,15 @@ def folder_or_404(pid, fid):
 @login_required
 def folder_new(pid):
     project_or_404(pid)
-    name = request.form.get('name', '').strip()[:80]
+    name = request.form.get('name', '').strip()[:160]
+    parent = request.form.get('parent_id', type=int) or 0
+    if parent and not con().execute('SELECT 1 FROM folders WHERE id=? AND project_id=? AND parent_id=0', (parent, pid)).fetchone():
+        parent = 0   # sub-modules hang only under a module (two levels)
     if name:
         with con():
-            fid = db.get_or_create_folder(con(), pid, name)
+            row = con().execute('SELECT id FROM folders WHERE project_id=? AND parent_id=? AND name=?', (pid, parent, name)).fetchone()
+            fid = row['id'] if row else con().execute('INSERT INTO folders(project_id, parent_id, name) VALUES (?,?,?)',
+                                                      (pid, parent, name)).lastrowid
         return redirect(url_for('project', pid=pid, folder=fid))
     return redirect(url_for('project', pid=pid))
 
@@ -716,11 +969,12 @@ def folder_new(pid):
 @app.route('/projects/<int:pid>/folders/<int:fid>/rename', methods=['POST'])
 @login_required
 def folder_rename(pid, fid):
-    folder_or_404(pid, fid)
-    name = request.form.get('name', '').strip()[:80]
+    fo = folder_or_404(pid, fid)
+    name = request.form.get('name', '').strip()[:160]
     if not name:
         flash('Folder name is required.', 'danger')
-    elif con().execute('SELECT 1 FROM folders WHERE project_id=? AND name=? AND id<>?', (pid, name, fid)).fetchone():
+    elif con().execute('SELECT 1 FROM folders WHERE project_id=? AND parent_id=? AND name=? AND id<>?',
+                       (pid, fo['parent_id'], name, fid)).fetchone():
         flash(f'A folder named "{name}" already exists.', 'danger')
     else:
         with con():
@@ -734,8 +988,9 @@ def folder_archive(pid, fid):
     f = folder_or_404(pid, fid)
     archive = 0 if f['archived'] else 1
     with con():
-        con().execute('UPDATE folders SET archived=? WHERE id=?', (archive, fid))
-    flash(f'Folder "{f["name"]}" {"archived" if archive else "restored"}.', 'success')
+        con().execute('UPDATE folders SET archived=? WHERE id=? OR (parent_id=? AND project_id=?)', (archive, fid, fid, pid))
+    flash(f'Folder "{f["name"]}" {"archived" if archive else "restored"}'
+          f'{" with its sub-modules" if not f["parent_id"] else ""}.', 'success')
     return redirect(url_for('project', pid=pid, folder=None if archive else fid))
 
 
@@ -844,6 +1099,33 @@ def run_has(run, name):
 app.jinja_env.globals.update(group_steps=group_steps, case_tags=case_tags, run_has=run_has)
 
 
+def run_history(runs):
+    """Totals for the case's History tab: how often it ran, passed, failed, and how long it takes."""
+    done = [r for r in runs if r['status'] in ('PASSED', 'FAILED', 'PARTIAL', 'ERROR')]
+    times = [r['duration_ms'] for r in done if r['duration_ms']]
+    passed = sum(r['status'] == 'PASSED' for r in done)
+    return {'total': len(done), 'passed': passed, 'failed': sum(r['status'] == 'FAILED' for r in done),
+            'other': sum(r['status'] in ('PARTIAL', 'ERROR') for r in done),
+            'pass_pct': round(100 * passed / len(done)) if done else None,
+            'avg_ms': int(sum(times) / len(times)) if times else None,
+            'min_ms': min(times) if times else None, 'max_ms': max(times) if times else None,
+            'last_pass': next((r for r in done if r['status'] == 'PASSED'), None),
+            'last_fail': next((r for r in done if r['status'] != 'PASSED'), None)}
+
+
+def run_fail(run, steps):
+    """Why the shown run did not pass: the step, a plain reason, its screenshot -> dict, or None."""
+    if not run or run['status'] not in ('FAILED', 'PARTIAL', 'ERROR'):
+        return None
+    if run['status'] == 'ERROR':
+        return {'step': None, 'text': None, 'reason': run['error'] or 'The run could not finish.', 'shot': None, 'at': None}
+    f = db.run_failure(steps)
+    if not f:
+        return None
+    s = next((x for x in steps if x.get('n') == f['step']), {})
+    return dict(f, shot=s.get('shot'), at=s.get('at'), raw=s.get('error'))
+
+
 @app.route('/cases/<int:cid>')
 @login_required
 def case(cid):
@@ -859,6 +1141,7 @@ def case(cid):
     any_running = any(r['status'] in ('running', 'queued') for r in runs)
     cstate = code_state(c, gen)
     return render_template('case.html', c=c, runs=runs, run=run, steps=steps, has_video=has_video,
+                           history=run_history(runs), fail=run_fail(run, steps),
                            tab=tab, any_running=any_running, public=False, gen=gen, gen_error=gen_error,
                            cstate=cstate, code_open=bool(request.args.get('item') or request.args.get('file')),
                            file=request.args.get('file') if request.args.get('file') in CODE_FILES else 'test.py')
@@ -869,12 +1152,15 @@ _CODE_CACHE = {}   # (case id, updated_at) -> generated result; a case edit chan
 
 def generate_code(c):
     """Runs codegen.js (same step parser as the runner) -> ({title, steps, code}, error)."""
-    key = (c['id'], c['updated_at'], hash(c['content']))
+    helper = (con().execute('SELECT login_helper FROM projects WHERE id=?', (c['project_id'],)).fetchone() or {}).get('login_helper') or ''
+    key = (c['id'], c['updated_at'], hash(c['content']), hash(helper))
     if key in _CODE_CACHE:
         return _CODE_CACHE[key], None
+    login_path = db.login_helper_file(con(), c['project_id'])
     try:
         proc = subprocess.run(['node', os.path.join(db.RUNNER_DIR, 'codegen.js'), '--id', f"TC-{c['tc_no']}",
-                               '--vars', db.VARS_FILE] + (['--base', case_base_dir(c)] if case_base_dir(c) else []),
+                               '--vars', db.VARS_FILE] + (['--base', case_base_dir(c)] if case_base_dir(c) else [])
+                              + (['--login', login_path] if login_path else []),
                               input=c['content'], cwd=db.RUNNER_DIR, capture_output=True, text=True,
                               encoding='utf-8', errors='replace', timeout=30)
         if proc.returncode != 0:
@@ -884,6 +1170,9 @@ def generate_code(c):
         return None, 'Node.js not found on this PC.'
     except (subprocess.TimeoutExpired, json.JSONDecodeError):
         return None, 'Code generator did not respond.'
+    finally:
+        if login_path and os.path.exists(login_path):
+            os.remove(login_path)
     result['hash'] = hashlib.sha256(result['files']['test.py'].encode('utf-8')).hexdigest()
     if len(_CODE_CACHE) > 500:
         _CODE_CACHE.clear()
@@ -992,22 +1281,33 @@ def case_base_dir(c):
     return d if d and os.path.isdir(d) else None
 
 
-def _run_case(run_id, content, no_ai=False, base_dir=None, env_id=None):
+def _run_case(run_id, content, no_ai=False, base_dir=None, env_id=None, project_id=None):
     """Background worker: writes the case to a temp file and runs run.js on it."""
     with RUN_LOCK:
         fd, path = tempfile.mkstemp(suffix='_test.md', dir=db.DATA)
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
             f.write(content)
-        run_dir, err, vars_path = None, None, None
+        run_dir, err, vars_path, login_path = None, None, None, None
         try:
             with db.connect() as c:
                 env = envs.get(c, env_id)
+                login_path = db.login_helper_file(c, project_id)
             vars_path = envs.vars_file(env) if env else None
+            import api as _api
+            with db.connect() as c:
+                who = c.execute('SELECT run_by FROM runs WHERE id=?', (run_id,)).fetchone()
+            run_token = _api.issue_run_token(who['run_by'] if who and who['run_by'] else 'admin')
+            run_env = {**os.environ, 'LTH_SERVER': f"http://127.0.0.1:{app.config.get('LTH_PORT', 5050)}",
+                       'LTH_RUN_TOKEN': run_token, 'LTH_ENV': str(env['id']) if env else ''}
+            for k in ('LTH_USER', 'LTH_KEY'):   # server runs use the run token, not a CLI key
+                run_env.pop(k, None)
             cmd = (['node', os.path.join(db.RUNNER_DIR, 'run.js'), path] + (['--no-ai'] if no_ai else [])
-                   + (['--base', base_dir] if base_dir else []) + (['--vars', vars_path] if vars_path else []))
-            proc = subprocess.run(cmd,
+                   + (['--base', base_dir] if base_dir else []) + (['--vars', vars_path] if vars_path else [])
+                   + (['--login', login_path] if login_path else []))
+            proc = subprocess.run(cmd, env=run_env,
                                   cwd=db.RUNNER_DIR, capture_output=True, text=True, encoding='utf-8',
                                   errors='replace', timeout=1800)
+            _api.revoke_run_token(run_token)
             m = re.search(r'REPORT : (.+)', proc.stdout)
             if m:
                 run_dir = os.path.dirname(m.group(1).strip())
@@ -1021,11 +1321,27 @@ def _run_case(run_id, content, no_ai=False, base_dir=None, env_id=None):
             os.remove(path)
             if vars_path and os.path.exists(vars_path):
                 os.remove(vars_path)   # holds the environment password
+            if login_path and os.path.exists(login_path):
+                os.remove(login_path)
         with db.connect() as c:
             if run_dir:
                 db.record_finished_run(c, run_id, run_dir)
             else:
                 c.execute("UPDATE runs SET status='ERROR', error=? WHERE id=?", (err, run_id))
+
+
+def start_case_run(c, env_id=None):
+    """Starts one run of a test case in the background (same path for the Run test button and the Test Assistant).
+    Returns (run_id, budget status). Over the AI limit the run still goes, without AI steps."""
+    import budget
+    b = budget.status(con(), current_user())
+    env = envs.get(con(), env_id)
+    with con():
+        run_id = con().execute('INSERT INTO runs(case_id, status, started_at, run_by, env_name) VALUES (?,?,?,?,?)',
+                               (c['id'], 'running', db.now(), current_user()['username'], env['name'] if env else None)).lastrowid
+    threading.Thread(target=_run_case, args=(run_id, c['content'], not b['ok'], case_base_dir(c), env['id'] if env else None,
+                                             c['project_id']), daemon=True).start()
+    return run_id, b
 
 
 @app.route('/cases/<int:cid>/run', methods=['POST'])
@@ -1035,14 +1351,7 @@ def case_run(cid):
     if con().execute("SELECT 1 FROM runs WHERE case_id=? AND status IN ('running', 'queued')", (cid,)).fetchone():
         flash('This test is already running.', 'warning')
         return redirect(url_for('case', cid=cid))
-    import budget
-    b = budget.status(con(), current_user())
-    env = envs.get(con(), request.form.get('env_id', type=int))
-    with con():
-        run_id = con().execute('INSERT INTO runs(case_id, status, started_at, run_by, env_name) VALUES (?,?,?,?,?)',
-                               (cid, 'running', db.now(), current_user()['username'], env['name'] if env else None)).lastrowid
-    threading.Thread(target=_run_case, args=(run_id, c['content'], not b['ok'], case_base_dir(c), env['id'] if env else None),
-                     daemon=True).start()
+    run_id, b = start_case_run(c, request.form.get('env_id', type=int))
     if not b['ok']:
         flash(b['message'] + ' This run skips AI steps; the other steps still run.', 'warning')
     else:
@@ -1122,7 +1431,7 @@ def shared(token):
     c = case_or_404(run['case_id'])
     steps, has_video = run_view_data(run)
     return render_template('case.html', c=c, runs=[run], run=run, steps=steps, has_video=has_video,
-                           tab='summary', any_running=False, public=True, token=token)
+                           fail=run_fail(run, steps), tab='summary', any_running=False, public=True, token=token)
 
 
 @app.route('/s/<token>/file/<name>')
@@ -1146,9 +1455,28 @@ def _env_form(existing=None):
     pw_enc = (existing['password_enc'] if existing else None) if pw == '' else envs.encrypt(pw)
     if f.get('clear_password'):
         pw_enc = None
-    return {'name': name, 'base_url': url, 'username': f.get('username', '').strip()[:120] or None,
+    # read-only database of the app under test (optional)
+    db_host, db_name, db_user = (f.get('db_host', '').strip()[:255] or None, f.get('db_name', '').strip()[:64] or None,
+                                 f.get('db_user', '').strip()[:64] or None)
+    db_port = f.get('db_port', '').strip()
+    if db_port and not (db_port.isdigit() and 0 < int(db_port) < 65536):
+        return None, 'Database port must be a number (e.g. 3306).'
+    if any((db_host, db_name, db_user)) and not all((db_host, db_name, db_user)):
+        return None, 'Database: fill in host, database name and user together (or leave all three blank).'
+    if db_user and db_user.lower() in ('root', 'admin'):
+        return None, 'Database: use a read-only user (SELECT only), never root / admin.'
+    dpw = f.get('db_password', '')
+    db_pw_enc = (existing['db_password_enc'] if existing else None) if dpw == '' else envs.encrypt(dpw)
+    if f.get('clear_db') or not db_host:
+        db_host = db_name = db_user = db_pw_enc = None
+        db_port = ''
+    return {'db_host': db_host, 'db_port': int(db_port) if db_port else None, 'db_name': db_name, 'db_user': db_user,
+            'db_password_enc': db_pw_enc,
+            'name': name, 'base_url': url, 'username': f.get('username', '').strip()[:120] or None,
             'password_enc': pw_enc, 'branch': f.get('branch', '').strip()[:120] or None,
-            'note': f.get('note', '').strip()[:255] or None}, None
+            'note': f.get('note', '').strip()[:255] or None,
+            'login_steps': f.get('login_steps', '').replace('\r\n', '\n').strip()[:4000] or None,
+            'menu_url': f.get('menu_url', '').strip()[:500] or None}, None
 
 
 @app.route('/admin/environments', methods=['GET', 'POST'])
@@ -1162,9 +1490,11 @@ def environments():
             with con():
                 first = not con().execute('SELECT COUNT(*) AS n FROM environments').fetchone()['n']
                 con().execute('INSERT INTO environments(name, base_url, username, password_enc, branch, note, is_default, '
-                              'created_by, updated_at) VALUES (?,?,?,?,?,?,?,?,?)',
+                              'created_by, updated_at, login_steps, menu_url, db_host, db_port, db_name, db_user, '
+                              'db_password_enc) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                               (v['name'], v['base_url'], v['username'], v['password_enc'], v['branch'], v['note'],
-                               1 if first else 0, current_user()['username'], db.now()))
+                               1 if first else 0, current_user()['username'], db.now(), v['login_steps'], v['menu_url'],
+                               v['db_host'], v['db_port'], v['db_name'], v['db_user'], v['db_password_enc']))
             flash(f'Environment "{v["name"]}" added.', 'success')
         return redirect(url_for('environments'))
     return render_template('environments.html', envs=envs.all_envs(con()))
@@ -1191,10 +1521,27 @@ def environment_update(eid):
                 flash(err, 'danger')
             else:
                 con().execute('UPDATE environments SET name=?, base_url=?, username=?, password_enc=?, branch=?, note=?, '
-                              'updated_at=? WHERE id=?', (v['name'], v['base_url'], v['username'], v['password_enc'],
-                                                          v['branch'], v['note'], db.now(), eid))
+                              'login_steps=?, menu_url=?, db_host=?, db_port=?, db_name=?, db_user=?, db_password_enc=?, '
+                              'updated_at=? WHERE id=?',
+                              (v['name'], v['base_url'], v['username'], v['password_enc'], v['branch'], v['note'],
+                               v['login_steps'], v['menu_url'], v['db_host'], v['db_port'], v['db_name'], v['db_user'],
+                               v['db_password_enc'], db.now(), eid))
                 flash(f'Environment "{v["name"]}" saved.', 'success')
     return redirect(url_for('environments'))
+
+
+@app.route('/admin/environments/<int:eid>/db-test', methods=['POST'])
+@admin_required
+def environment_db_test(eid):
+    """Connects with the saved read-only user and proves it cannot write."""
+    from flask import jsonify
+    e = con().execute('SELECT * FROM environments WHERE id=?', (eid,)).fetchone() or abort(404)
+    try:
+        r = envs.db_query(e, 'SELECT DATABASE() AS db, CURRENT_USER() AS who, VERSION() AS v')
+    except envs.DbError as ex:
+        return jsonify({'ok': False, 'message': str(ex)})
+    db_, who, ver = r['rows'][0]
+    return jsonify({'ok': True, 'message': f'Connected to {db_} as {who} (MySQL {ver}). Session is read-only.'})
 
 
 @app.route('/cases/<int:cid>/qa', methods=['POST'])
@@ -1307,6 +1654,45 @@ def ai_credit_delete(cid):
 DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 
 
+AI_KIND = {'run': 'AI step in a run', 'generate': 'Generate with AI', 'cli-step': 'AI step from CLI / IDE', 'chat': 'Test Assistant chat'}
+
+
+@app.route('/admin/ai-usage/case/<int:cid>')
+@admin_required
+def ai_usage_case(cid):
+    """Every AI call of one test case (cid 0 = calls not linked to any test case), with input / output / cache tokens."""
+    import csv
+    import io
+    import pricing
+    c = con()
+    case = None
+    if cid:
+        case = c.execute('SELECT cs.id, cs.tc_no, cs.title, p.name AS project FROM cases cs JOIN projects p ON p.id=cs.project_id '
+                         'WHERE cs.id=?', (cid,)).fetchone()
+    rows = c.execute('SELECT u.*, p.name AS project FROM ai_usage u LEFT JOIN projects p ON p.id=u.project_id '
+                     f'WHERE {"u.case_id=?" if cid else "u.case_id IS NULL"} ORDER BY u.id DESC LIMIT 2000',
+                     (cid,) if cid else ()).fetchall()
+    if cid and not case and not rows:
+        abort(404)
+    keys = ('calls', 'input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens', 'cost_usd')
+    total = {k: sum((r[k] or 0) for r in rows) for k in keys}
+    rate = pricing.usd_inr(c)
+    if request.args.get('format') == 'csv':
+        buf = io.StringIO()
+        wr = csv.writer(buf)
+        wr.writerow(['When', 'Used for', 'User', 'Model', 'Run', 'AI calls', 'Input tokens', 'Output tokens', 'Cache read tokens',
+                     'Cache write tokens', 'Total tokens', 'Cost USD', f'Cost INR (@{rate:g})', 'Note'])
+        for r in rows:
+            tot = sum((r[k] or 0) for k in keys[1:5])
+            wr.writerow([r['at'], AI_KIND.get(r['kind'], r['kind']), r['username'] or '', r['model'] or '', r['run_id'] or '', r['calls'],
+                         r['input_tokens'], r['output_tokens'], r['cache_read_tokens'], r['cache_write_tokens'], tot,
+                         f"{r['cost_usd'] or 0:.4f}", f"{(r['cost_usd'] or 0) * rate:.2f}", r['note'] or ''])
+        name = f"TC-{case['tc_no']}" if case else 'not-linked'
+        return app.response_class(buf.getvalue(), mimetype='text/csv',
+                                  headers={'Content-Disposition': f'attachment; filename=ai-usage-{name}.csv'})
+    return render_template('ai_usage_case.html', case=case, rows=rows, total=total, inr=rate, kinds=AI_KIND, cid=cid)
+
+
 @app.route('/admin/ai-usage')
 @admin_required
 def ai_usage():
@@ -1339,7 +1725,8 @@ def ai_usage():
     totals = c.execute(f'SELECT COUNT(*) AS events, {agg}, COUNT(DISTINCT u.case_id) AS cases FROM ai_usage u WHERE {w}', params).fetchone()
     by_case = c.execute(
         f'SELECT u.case_id, MAX(cs.tc_no) AS tc_no, MAX(cs.title) AS title, MAX(p.name) AS project, COUNT(DISTINCT u.run_id) AS runs, '
-        f"SUM(u.kind='generate') AS gens, MAX(u.at) AS last_at, {agg} FROM ai_usage u "
+        f"SUM(u.kind='generate') AS gens, SUM(u.kind='chat') AS chats, MAX(u.at) AS last_at, "
+        f'SUM(u.cache_read_tokens) AS tcr, SUM(u.cache_write_tokens) AS tcw, {agg} FROM ai_usage u '
         f'LEFT JOIN cases cs ON cs.id=u.case_id LEFT JOIN projects p ON p.id=u.project_id '
         f'WHERE {w} GROUP BY u.case_id ORDER BY cost DESC LIMIT 500', params).fetchall()
     if a.get('format') == 'csv':
@@ -1405,6 +1792,18 @@ def case_ai_cost(cid):
 app.jinja_env.globals['case_ai_cost'] = case_ai_cost
 
 
+def static_v(name):
+    """Static file URL with its modified time, so browsers fetch a changed CSS / JS file instead of a cached one."""
+    try:
+        v = int(os.path.getmtime(os.path.join(app.static_folder, name)))
+    except OSError:
+        v = 0
+    return url_for('static', filename=name, v=v)
+
+
+app.jinja_env.globals['static_v'] = static_v
+
+
 from api import bp as api_bp   # noqa: E402  (CLI / IDE API, access-key auth)
 app.register_blueprint(api_bp)
 
@@ -1427,7 +1826,7 @@ def start_case_runs(c, cases, env, username, exec_id=None):
                 u = w.execute('SELECT id, username FROM users WHERE username=?', (username,)).fetchone()
                 no_ai = not budget.status(w, u)['ok'] if u else False   # re-checked per case: the limit can be hit mid-run
             try:
-                _run_case(rid, case['content'], no_ai, case_base_dir(case), env['id'] if env else None)
+                _run_case(rid, case['content'], no_ai, case_base_dir(case), env['id'] if env else None, case['project_id'])
             except Exception as ex:   # never stop the queue because one case broke
                 with db.connect() as w:
                     w.execute("UPDATE runs SET status='ERROR', error=? WHERE id=?", (f'Runner crashed: {ex}'[:300], rid))
@@ -1444,7 +1843,25 @@ testruns_bp = testruns.make_blueprint({'con': con, 'login_required': login_requi
 app.register_blueprint(testruns_bp)
 
 import reports   # noqa: E402  (User Report; gets con/admin_required passed in instead of importing app)
-app.register_blueprint(reports.make_blueprint(con, admin_required))
+app.register_blueprint(reports.make_blueprint(con, login_required))   # access: 'reports.view' permission (settings.py)
+
+import clitool   # noqa: E402  (Tester CLI page + the npm package /cli/tester.tgz)
+app.register_blueprint(clitool.make_blueprint(login_required))
+
+import settings   # noqa: E402  (Settings: roles & permissions guard, system settings, audit log)
+settings.register(app, con, admin_required, current_user)
+
+import modules   # noqa: E402  (modules -> sub-modules: folder tree + 'Set up modules' from the app's menu)
+modules.register(app, con, login_required, current_user, project_or_404)
+
+import assistant   # noqa: E402  (Test Assistant: chat -> what I understood -> draft test case -> save / run)
+assistant.register(app, con, login_required, current_user, project_or_404, start_case_run)
+
+import coderepo   # noqa: E402  (read-only copy of the app's source for the Test Assistant)
+coderepo.register(app, con, admin_required, project_or_404)
+
+import lessons   # noqa: E402  (lessons learned per project: read by the /tester skill, Test Assistant and Generate)
+lessons.register(app, con, login_required, current_user, project_or_404)
 
 
 if __name__ == '__main__':
@@ -1452,4 +1869,5 @@ if __name__ == '__main__':
     testruns_bp.start_scheduler()   # checks due schedules every 30 s while this server runs
     port = int(os.environ.get('PORT', '5050'))
     print(f' * LogiTestHub on http://localhost:{port}  (LAN: http://<this-pc-ip>:{port})')
+    app.config['LTH_PORT'] = port   # runners started by the server call back on this port
     app.run(host='0.0.0.0', port=port, threaded=True, debug=False)

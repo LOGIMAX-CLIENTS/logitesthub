@@ -13,6 +13,9 @@
       <a class="{{ 'active' if tab == 'runs' }}" href="{{ url_for('project', pid=p.id, folder=folder_id, tab='runs') }}">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m10 9.2 4.8 2.8-4.8 2.8z"/></svg>
         Test Runs <span class="pill">{{ n_runs }}</span></a>
+      <a href="{{ url_for('project_health', pid=p.id) }}" title="Failing and flaky test cases, and why">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2.5-6 4 12 2.5-6H21"/></svg>
+        Test Health</a>
     </nav>
 </div>
 <div class="tm">
@@ -43,39 +46,53 @@
               <li><button class="dropdown-item" type="button" onclick="tmSort('name')">Sort by name</button></li>
               <li><button class="dropdown-item" type="button" onclick="tmSort('count')">Sort by test count</button></li>
               <li><hr class="dropdown-divider"></li>
-              <li><button class="dropdown-item" type="button" onclick="tmNewFolder()">New folder</button></li>
+              <li><button class="dropdown-item" type="button" onclick="tmNewFolder()">New module / folder</button></li>
+              <li><a class="dropdown-item" href="{{ url_for('modules.setup', pid=p.id) }}">Set up modules from the app…</a></li>
+              <li><hr class="dropdown-divider"></li>
+              <li><button class="dropdown-item" type="button" onclick="tmExpand(true)">Expand all</button></li>
+              <li><button class="dropdown-item" type="button" onclick="tmExpand(false)">Collapse all</button></li>
             </ul>
           </div>
         </div>
 
         <form class="tm-newfolder" id="newFolderForm" method="post" action="{{ url_for('folder_new', pid=p.id) }}" hidden>
           <input type="hidden" name="csrf" value="{{ csrf }}">
-          <input class="form-control form-control-sm" name="name" maxlength="80" placeholder="Folder name" required>
+          <input type="hidden" name="parent_id" value="">
+          <input class="form-control form-control-sm" name="name" maxlength="160" placeholder="Module / folder name" required>
           <button class="btn btn-sm btn-primary">Add</button>
           <button class="btn btn-sm btn-link text-secondary" type="button" onclick="this.form.hidden=true">Cancel</button>
         </form>
 
         <div class="tm-folders" id="folderList">
-          {% for f in folders %}
-          <div class="tm-folder {{ 'active' if folder_id == f.id }}" data-name="{{ f.name|lower }}" data-count="{{ f.n }}">
-            <a class="tm-folder-link" href="{{ url_for('project', pid=p.id, folder=f.id, tab=None if tab == 'cases' else 'runs') }}" title="{{ f.name }}">
+          {% macro folder_row(f, cnt, ran, caret=False) -%}
+          <div class="tm-folder {{ 'active' if folder_id == f.id }}" data-name="{{ f.name|lower }}" data-count="{{ cnt }}">
+            {% if caret %}<button class="tm-mod-caret" type="button" aria-label="Show sub-modules of {{ f.name }}" onclick="tmMod(this)"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg></button>{% endif %}
+            <a class="tm-folder-link" href="{{ url_for('project', pid=p.id, folder=f.id, tab=None if tab == 'cases' else 'runs') }}" title="{{ f.name }}{{ (' · ' ~ f.link) if f.link }}">
               <span class="fi">{{ ico_folder }}</span><span class="fn">{{ f.name }}</span>
-              <span class="fc" title="{{ f.ran }} of {{ f.n }} test cases have been run">{{ f.ran }}/{{ f.n }}</span>
+              <span class="fc" title="{{ ran }} of {{ cnt }} test cases have been run">{{ ran }}/{{ cnt }}</span>
             </a>
             <div class="tm-folder-acts">
-              <a class="tm-icon sm" href="{{ url_for('case_new', pid=p.id, folder=f.id) }}" title="Add test case to this folder" aria-label="Add test case to {{ f.name }}">
+              <a class="tm-icon sm" href="{{ url_for('case_new', pid=p.id, folder=f.id) }}" title="Add test case to {{ f.name }}" aria-label="Add test case to {{ f.name }}">
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></a>
               <div class="dropdown">
                 <button class="tm-icon sm" type="button" data-bs-toggle="dropdown" aria-label="Folder actions for {{ f.name }}">{{ ico_dots }}</button>
                 <ul class="dropdown-menu dropdown-menu-end">
+                  {% if not f.parent_id %}<li><button class="dropdown-item" type="button" onclick="tmNewFolder({{ f.id }}, {{ f.name|tojson|forceescape }})">New sub-module</button></li>{% endif %}
                   <li><button class="dropdown-item" type="button" onclick="tmRename({{ f.id }}, {{ f.name|tojson|forceescape }})">Rename</button></li>
-                  <li><form method="post" action="{{ url_for('folder_archive', pid=p.id, fid=f.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="dropdown-item">Archive</button></form></li>
+                  <li><form method="post" action="{{ url_for('folder_archive', pid=p.id, fid=f.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="dropdown-item">Archive{{ ' (with sub-modules)' if caret }}</button></form></li>
                 </ul>
               </div>
             </div>
           </div>
+          {%- endmacro %}
+          {% for m in mods %}
+          {% set open = folder_id and (folder_id == m.id or m.children|selectattr('id', 'equalto', folder_id)|list) %}
+          <div class="tm-mod {{ 'open' if open }}" data-name="{{ m.name|lower }}" data-count="{{ m.total }}">
+            {{ folder_row(m, m.total, m.total_ran, m.children|length > 0) }}
+            {% if m.children %}<div class="tm-mod-kids">{% for k in m.children %}{{ folder_row(k, k.n, k.ran) }}{% endfor %}</div>{% endif %}
+          </div>
           {% else %}
-          <div class="tm-empty">No folders yet.</div>
+          <div class="tm-empty">No folders yet. <a href="{{ url_for('modules.setup', pid=p.id) }}">Set up modules</a> from the application's menu, or add a folder.</div>
           {% endfor %}
           <div class="tm-empty" id="noFolderMatch" hidden>No folder matches.</div>
         </div>
@@ -104,7 +121,7 @@
   <!-- ============ Right: cases / runs ============ -->
   <section class="tm-content">
     {% macro qs() -%}
-      {%- set base = {'folder': folder_id, 'q': q, 'sort': f.sort if f.sort != 'newest' else None, 'status': f.status or None, 'tag': f.tag or None, 'source': f.source or None, 'by': f.by or None, 'qa': f.qa or None} -%}
+      {%- set base = {'folder': folder_id, 'q': q, 'sort': f.sort if f.sort != 'newest' else None, 'status': f.status or None, 'tag': f.tag or None, 'source': f.source or None, 'by': f.by or None, 'qa': f.qa or None, 'all': request.args.get('all') or None} -%}
       {%- set _ = base.update(kwargs) -%}
       {{- url_for('project', pid=p.id, **base) -}}
     {%- endmacro %}
@@ -113,8 +130,16 @@
       <h1 class="h6 mb-0">{{ current.name if current else ('All Test Cases' if tab == 'cases' else 'All Test Runs') }}{% if current and current.archived %} <span class="badge text-bg-secondary">Archived</span>{% endif %}</h1>
       {% if tab == 'cases' %}
       <div class="tb-actions">
-        <a class="tb-link {{ 'on' if view == 'dups' }}" href="{{ qs(view=None if view == 'dups' else 'dups') }}">
+        <a class="tb-link {{ 'on' if view == 'dups' }}" href="{{ qs(view=None if view == 'dups' else 'dups') }}" title="Review Duplicates">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>Review Duplicates</a>
+        {% if can('cases.edit') %}<a class="tb-link" href="{{ url_for('modules.setup', pid=p.id) }}" title="Read the application's menu again (or type modules) and add what is new">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.6l2 2h7.4A2.5 2.5 0 0 1 21 9.5v8A2.5 2.5 0 0 1 18.5 20h-13A2.5 2.5 0 0 1 3 17.5Z"/><path d="M15.5 12.5a3.5 3.5 0 1 1-1-2.5M15.5 9.5v2.5H13"/></svg>Update Modules</a>{% endif %}
+        {% if is_admin %}<a class="tb-link" href="{{ url_for('coderepo.page', pid=p.id) }}" title="{{ ('Code: ' ~ (p.repo_branch or 'main') ~ ' (read-only, for the Test Assistant)') if p.repo_commit else "Connect this project's GitHub repository (read-only) for the Test Assistant" }}">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m8 7-5 5 5 5M16 7l5 5-5 5M13.5 5l-3 14"/></svg>{{ 'Code' if p.repo_commit else 'Code Repository' }}</a>{% endif %}
+        <a class="tb-link" href="{{ url_for('lessons.page', pid=p.id) }}" title="Why tests failed and how to avoid it: read by the Test Assistant, Generate with AI and the /tester skill">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.4 1 1.1 1 1.8V16h5v-.3c0-.7.4-1.4 1-1.8A6 6 0 0 0 12 3z"/></svg>Lessons</a>
+        {% if can('ai.generate') %}<a class="tb-link" href="{{ url_for('assistant.page', pid=p.id) }}" title="Describe a test in your own words; get a draft test case to save and run">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/><path d="M8.5 10.5h7M8.5 13.5h4.5"/></svg>Ask Assistant</a>{% endif %}
         <button class="tb-ai" type="button" data-bs-toggle="modal" data-bs-target="#aiModal">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 2.5 13.9 8l5.6 1.9-5.6 1.9L12 17.4l-1.9-5.6L4.5 9.9 10.1 8zM19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/></svg>Generate with AI</button>
         <div class="btn-group">
@@ -139,10 +164,19 @@
     <div class="tb-filters">
       <input class="form-check-input tb-all" type="checkbox" id="selAll" aria-label="Select all test cases">
       <form method="get" class="tb-search">
-        {% for k in ('folder', 'sort', 'status', 'tag', 'source', 'by') %}{% set v = folder_id if k == 'folder' else f[k] %}{% if v and not (k == 'sort' and v == 'newest') %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endif %}{% endfor %}
+        {% for k in ('folder', 'sort', 'status', 'tag', 'source', 'by', 'qa') %}{% set v = folder_id if k == 'folder' else f[k] %}{% if v and not (k == 'sort' and v == 'newest') %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endif %}{% endfor %}
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
         <input name="q" id="caseSearch" value="{{ q }}" placeholder="Search by Test Case ID or Title" aria-label="Search test cases" autocomplete="off">
       </form>
+      {% set by_u = all_authors|selectattr('username', 'equalto', f.by)|first if f.by else none %}
+      <div class="dropdown"><button class="tb-dd {{ 'set' if f.by }}" data-bs-toggle="dropdown" title="Filter by who created the test case">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c.8-3.6 3.6-5.5 7-5.5s6.2 1.9 7 5.5"/></svg>{% if f.by %}{{ ((by_u.name or ('Imported' if by_u.username == 'import' else by_u.username)) if by_u else f.by)|truncate(18, true, '…') }}{% else %}User{% endif %} {{ chev }}</button>
+        <ul class="dropdown-menu tb-scroll">
+          <li><a class="dropdown-item {{ 'active' if not f.by }}" href="{{ qs(by=None) }}">All users</a></li>
+          {% for u in all_authors %}<li><a class="dropdown-item d-flex justify-content-between gap-3 {{ 'active' if f.by == u.username }}" href="{{ qs(by=u.username) }}">
+            <span>{{ u.name or ('Imported (no user)' if u.username == 'import' else u.username) }}{% if u.username == me.username %} <span class="text-secondary small">(me)</span>{% endif %}</span><span class="text-secondary small">{{ u.n }}</span></a></li>
+          {% else %}<li><span class="dropdown-item-text text-secondary small">No creators recorded</span></li>{% endfor %}
+        </ul></div>
       <div class="dropdown"><button class="tb-dd {{ 'set' if f.sort != 'newest' }}" data-bs-toggle="dropdown">Sort{% if f.sort != 'newest' %}: {{ sorts[f.sort][0] }}{% endif %} {{ chev }}</button>
         <ul class="dropdown-menu">{% for k, v in sorts.items() %}<li><a class="dropdown-item {{ 'active' if f.sort == k }}" href="{{ qs(sort=None if k == 'newest' else k) }}">{{ v[0] }}</a></li>{% endfor %}</ul></div>
       <div class="dropdown"><button class="tb-dd {{ 'set' if f.status }}" data-bs-toggle="dropdown">Status{% if f.status %}: {{ status_filters[f.status] }}{% endif %} {{ chev }}</button>
@@ -151,7 +185,7 @@
       <div class="dropdown"><button class="tb-dd {{ 'set' if f.tag }}" data-bs-toggle="dropdown">Tags{% if f.tag %}: {{ f.tag }}{% endif %} {{ chev }}</button>
         <ul class="dropdown-menu tb-scroll"><li><a class="dropdown-item {{ 'active' if not f.tag }}" href="{{ qs(tag=None) }}">All tags</a></li>
           {% for t in all_tags %}<li><a class="dropdown-item {{ 'active' if f.tag == t }}" href="{{ qs(tag=t) }}">{{ t }}</a></li>{% else %}<li><span class="dropdown-item-text text-secondary small">No tags in these cases</span></li>{% endfor %}</ul></div>
-      <div class="dropdown"><button class="tb-dd {{ 'set' if f.source or f.by }}" data-bs-toggle="dropdown">
+      <div class="dropdown"><button class="tb-dd {{ 'set' if f.source or f.qa }}" data-bs-toggle="dropdown">
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M7 12h10M10 17h4"/></svg>More {{ chev }}</button>
         <ul class="dropdown-menu dropdown-menu-end tb-scroll">
           <li><h6 class="dropdown-header">QA status</h6></li>
@@ -163,11 +197,7 @@
           <li><a class="dropdown-item {{ 'active' if not f.source }}" href="{{ qs(source=None) }}">Any</a></li>
           <li><a class="dropdown-item {{ 'active' if f.source == 'imported' }}" href="{{ qs(source='imported') }}">Imported</a></li>
           <li><a class="dropdown-item {{ 'active' if f.source == 'web' }}" href="{{ qs(source='web') }}">Created in LogiTestHub</a></li>
-          <li><hr class="dropdown-divider"></li>
-          <li><h6 class="dropdown-header">Created by</h6></li>
-          <li><a class="dropdown-item {{ 'active' if not f.by }}" href="{{ qs(by=None) }}">Anyone</a></li>
-          {% for u in all_authors %}<li><a class="dropdown-item {{ 'active' if f.by == u }}" href="{{ qs(by=u) }}">{{ u }}</a></li>{% endfor %}
-          {% if q or f.status or f.tag or f.source or f.by or f.sort != 'newest' %}<li><hr class="dropdown-divider"></li>
+          {% if q or f.status or f.tag or f.source or f.by or f.qa or f.sort != 'newest' %}<li><hr class="dropdown-divider"></li>
           <li><a class="dropdown-item text-danger" href="{{ url_for('project', pid=p.id, folder=folder_id) }}">Clear all filters</a></li>{% endif %}
         </ul></div>
     </div>
@@ -186,7 +216,7 @@
         <button class="btn btn-sm btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown">Move to folder</button>
         <ul class="dropdown-menu tb-scroll">
           <li><button class="dropdown-item" type="button" onclick="bulk('move', '')">(no folder)</button></li>
-          {% for fo in folders %}<li><button class="dropdown-item" type="button" onclick="bulk('move', '{{ fo.id }}')">{{ fo.name }}</button></li>{% endfor %}
+          {% for fid, flabel in folder_options(folders) %}<li><button class="dropdown-item" type="button" onclick="bulk('move', '{{ fid }}')">{{ flabel }}</button></li>{% endfor %}
         </ul>
       </div>
       <button class="btn btn-sm btn-link text-secondary" type="button" onclick="document.querySelectorAll('.sel').forEach(function(x){x.checked=false});syncSel()">Clear</button>
@@ -204,16 +234,27 @@
     </div>
     {% endif %}
 
-    <div class="small text-secondary mb-2" id="caseCount">{{ cases|length }} test case{{ 's' if cases|length != 1 }}</div>
+    {% if today_view %}
+    <div class="small text-secondary mb-2" id="caseCount" data-today-view="1"><b class="text-body">Your runs today: {{ mine|length }} test case{{ 's' if mine|length != 1 }}</b>
+      · pick a folder or search to find others · <a href="{{ qs(all='1') }}">Show all {{ cases|length }}</a></div>
+    {% else %}
+    <div class="small text-secondary mb-2" id="caseCount">{{ cases|length }} test case{{ 's' if cases|length != 1 }}{% if request.args.get('all') == '1' %} · <a href="{{ qs(all=None) }}">Only my runs today</a>{% endif %}</div>
+    {% endif %}
+    {% if today_view and not mine %}
+    <div class="panel text-secondary mb-2" id="todayEmpty">You haven't run any test case in this project today. Pick a folder on the left, search above, or
+      <a href="{{ qs(all='1') }}">show all {{ cases|length }} test cases</a>.</div>
+    {% endif %}
     <div class="list" id="caseList">
       {% for c in cases %}
-      <div class="case-line" data-tc="{{ c.tc_no }}" data-title="{{ c.title|lower }}" data-folder="{{ (c.folder_name or '')|lower }}">
+      {% set my = mine.get(c.id) %}
+      <div class="case-line" data-tc="{{ c.tc_no }}" data-title="{{ c.title|lower }}" data-folder="{{ (c.folder_name or '')|lower }}"{% if my %} data-today="1"{% endif %}{% if today_view and not my %} hidden{% endif %}>
         <input class="form-check-input sel" type="checkbox" value="{{ c.id }}" aria-label="Select TC-{{ c.tc_no }}">
         <a class="list-row case-row flex-grow-1 min-w-0" href="{{ url_for('case', cid=c.id) }}">
           <span class="dot st-{{ (c.last_status or 'none')|lower }}" title="{{ c.last_status or 'Never run' }}"></span>
           <div class="flex-grow-1 min-w-0">
             <div class="fw-semibold text-truncate">{{ c.title }}</div>
             <div class="small text-secondary">TC-{{ c.tc_no }} · Updated {{ c.updated_at[:16] }} by {{ c.updated_by or '-' }}{% if c.folder_name %} · <span class="tm-inline-folder">{{ ico_folder }}</span> {{ c.folder_name }}{% endif %}</div>
+            {% if my %}<div class="small my-today">You ran it today{% if my.n > 1 %} {{ my.n }}×{% endif %} · last at {{ my.at[11:16] }} · <span class="t-{{ {'PASSED': 'pass', 'FAILED': 'fail'}.get(my.status, 'warn') }}">{{ my.status|capitalize }}</span></div>{% endif %}
           </div>
           {% if c.qa_status == 'ready' %}<span class="qa-tag">Ready for QA</span>{% endif %}
           {% if c.last_status %}<span class="badge st-{{ c.last_status|lower }}">{{ c.last_status }}</span>{% endif %}
@@ -253,7 +294,7 @@
           <div class="row g-2 mt-2">
             <div class="col-5"><label class="form-label" for="aiCount">How many</label><input class="form-control" id="aiCount" name="count" type="number" min="1" max="15" value="6"></div>
             <div class="col-7"><label class="form-label" for="aiFolder">Save to folder</label>
-              <select class="form-select" id="aiFolder" name="folder_id"><option value="">(no folder)</option>{% for fo in folders %}<option value="{{ fo.id }}" {{ 'selected' if folder_id == fo.id }}>{{ fo.name }}</option>{% endfor %}</select></div>
+              <select class="form-select" id="aiFolder" name="folder_id"><option value="">(no folder)</option>{% for fid, flabel in folder_options(folders) %}<option value="{{ fid }}" {{ 'selected' if folder_id == fid }}>{{ flabel }}</option>{% endfor %}</select></div>
           </div>
           <label class="form-label mt-2" for="aiRepo">Code repo (optional: uses its uncommitted changes)</label>
           <input class="form-control" id="aiRepo" name="repo" placeholder="C:/xampp/htdocs/wt-prod">
@@ -272,7 +313,7 @@
           <label class="form-label" for="impFiles">_test.md files (kane-cli / TestMU-Ai format)</label>
           <input class="form-control" id="impFiles" name="files" type="file" accept=".md" multiple required>
           <label class="form-label mt-2" for="impFolder">Save to folder</label>
-          <select class="form-select" id="impFolder" name="folder_id"><option value="">(no folder)</option>{% for fo in folders %}<option value="{{ fo.id }}" {{ 'selected' if folder_id == fo.id }}>{{ fo.name }}</option>{% endfor %}</select>
+          <select class="form-select" id="impFolder" name="folder_id"><option value="">(no folder)</option>{% for fid, flabel in folder_options(folders) %}<option value="{{ fid }}" {{ 'selected' if folder_id == fid }}>{{ flabel }}</option>{% endfor %}</select>
         </div>
         <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary">Import</button></div>
       </form></div>
@@ -306,22 +347,32 @@ function tmToggle(btn, id) {
   var body = document.getElementById(id), open = btn.getAttribute('aria-expanded') !== 'true';
   btn.setAttribute('aria-expanded', open); body.hidden = !open;
 }
-function tmFilter(q) {
+function tmFilter(q) {   // a matching sub-module keeps its module visible and opens it
   q = (q || '').trim().toLowerCase(); var shown = 0;
-  document.querySelectorAll('#folderList .tm-folder').forEach(function (el) {
-    var hit = !q || el.dataset.name.indexOf(q) !== -1; el.hidden = !hit; if (hit) shown++;
+  document.querySelectorAll('#folderList .tm-mod').forEach(function (mod) {
+    var own = !q || mod.dataset.name.indexOf(q) !== -1, kidHit = false;
+    mod.querySelectorAll('.tm-mod-kids .tm-folder').forEach(function (k) {
+      var hit = !q || own || k.dataset.name.indexOf(q) !== -1; k.hidden = !hit; if (q && k.dataset.name.indexOf(q) !== -1) kidHit = true;
+    });
+    mod.hidden = !(own || kidHit); if (!mod.hidden) shown++;
+    if (q) mod.classList.toggle('open', kidHit); else mod.classList.toggle('open', !!mod.querySelector('.tm-folder.active'));
   });
   document.getElementById('noFolderMatch').hidden = shown > 0 || !q;
 }
+function tmMod(btn) { var m = btn.closest('.tm-mod'); m.classList.toggle('open'); btn.setAttribute('aria-expanded', m.classList.contains('open')); }
+function tmExpand(on) { document.querySelectorAll('#folderList .tm-mod').forEach(function (m) { if (m.querySelector('.tm-mod-kids')) m.classList.toggle('open', on); }); }
 function tmSort(by) {
   var list = document.getElementById('folderList'), end = document.getElementById('noFolderMatch');
-  Array.from(list.querySelectorAll('.tm-folder')).sort(function (a, b) {
+  Array.from(list.querySelectorAll(':scope > .tm-mod')).sort(function (a, b) {
     return by === 'count' ? (+b.dataset.count - +a.dataset.count) || a.dataset.name.localeCompare(b.dataset.name)
                           : a.dataset.name.localeCompare(b.dataset.name);
   }).forEach(function (el) { list.insertBefore(el, end); });
 }
-function tmNewFolder() {
-  var f = document.getElementById('newFolderForm'); f.hidden = false; f.querySelector('input[name=name]').focus();
+function tmNewFolder(parentId, parentName) {
+  var f = document.getElementById('newFolderForm'), inp = f.querySelector('input[name=name]');
+  f.elements.parent_id.value = parentId || '';
+  inp.placeholder = parentId ? 'Sub-module in ' + parentName : 'Module / folder name';
+  f.hidden = false; inp.focus();
 }
 function tmRename(id, current) {
   var name = window.prompt('Rename folder', current);
@@ -370,7 +421,8 @@ function bulk(action, folder) {
   var rows = [].slice.call(list.querySelectorAll('.case-line'));
   if (!rows.length) return;
   rows.forEach(function (r, i) { r._order = i; });
-  var baseText = count.textContent, empty = document.createElement('div');
+  var baseHtml = count.innerHTML, todayView = count.dataset.todayView === '1', todayEmpty = document.getElementById('todayEmpty');
+  var empty = document.createElement('div');
   empty.className = 'panel text-secondary'; empty.hidden = true; list.appendChild(empty);
   function rank(r, q) {             // lower = better; -1 = no match
     var tc = r.dataset.tc, t = r.dataset.title, num = q.replace(/^tc-?/, '');
@@ -383,7 +435,7 @@ function bulk(action, folder) {
   }
   function apply() {
     var q = box.value.trim().toLowerCase(), shown = 0;
-    var ranked = rows.map(function (r) { return { r: r, k: q ? rank(r, q) : 0 }; });
+    var ranked = rows.map(function (r) { return { r: r, k: q ? rank(r, q) : (todayView && !r.dataset.today ? -1 : 0) }; });
     ranked.sort(function (a, b) { return (a.k < 0) - (b.k < 0) || a.k - b.k || a.r._order - b.r._order; });
     ranked.forEach(function (x) {
       var hide = x.k < 0;
@@ -391,8 +443,9 @@ function bulk(action, folder) {
       if (hide) { var cb = x.r.querySelector('.sel'); if (cb) cb.checked = false; } else shown++;
       list.insertBefore(x.r, empty);
     });
-    count.textContent = q ? shown + ' of ' + rows.length + ' test cases match "' + box.value.trim() + '"' : baseText;
-    empty.hidden = shown > 0;
+    if (q) count.textContent = shown + ' of ' + rows.length + ' test cases match "' + box.value.trim() + '"'; else count.innerHTML = baseHtml;
+    empty.hidden = !q || shown > 0;
+    if (todayEmpty) todayEmpty.hidden = !!q;
     empty.textContent = 'No test case matches "' + box.value.trim() + '".';
     if (typeof syncSel === 'function') syncSel();
     try { var u = new URL(location.href); if (q) u.searchParams.set('q', box.value.trim()); else u.searchParams.delete('q'); history.replaceState(null, '', u); } catch (e) {}

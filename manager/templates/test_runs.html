@@ -79,7 +79,8 @@
     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
     <input name="q" value="{{ q }}" placeholder="Search schedule runs…" aria-label="Search scheduled runs">
   </form>
-  <button class="btn btn-success tb-add" type="button" data-bs-toggle="modal" data-bs-target="#newSched" {{ 'disabled' if not all_runs }}>Create a Scheduled Run</button>
+  <span class="d-inline-block" tabindex="0" {% if not all_runs %}title="Create a Test Run first (Test Runs tab): a schedule repeats an existing Test Run."{% endif %}>
+    <button class="btn btn-success tb-add" type="button" data-bs-toggle="modal" data-bs-target="#newSched" {{ 'disabled' if not all_runs }}>Create a Scheduled Run</button></span>
 </div>
 <div class="trl">
   {% for s in scheds %}{% set ls = s_summ.get(s.last_exec_id) %}

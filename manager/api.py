@@ -10,9 +10,13 @@ import base64
 import functools
 import hashlib
 import hmac
+import os
+import re
 import secrets
+import shutil
 import threading
 import time
+from datetime import datetime
 
 from flask import Blueprint, g, jsonify, request
 
@@ -70,6 +74,25 @@ def _error(status, message):
     return resp
 
 
+RUN_TOKENS = {}   # token -> (username, expires_at): runner processes started by the server itself
+_RUN_TOKENS_LOCK = threading.Lock()
+
+
+def issue_run_token(username, seconds=3600):
+    tok = secrets.token_urlsafe(32)
+    with _RUN_TOKENS_LOCK:
+        now = time.time()
+        for k in [k for k, (_, exp) in RUN_TOKENS.items() if exp < now]:
+            RUN_TOKENS.pop(k, None)
+        RUN_TOKENS[tok] = (username, now + seconds)
+    return tok
+
+
+def revoke_run_token(tok):
+    with _RUN_TOKENS_LOCK:
+        RUN_TOKENS.pop(tok, None)
+
+
 def _credentials():
     auth = request.headers.get('Authorization', '')
     if not auth.lower().startswith('basic '):
@@ -86,6 +109,21 @@ def api_auth(fn):
     @functools.wraps(fn)
     def wrapper(*a, **kw):
         ip = request.remote_addr or '-'
+        tok = request.headers.get('X-LTH-Run-Token', '')
+        if tok:   # runner started by this server (web run / Test Run); only from this machine
+            with _RUN_TOKENS_LOCK:
+                hit = RUN_TOKENS.get(tok)
+            if not hit or hit[1] < time.time() or ip not in ('127.0.0.1', '::1'):
+                return _error(401, 'Run token not valid.')
+            con = db.connect()
+            try:
+                row = con.execute('SELECT id, username, name, role FROM users WHERE username=?', (hit[0],)).fetchone()
+                if not row:
+                    return _error(401, 'Run token not valid.')
+                g.api_user, g.api_con = dict(row), con
+                return fn(*a, **kw)
+            finally:
+                con.close()
         if _too_many_fails(ip):
             return _error(429, 'Too many failed logins. Wait 5 minutes and try again.')
         username, key = _credentials()
@@ -93,7 +131,7 @@ def api_auth(fn):
             return _error(401, 'Send your LogiTestHub username and access key (HTTP Basic auth).')
         con = db.connect()
         try:
-            row = con.execute('SELECT u.id, u.username, u.name, u.role, k.key_hash FROM users u '
+            row = con.execute('SELECT u.id, u.username, u.name, u.role, u.auth_source, u.pm_member_id, k.key_hash FROM users u '
                               'JOIN api_keys k ON k.user_id=u.id WHERE u.username=?', (username,)).fetchone()
             if not row or not hmac.compare_digest(row['key_hash'], hash_key(key)):
                 _note_fail(ip)
@@ -101,6 +139,10 @@ def api_auth(fn):
                             (row['id'] if row else None, db.now(), request.method, request.path, 401, ip))
                 con.commit()
                 return _error(401, 'Invalid username or access key.')
+            if row['auth_source'] == 'pm':
+                import pm_auth
+                if pm_auth.still_active_cached(row['pm_member_id']) is False:
+                    return _error(403, 'Your PM account is inactive, so LogiTestHub access is blocked.')
             g.api_user = dict(row)
             g.api_con = con
             resp = fn(*a, **kw)
@@ -154,6 +196,153 @@ def case(cid):
     return jsonify({'ok': True, 'case': dict(r, tc=f"TC-{r['tc_no']}")})
 
 
+# ---------------------------------------------------------------- modules (tester modules pull / push)
+
+def _project(pid):
+    return g.api_con.execute('SELECT * FROM projects WHERE id=?', (pid,)).fetchone()
+
+
+@bp.get('/projects/<int:pid>/modules')
+@api_auth
+def modules_pull(pid):
+    """The project's module -> sub-module tree as a logitesthub.modules/v1 file."""
+    import modules
+    p = _project(pid)
+    if not p:
+        return _error(404, 'Project not found.')
+    return jsonify({'ok': True, 'file': modules.export_file(g.api_con, p)})
+
+
+@bp.post('/projects/<int:pid>/modules')
+@api_auth
+def modules_push(pid):
+    """Adds the modules / sub-modules of a logitesthub.modules/v1 file that the project does not have yet.
+    Never deletes, renames or moves anything. ?dry_run=1 only reports what would be added."""
+    import modules
+    import settings
+    p = _project(pid)
+    if not p:
+        return _error(404, 'Project not found.')
+    data = request.get_json(silent=True)
+    if data is None:
+        return _error(400, 'Send the modules file as JSON (Content-Type: application/json).')
+    mods, errors, warnings = modules.normalize_file(data)
+    if errors:
+        return jsonify({'ok': False, 'error': 'The file has problems: ' + '; '.join(errors[:5]), 'errors': errors[:50]}), 400
+    dry = request.args.get('dry_run') in ('1', 'true', 'yes')
+    plan = modules.plan(g.api_con, pid, mods)
+    added = (0, 0)
+    if not dry and (plan['new_modules'] or plan['new_subs']):
+        con = g.api_con
+        with con:
+            added = modules.apply_tree(con, pid, mods)
+        settings.write_audit(g.api_user['username'], 'api.modules_push', 'project', pid, 'ok',
+                             f'Modules file pushed from the CLI / IDE: {added[0]} module(s) and {added[1]} sub-module(s) added'
+                             + (f' ({data.get("source")})' if isinstance(data, dict) and data.get('source') else ''),
+                             {'changed': {'modules added': [None, ', '.join(plan['new_modules'][:30])],
+                                          'sub-modules added': [None, f"{len(plan['new_subs'])}"]}}, request.remote_addr)
+    return jsonify({'ok': True, 'dry_run': dry, 'project': p['name'], 'warnings': warnings, **plan,
+                    'added_modules': added[0], 'added_subs': added[1]})
+
+
+@bp.get('/projects/<int:pid>/login-helper')
+@api_auth
+def project_login_helper(pid):
+    """Login steps the CLI puts in front of every case of this project (the same as web runs)."""
+    r = g.api_con.execute('SELECT login_helper FROM projects WHERE id=?', (pid,)).fetchone()
+    if not r:
+        return _error(404, 'Project not found.')
+    return jsonify({'ok': True, 'login_helper': r['login_helper'] or ''})
+
+
+# ---------------------------------------------------------------- lessons learned (tester lessons / tester lesson add)
+
+@bp.get('/projects/<int:pid>/lessons')
+@api_auth
+def lessons_list(pid):
+    """The project's active lessons, most seen first: the /tester skill reads them before writing or running a test."""
+    import lessons
+    if not _project(pid):
+        return _error(404, 'Project not found.')
+    return jsonify({'ok': True, 'lessons': [lessons.as_json(r) for r in lessons.rows(g.api_con, pid)]})
+
+
+@bp.post('/projects/<int:pid>/lessons')
+@api_auth
+def lessons_add(pid):
+    """Records a lesson after a failure was understood and fixed. Same title again = counted again, not duplicated."""
+    import lessons
+    import settings
+    if not _project(pid):
+        return _error(404, 'Project not found.')
+    v, errs = lessons.clean(request.get_json(silent=True) or {})
+    if errs:
+        return jsonify({'ok': False, 'error': ' '.join(errs), 'kinds': lessons.KIND_KEYS}), 400
+    with g.api_con:
+        lid, created = lessons.add(g.api_con, pid, v, g.api_user['username'], 'cli')
+    settings.write_audit(g.api_user['username'], 'api.lessons_add', 'lesson', lid, 'ok',
+                         ('Lesson added' if created else 'Lesson seen again') + f' from the CLI / IDE: {v["title"]}',
+                         None, request.remote_addr)
+    return jsonify({'ok': True, 'id': lid, 'created': created})
+
+
+# ---------------------------------------------------------------- read-only checks on the app's database
+
+def _env_from(value):
+    import envs
+    v = str(value or '').strip()
+    if not v:
+        return None, _error(400, 'Say which environment: --env <name> (Settings -> Environments).')
+    row = g.api_con.execute('SELECT * FROM environments WHERE id=? OR name=?',
+                            (int(v) if v.isdigit() else -1, v)).fetchone()
+    if not row:
+        return None, _error(404, f'Environment "{v}" not found.')
+    return row, None
+
+
+@bp.post('/sql')
+@api_auth
+def sql():
+    """{"env": "Local", "sql": "SELECT ..."} -> first value + up to 20 rows, run in a READ ONLY session."""
+    import envs
+    body = request.get_json(silent=True) or {}
+    env, err = _env_from(body.get('env'))
+    if err:
+        return err
+    try:
+        r = envs.db_query(env, body.get('sql'))
+    except envs.DbError as e:
+        return _error(400, str(e))
+    return jsonify({'ok': True, 'env': env['name'], **r})
+
+
+@bp.get('/memory')
+@api_auth
+def memory():
+    """Values remembered by earlier tests in this environment ({{last_lot}} ...)."""
+    env, err = _env_from(request.args.get('env'))
+    if err:
+        return err
+    rows = g.api_con.execute('SELECT name, value FROM run_memory WHERE env_id=?', (env['id'],)).fetchall()
+    return jsonify({'ok': True, 'env': env['name'], 'values': {r['name']: r['value'] for r in rows}})
+
+
+@bp.post('/memory')
+@api_auth
+def memory_set():
+    body = request.get_json(silent=True) or {}
+    env, err = _env_from(body.get('env'))
+    if err:
+        return err
+    name, value = str(body.get('name') or ''), body.get('value')
+    if not re.match(r'^[A-Za-z_][\w.-]{0,63}$', name):
+        return _error(400, 'Name: letters, numbers, _ . - (max 64).')
+    with g.api_con:
+        g.api_con.execute('REPLACE INTO run_memory(env_id, name, value, updated_by, updated_at) VALUES (?,?,?,?,?)',
+                          (env['id'], name, None if value is None else str(value)[:1000], g.api_user['username'], db.now()))
+    return jsonify({'ok': True})
+
+
 # ---------------------------------------------------------------- AI through the server (limits enforced here)
 
 def _budget_or_error():
@@ -201,7 +390,11 @@ def ai_generate():
     blocked = _budget_or_error()
     if blocked:
         return blocked
-    ok, msg, ids = services.generate_cases(pid, folder_id, task, body.get('count') or 6, '', g.api_user['username'])
+    diff = body.get('diff') if isinstance(body.get('diff'), str) else ''
+    if len(diff) > 400_000:
+        return _error(413, 'The diff is too large (max 400,000 characters). Narrow it to the changed folder or files.')
+    ok, msg, ids = services.generate_cases(pid, folder_id, task, body.get('count') or 6, '', g.api_user['username'],
+                                           diff_text=diff or None)
     if not ok:
         return _error(502, msg)
     rows = g.api_con.execute(f'SELECT id, tc_no, title FROM cases WHERE id IN ({",".join("?" * len(ids))})', ids).fetchall() if ids else []
@@ -241,6 +434,65 @@ def ai_step():
                        'cacheWrite': u.get('cache_creation_input_tokens')},
                        username=g.api_user['username'], project_id=project_id, case_id=case_id, note='via CLI / IDE')
     return jsonify({'ok': True, **(reply.get('data') or {}), 'usage': _usage_json(budget.status(g.api_con, g.api_user))})
+
+
+# ---------------------------------------------------------------- runs from the Tester CLI
+
+RUN_FILE = re.compile(r'^[\w.-]{1,120}$')
+RUN_EXT = ('.ndjson', '.webm', '.png', '.jpg', '.html', '.json')
+MAX_UPLOAD = 400 * 1024 * 1024
+
+
+@bp.post('/runs')
+@api_auth
+def run_upload():
+    """A run made by `tester run` on the developer's PC (multipart). Either case_id (an existing case), or
+    project_id + content (+ title) for a plain-English test: that one is saved as a case in folder "CLI runs".
+    Files: events.ndjson (required), video.webm, report.html, step screenshots."""
+    request.max_content_length = MAX_UPLOAD   # recordings are bigger than the app-wide 10 MB form limit
+    f = request.form
+    files = request.files.getlist('files')
+    events = next((x for x in files if x.filename == 'events.ndjson'), None)
+    if not events:
+        return _error(400, 'events.ndjson is required (the runner writes it in the run folder).')
+    bad = [x.filename for x in files if not RUN_FILE.match(x.filename or '') or not x.filename.lower().endswith(RUN_EXT)]
+    if bad:
+        return _error(400, f'Unexpected file name(s): {", ".join(bad[:5])}')
+    con, user = g.api_con, g.api_user['username']
+    case_id = f.get('case_id', type=int)
+    if case_id:
+        row = con.execute('SELECT id, project_id FROM cases WHERE id=?', (case_id,)).fetchone()
+        if not row:
+            return _error(404, 'Test case not found.')
+    else:
+        pid, content = f.get('project_id', type=int), (f.get('content') or '').replace('\r\n', '\n').strip()
+        if not pid or not con.execute('SELECT 1 FROM projects WHERE id=?', (pid,)).fetchone():
+            return _error(400, 'project_id must be an existing project (tester projects) when no case_id is sent.')
+        if not content or len(content) > 100_000:
+            return _error(400, 'content (the test case markdown) is required, max 100,000 characters.')
+    run_dir = os.path.join(db.RUNS_DIR, f"{datetime.now():%Y-%m-%d-%H-%M-%S}-cli-{secrets.token_hex(4)}")
+    os.makedirs(run_dir)
+    try:
+        for x in files:
+            x.save(os.path.join(run_dir, x.filename))
+        summary, _ = db.read_run_events(run_dir)
+        if not summary:
+            raise ValueError('events.ndjson has no run_end line: the run did not finish.')
+        with con:
+            if not case_id:
+                title = (f.get('title') or db.case_title(content, '') or 'CLI test')[:180]
+                folder = db.get_or_create_folder(con, pid, 'CLI runs')
+                case_id = db.add_case(con, pid, folder, title, content + '\n', user)
+            run_id = con.execute("INSERT INTO runs(case_id, status, started_at, run_by, env_name) VALUES (?,?,?,?,?)",
+                                 (case_id, 'running', db.to_local(summary.get('at')), user,
+                                  (f.get('env') or 'Local (CLI)')[:40])).lastrowid
+            db.record_finished_run(con, run_id, run_dir)
+    except Exception as e:   # nothing half-saved: remove the folder
+        shutil.rmtree(run_dir, ignore_errors=True)
+        return _error(400, f'Upload failed: {e}')
+    base = request.host_url.rstrip('/')
+    return jsonify({'ok': True, 'run_id': run_id, 'case_id': case_id, 'status': summary.get('status'),
+                    'url': f'{base}/cases/{case_id}?run={run_id}'})
 
 
 @bp.app_errorhandler(404)

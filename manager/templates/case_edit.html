@@ -9,17 +9,61 @@
       <label class="form-label" for="folder">Folder</label>
       <select class="form-select" id="folder" name="folder_id">
         <option value="">(no folder)</option>
-        {% for f in folders %}<option value="{{ f.id }}" {{ 'selected' if folder_id == f.id }}>{{ f.name }}</option>{% endfor %}
+        {% for fid, flabel in folder_options(folders) %}<option value="{{ fid }}" {{ 'selected' if folder_id == fid }}>{{ flabel }}</option>{% endfor %}
       </select>
     </div>
-    <div class="col-md-8 small text-secondary align-self-end">
-      One step per line. <code># Title</code>, <code>## Section</code>. Use <code>{{ '{{' }}variable{{ '}}' }}</code> for data from the variables file.
+    <div class="col-md-8 d-flex flex-wrap align-items-end gap-2">
+      <div class="small text-secondary me-auto">
+        One step per line. <code># Title</code>, <code>## Section</code>. Use <code>{{ '{{' }}variable{{ '}}' }}</code> for data from the variables file.
+      </div>
+      <input type="file" id="mdFile" accept=".md,.markdown,.txt,text/markdown,text/plain" hidden>
+      <button type="button" class="btn btn-outline-secondary btn-sm" id="mdPick" title="Load a _test.md file into the editor (or drag it onto the editor)">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7.5 10.5 12 15l4.5-4.5"/><path d="M5 19h14"/></svg>
+        Import .md file</button>
     </div>
   </div>
-  <textarea class="form-control font-monospace" name="content" rows="24" spellcheck="false">{{ content }}</textarea>
+  <div class="small mb-2" id="mdMsg" role="status" aria-live="polite" hidden></div>
+  <textarea class="form-control font-monospace" id="caseContent" name="content" rows="24" spellcheck="false">{{ content }}</textarea>
   <div class="d-flex gap-2 mt-3">
     <button class="btn btn-primary">Save</button>
     <a class="btn btn-outline-secondary" href="{{ url_for('case', cid=case.id) if case else url_for('project', pid=p.id) }}">Cancel</a>
   </div>
 </form>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {   // load a .md test case file into the editor (button or drag & drop); saving stays a normal Save
+  var pick = document.getElementById('mdPick'), file = document.getElementById('mdFile'),
+      ta = document.getElementById('caseContent'), msg = document.getElementById('mdMsg');
+  if (!pick || !file || !ta) return;
+  var original = ta.value, MAX = 512 * 1024;   // same 512 KB limit as "Import _test.md files"
+  function say(text, kind) { msg.hidden = false; msg.className = 'small mb-2 ' + (kind === 'bad' ? 't-fail' : kind === 'warn' ? 't-warn' : 't-pass'); msg.textContent = text; }
+  function load(f) {
+    if (!f) return;
+    if (!/\.(md|markdown|txt)$/i.test(f.name)) { say('"' + f.name + '" is not a .md file.', 'bad'); return; }
+    if (f.size > MAX) { say('"' + f.name + '" is larger than 512 KB.', 'bad'); return; }
+    var r = new FileReader();
+    r.onload = function () {
+      var text = String(r.result || '').replace(/\r\n/g, '\n');
+      if (!text.trim()) { say('"' + f.name + '" is empty.', 'bad'); return; }
+      if (ta.value.trim() && ta.value !== original && !confirm('Replace what is in the editor with "' + f.name + '"?')) return;
+      ta.value = text; ta.focus(); ta.setSelectionRange(0, 0); ta.scrollTop = 0;
+      var title = /^# \S/m.test(text.replace(/^---[\s\S]*?\n---\s*\n/, ''));
+      var imp = (text.match(/^\s*@import\s/gm) || []).length;
+      say('Loaded "' + f.name + '"' + (imp ? ' (' + imp + ' @import line' + (imp > 1 ? 's' : '') + ': resolved from the shared helpers folder when it runs)' : '') +
+          (title ? '. Check it, then click Save.' : '. It has no "# Title" line: add one before saving.'), title ? 'ok' : 'warn');
+    };
+    r.onerror = function () { say('Could not read "' + f.name + '".', 'bad'); };
+    r.readAsText(f, 'utf-8');
+  }
+  pick.addEventListener('click', function () { file.value = ''; file.click(); });
+  file.addEventListener('change', function () { load(file.files[0]); });
+  ta.addEventListener('dragover', function (e) { if (e.dataTransfer && [].indexOf.call(e.dataTransfer.types, 'Files') > -1) { e.preventDefault(); ta.classList.add('md-drop'); } });
+  ta.addEventListener('dragleave', function () { ta.classList.remove('md-drop'); });
+  ta.addEventListener('drop', function (e) {
+    if (!e.dataTransfer || !e.dataTransfer.files.length) return;
+    e.preventDefault(); ta.classList.remove('md-drop'); load(e.dataTransfer.files[0]);
+  });
+})();
+</script>
 {% endblock %}

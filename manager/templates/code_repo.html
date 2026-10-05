@@ -1,0 +1,74 @@
+{% extends 'base.html' %}
+{% block title %}Code repository · {{ p.name }}{% endblock %}
+{% block crumbs %}<span class="tm-crumbs"><a href="{{ url_for('project', pid=p.id) }}">{{ p.name }}</a> <span>/</span> <b>Code repository</b></span>{% endblock %}
+{% block head %}{% if p.repo_status == 'syncing' %}<meta http-equiv="refresh" content="4">{% endif %}{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-end gap-2 mb-3">
+  <div>
+    <h1 class="h4 mb-0">Code repository</h1>
+    <div class="text-secondary small">The Test Assistant reads {{ p.name }}'s source here to write exact steps: page URLs, field ids and validation messages. Read-only: nothing is ever pushed.</div>
+  </div>
+  <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('assistant.page', pid=p.id) }}">Open Test Assistant</a>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-7">
+    <form class="panel h-100" method="post" autocomplete="off">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="mb-3">
+        <label class="form-label fw-semibold mb-1" for="rUrl">Repository URL</label>
+        <input class="form-control form-control-sm" id="rUrl" name="repo_url" value="{{ p.repo_url or '' }}" placeholder="https://github.com/Logimax-Technologies/etail_development_src.git" required spellcheck="false">
+      </div>
+      <div class="mb-3">
+        <label class="form-label fw-semibold mb-1" for="rBr">Branch</label>
+        <input class="form-control form-control-sm" id="rBr" name="repo_branch" value="{{ p.repo_branch or '' }}" placeholder="PRODUCTION" style="max-width: 280px" spellcheck="false">
+        <div class="form-text">The branch the tests are written for. Only its latest commit is copied.</div>
+      </div>
+      <div class="mb-3">
+        <label class="form-label fw-semibold mb-1" for="rPaths">Paths <span class="text-secondary fw-normal">(optional)</span></label>
+        <textarea class="form-control form-control-sm font-monospace" id="rPaths" name="repo_paths" rows="5" spellcheck="false"
+          placeholder="admin/application/controllers&#10;admin/application/models&#10;admin/application/views&#10;admin/assets/js&#10;database/migrations">{{ p.repo_paths or '' }}</textarea>
+        <div class="form-text">Only these folders are copied (one per line). Blank = the whole repository. For a large repo, list the screens' code: controllers, views, JS.</div>
+      </div>
+      <div class="mb-3">
+        <label class="form-label fw-semibold mb-1" for="rTok">Read-only access token <span class="text-secondary fw-normal">(optional)</span></label>
+        <input class="form-control form-control-sm" id="rTok" name="repo_token" type="password" autocomplete="new-password"
+               placeholder="{{ 'Saved - leave blank to keep' if p.repo_token_enc else 'Blank = use the GitHub sign-in of this PC' }}">
+        <div class="form-text">A GitHub fine-grained token with <b>Contents: Read-only</b> on this one repository. Stored encrypted, never shown again, never written into the copy.
+          {% if p.repo_token_enc %}<label class="ms-2"><input type="checkbox" name="clear_token" value="1"> Remove the saved token</label>{% endif %}</div>
+      </div>
+      <button class="btn btn-primary btn-sm">Save &amp; sync</button>
+    </form>
+  </div>
+  <div class="col-lg-5">
+    <div class="panel h-100">
+      <h2 class="h6 mb-2">Status</h2>
+      {% if not p.repo_url %}
+      <div class="small text-secondary">Not connected yet.</div>
+      {% else %}
+      <dl class="set-info mb-3">
+        <dt>State</dt><dd>
+          {% if p.repo_status == 'syncing' %}<span class="badge st-running">COPYING</span> <span class="small text-secondary">refreshing…</span>
+          {% elif p.repo_status == 'ok' %}<span class="badge st-passed">READY</span>
+          {% elif p.repo_status == 'error' %}<span class="badge st-failed">ERROR</span>
+          {% else %}<span class="badge st-none">NOT SYNCED</span>{% endif %}</dd>
+        {% if p.repo_error %}<dt>Problem</dt><dd class="t-fail">{{ p.repo_error }}</dd>{% endif %}
+        <dt>Repository</dt><dd>{{ p.repo_url }}</dd>
+        <dt>Branch</dt><dd>{{ p.repo_branch or 'main' }}</dd>
+        {% if p.repo_commit %}<dt>Commit</dt><dd><code>{{ p.repo_commit[:10] }}</code></dd>{% endif %}
+        {% if p.repo_synced_at %}<dt>Synced</dt><dd>{{ p.repo_synced_at|dmy }}</dd>{% endif %}
+        {% if stats %}<dt>Copy</dt><dd>{{ stats.files }} files · {{ stats.mb }} MB</dd>{% endif %}
+        <dt>Sign-in</dt><dd>{{ 'Saved read-only token' if p.repo_token_enc else 'GitHub sign-in of this PC' }}</dd>
+      </dl>
+      <div class="d-flex gap-2">
+        <form method="post"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="sync">
+          <button class="btn btn-sm btn-outline-secondary" {{ 'disabled' if p.repo_status == 'syncing' }}>Sync now</button></form>
+        <form method="post" onsubmit="return confirm('Disconnect the repository and delete the local copy? The repository on GitHub is not touched.')">
+          <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="disconnect">
+          <button class="btn btn-sm btn-link text-danger">Disconnect</button></form>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

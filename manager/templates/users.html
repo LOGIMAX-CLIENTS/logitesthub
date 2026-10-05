@@ -1,7 +1,8 @@
 {% extends 'base.html' %}
 {% block title %}Users{% endblock %}
-{% block crumbs %}<span class="tm-crumbs"><b>Users</b></span>{% endblock %}
+{% block crumbs %}<span class="tm-crumbs"><b>Settings</b> <span>/</span> Users</span>{% endblock %}
 {% block content %}
+{% include '_settings_tabs.html' %}
 <div class="d-flex flex-wrap gap-2 align-items-center justify-content-between mb-3">
   <div><h1 class="h4 mb-0">Users ({{ users|length }})</h1><div class="text-secondary small">Only admins can create accounts</div></div>
   <button class="btn btn-success" type="button" data-bs-toggle="collapse" data-bs-target="#newUser" aria-expanded="false">+ Create Account</button>
@@ -16,7 +17,9 @@
       <div class="col-md-5"><label class="form-label" for="nn">Full name</label>
         <input class="form-control" id="nn" name="name" maxlength="60" required></div>
       <div class="col-md-3"><label class="form-label" for="nr">Role</label>
-        <select class="form-select" id="nr" name="role"><option value="member">Member</option><option value="admin">Admin</option></select></div>
+        <select class="form-select" id="nr" name="role">{% for rk, rl, rd in roles if rk != 'superadmin' or is_super %}<option value="{{ rk }}" title="{{ rd }}" {{ 'selected' if rk == 'member' }}>{{ rl }}</option>{% endfor %}</select></div>
+      <div class="col-md-3"><label class="form-label" for="nd">Department</label>
+        <select class="form-select" id="nd" name="department"><option value="">(choose)</option>{% for d in departments %}<option>{{ d }}</option>{% endfor %}</select></div>
       <div class="col-md-4"><label class="form-label" for="np">Password <span class="text-secondary small">(min {{ min_pw }})</span></label>
         <input class="form-control" id="np" name="password" type="password" minlength="{{ min_pw }}" autocomplete="new-password" required></div>
       <div class="col-md-4"><label class="form-label" for="nc">Confirm password</label>
@@ -27,16 +30,29 @@
   </form>
 </div>
 
+<div class="d-flex flex-wrap gap-2 align-items-center mb-2" id="deptChips" role="group" aria-label="Filter by department">
+  <button type="button" class="btn btn-sm btn-outline-secondary active" data-dept="">All <span class="badge text-bg-light">{{ users|length }}</span></button>
+  {% for d in departments %}<button type="button" class="btn btn-sm btn-outline-secondary" data-dept="{{ d }}">{{ d }} <span class="badge text-bg-light">{{ users|selectattr('department', 'equalto', d)|list|length }}</span></button>{% endfor %}
+  {% set nodept = users|rejectattr('department')|list|length %}{% if nodept %}<button type="button" class="btn btn-sm btn-outline-secondary" data-dept="-">Not set <span class="badge text-bg-light">{{ nodept }}</span></button>{% endif %}
+</div>
 <div class="panel p-0">
   <div class="table-responsive">
     <table class="table align-middle mb-0 users-table">
-      <thead><tr><th class="text-start">User</th><th class="text-start">Role</th><th class="text-start">Created</th><th class="text-start">AI this month</th><th class="text-end">Actions</th></tr></thead>
+      <thead><tr><th class="text-start">User</th><th class="text-start">Role</th><th class="text-start">Department</th><th class="text-start">Created</th><th class="text-start">AI this month</th><th class="text-end">Actions</th></tr></thead>
       <tbody>
       {% for u in users %}
-      <tr>
+      <tr data-dept="{{ u.department or '-' }}">
         <td class="text-start"><div class="d-flex align-items-center gap-2"><span class="avatar">{{ u.name[:1]|upper }}</span>
-          <div><div class="fw-semibold">{{ u.name }}{% if u.id == me.id %} <span class="text-secondary small">(you)</span>{% endif %}</div><div class="small text-secondary">@{{ u.username }}</div></div></div></td>
-        <td class="text-start"><span class="role role-{{ u.role }}">{{ u.role|capitalize }}</span></td>
+          <div><div class="fw-semibold">{{ u.name }}{% if u.id == me.id %} <span class="text-secondary small">(you)</span>{% endif %}</div><div class="small text-secondary">@{{ u.username }}{% if u.auth_source == 'pm' %} <span class="pm-badge" title="Signs in with PM{{ (': ' ~ u.pm_login) if u.pm_login }}">PM</span>{% endif %}</div></div></div></td>
+        <td class="text-start"><span class="role role-{{ u.role }}">{{ role_label.get(u.role, u.role|capitalize) }}</span></td>
+        <td class="text-start">
+          <form method="post" action="{{ url_for('settings.user_department', uid=u.id) }}" class="m-0">
+            <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="back_dept" class="dept-back">
+            <select class="form-select form-select-sm dept-sel" name="department" aria-label="Department of @{{ u.username }}" onchange="this.form.submit()">
+              <option value="" {{ 'selected' if not u.department }}>(not set)</option>
+              {% for d in departments %}<option {{ 'selected' if u.department == d }}>{{ d }}</option>{% endfor %}
+              {% if u.department and u.department not in departments %}<option selected>{{ u.department }}</option>{% endif %}
+            </select></form></td>
         <td class="text-start">{{ u.created_at[:10] }}</td>
         {% set s = ai[u.id] %}
         <td class="text-start ul-ai">
@@ -56,13 +72,14 @@
             <button class="tm-icon" type="button" data-bs-toggle="dropdown" aria-label="Actions for {{ u.username }}">
               <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/></svg></button>
             <ul class="dropdown-menu dropdown-menu-end">
-              <li><button class="dropdown-item" type="button" data-bs-toggle="modal" data-bs-target="#resetPw" data-uid="{{ u.id }}" data-uname="{{ u.username }}">Reset password</button></li>
+              {% set locked = u.role == 'superadmin' and not is_super %}
+              {% if u.auth_source != 'pm' and not locked %}<li><button class="dropdown-item" type="button" data-bs-toggle="modal" data-bs-target="#resetPw" data-uid="{{ u.id }}" data-uname="{{ u.username }}">Reset password</button></li>{% endif %}
               <li><button class="dropdown-item" type="button" data-bs-toggle="modal" data-bs-target="#aiLimit" data-uid="{{ u.id }}" data-uname="{{ u.username }}"
                   data-source="{{ ai[u.id].limit_source }}" data-limit="{{ ai[u.id].base_limit_inr if ai[u.id].limit_source == 'user' and ai[u.id].base_limit_inr is not none else '' }}">Set AI limit</button></li>
               <li><button class="dropdown-item" type="button" data-bs-toggle="modal" data-bs-target="#aiExtra" data-uid="{{ u.id }}" data-uname="{{ u.username }}"
                   data-used="{{ ai[u.id].used_inr|inr(1) }}" data-limit="{{ (ai[u.id].limit_inr|inr(1)) if ai[u.id].limit_inr is not none else 'no limit' }}">Add extra (this month)</button></li>
-              {% if u.id != me.id %}
-              <li><form method="post" action="{{ url_for('user_role', uid=u.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="dropdown-item">Make {{ 'member' if u.role == 'admin' else 'admin' }}</button></form></li>
+              {% if u.id != me.id and not locked %}
+              {% for rk, rl, rd in roles if rk != u.role and (rk != 'superadmin' or is_super) %}<li><form method="post" action="{{ url_for('user_role', uid=u.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="role" value="{{ rk }}"><button class="dropdown-item" title="{{ rd }}">Make {{ rl }}</button></form></li>{% endfor %}
               <li><hr class="dropdown-divider"></li>
               <li><form method="post" action="{{ url_for('user_delete', uid=u.id) }}" onsubmit="return confirm('Remove account @{{ u.username }}? Their past runs and test cases stay.')"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="dropdown-item text-danger">Remove account</button></form></li>
               {% endif %}
@@ -118,6 +135,10 @@
         <input class="form-control" id="exAmt" name="amount_inr" inputmode="decimal" placeholder="e.g. 200" required{% if plan.reserve_inr is not none %} data-max="{{ [plan.reserve_inr, 0]|max }}"{% endif %}></div>
       <div class="ex-quick">{% for q in (100, 200, 500) %}<button type="button" class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('exAmt').value={{ q }}">+₹{{ q }}</button>{% endfor %}</div>
       <div class="small t-fail mt-1" id="exOver" hidden>More than the reserve.</div>
+      {% if me.role == 'superadmin' %}<div class="ex-override" id="exOverride" hidden>
+        <label class="form-check-label small"><input class="form-check-input me-1" type="checkbox" name="override" value="1" id="exOverrideChk">
+          <b>Add anyway (super admin)</b>: this goes past the reserve and uses credit already promised to the team this month.</label>
+      </div>{% endif %}
       <label class="form-label mt-2" for="exNote">Reason</label>
       <input class="form-control form-control-sm" id="exNote" name="note" maxlength="255" required placeholder="e.g. GRN release regression testing">
       <div class="small text-secondary mt-2">Only for this month. On the 1st the user is back to their normal limit. Their normal limit is not changed.</div>
@@ -128,6 +149,20 @@
 {% endblock %}
 {% block scripts %}
 <script>
+(function () {   // department chips: show only that department's users (kept in ?dept= so saving a change comes back here)
+  var chips = document.querySelectorAll('#deptChips [data-dept]'), rows = document.querySelectorAll('tr[data-dept]');
+  function show(d) {
+    chips.forEach(function (c) { c.classList.toggle('active', c.dataset.dept === d); });
+    rows.forEach(function (r) { r.hidden = !!d && r.dataset.dept !== d; });
+    document.querySelectorAll('.dept-back').forEach(function (i) { i.value = d; });
+    try { var u = new URL(location.href); if (d) u.searchParams.set('dept', d); else u.searchParams.delete('dept'); history.replaceState(null, '', u); } catch (e) {}
+  }
+  chips.forEach(function (c) { c.addEventListener('click', function () { show(c.dataset.dept); }); });
+  show(new URLSearchParams(location.search).get('dept') || '');
+})();
+</script>
+
+<script>
 if (location.hash === '#new') { bootstrap.Collapse.getOrCreateInstance(document.getElementById('newUser')).show(); document.getElementById('nu').focus(); }
 var RESET_URL = {{ url_for('user_reset_password', uid=0)|tojson }}, LIMIT_URL = {{ url_for('user_ai_limit', uid=0)|tojson }},
     EXTRA_URL = {{ url_for('user_ai_extra', uid=0)|tojson }};
@@ -136,13 +171,18 @@ document.getElementById('aiExtra').addEventListener('show.bs.modal', function (e
   form.action = EXTRA_URL.replace('/0/', '/' + b.dataset.uid + '/');
   this.querySelector('.modal-title').textContent = 'Add extra AI budget for @' + b.dataset.uname;
   document.getElementById('exNow').textContent = 'This month: ' + b.dataset.used + ' used of ' + b.dataset.limit + '.';
-  form.reset(); document.getElementById('exOver').hidden = true; setTimeout(function () { document.getElementById('exAmt').focus(); }, 300);
+  form.reset(); document.getElementById('exOver').hidden = true; if (document.getElementById('exOverride')) document.getElementById('exOverride').hidden = true;
+  this.querySelector('.btn-primary').disabled = false; setTimeout(function () { document.getElementById('exAmt').focus(); }, 300);
 });
 (function () {   // warn before submit when the extra is more than the reserve (server checks it too)
   var amt = document.getElementById('exAmt'), over = document.getElementById('exOver'), btn = document.querySelector('#aiExtra .btn-primary');
+  var ov = document.getElementById('exOverride'), ovChk = document.getElementById('exOverrideChk');   // super admins only
   function chk() { var max = parseFloat(amt.dataset.max), v = parseFloat((amt.value || '').replace(/,/g, ''));
-    var bad = !isNaN(max) && isFinite(v) && v > max; over.hidden = !bad; btn.disabled = bad; }
+    var bad = !isNaN(max) && isFinite(v) && v > max; over.hidden = !bad;
+    if (ov) { ov.hidden = !bad; if (!bad) ovChk.checked = false; }
+    btn.disabled = bad && !(ovChk && ovChk.checked); }
   amt.addEventListener('input', chk);
+  if (ovChk) ovChk.addEventListener('change', chk);
   document.querySelectorAll('#aiExtra .ex-quick button').forEach(function (b) { b.addEventListener('click', function () { setTimeout(chk, 0); }); });
 })();
 document.getElementById('aiLimit').addEventListener('show.bs.modal', function (e) {

@@ -1,0 +1,29 @@
+{% extends 'base.html' %}
+{% block title %}Login helper · {{ p.name }}{% endblock %}
+{% block crumbs %}<span class="tm-crumbs"><a href="{{ url_for('projects') }}">Test Case</a> <span>/</span> <a href="{{ url_for('project', pid=p.id) }}">{{ p.name }}</a> <span>/</span> <b>Login helper</b></span>{% endblock %}
+{% block content %}
+<div class="lh-wrap">
+  <h1 class="h4 mb-1">Login helper</h1>
+  <p class="text-secondary mb-3">These steps sign in to <b>{{ p.name }}</b>. LogiTestHub puts them in front of <b>every test case of this project</b>
+    when it runs, from the web, Test Runs and schedules, and <code>tester run</code>. So test cases start after login and nobody writes login steps again.</p>
+
+  <form method="post" class="panel">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label class="form-label fw-semibold" for="lhSteps">Login steps <span class="text-secondary fw-normal small">(one step per line)</span></label>
+    <textarea class="form-control font-monospace" id="lhSteps" name="login_helper" rows="9" maxlength="4000" spellcheck="false"
+      placeholder="Navigate to {{ '{{' }}base_url{{ '}}' }}.&#10;Type {{ '{{' }}username{{ '}}' }} into the User Name field.&#10;Type {{ '{{' }}password{{ '}}' }} into the Password field.&#10;Click the Sign In button.&#10;Assert the page title contains 'Dashboard'.">{{ p.login_helper or '' }}</textarea>
+    <div class="small text-secondary mt-2">Use <code>{{ '{{' }}base_url{{ '}}' }}</code>, <code>{{ '{{' }}username{{ '}}' }}</code>, <code>{{ '{{' }}password{{ '}}' }}</code>, <code>{{ '{{' }}branch{{ '}}' }}</code>:
+      the environment picked for the run (or <code>tester run --url / --var / --secret</code>) fills them in. Never type a real password here.</div>
+    <div class="d-flex gap-2 mt-3"><button class="btn btn-primary btn-sm">Save login helper</button>
+      <a class="btn btn-link btn-sm" href="{{ url_for('project', pid=p.id) }}">Back to {{ p.name }}</a></div>
+  </form>
+
+  <div class="panel mt-3 small">
+    <div class="fw-semibold mb-1">When it is not added</div>
+    <ul class="mb-0 ps-3">
+      <li>The test case already signs in itself: it has a <code>## Sign in</code> / <code>## Login</code> section, or <code>@import</code>s a login helper.</li>
+      <li>The test case tests the login page itself: put <code>login: none</code> in its front matter, between the <code>---</code> lines at the top.</li>
+    </ul>
+  </div>
+</div>
+{% endblock %}

@@ -55,7 +55,7 @@ def _csv(name, header, rows):
 def make_blueprint(con, admin_required):
     bp = Blueprint('reports', __name__, url_prefix='/reports')
 
-    def summary(d_from, d_end, pid):
+    def summary(d_from, d_end, pid, dept=''):
         c = con()
         pc, pp = (' AND c.project_id=?', [pid]) if pid else ('', [])
         cases = c.execute('SELECT c.created_by AS u, COUNT(*) AS n FROM cases c '
@@ -71,12 +71,14 @@ def make_blueprint(con, admin_required):
                        f'WHERE u.at >= ? AND u.at < ?{" AND u.project_id=?" if pid else ""} GROUP BY u.username',
                        [d_from, d_end] + pp).fetchall()
         people = {r['username']: r['name'] for r in c.execute('SELECT username, name FROM users')}
+        depts = {r['username']: r['department'] for r in c.execute('SELECT username, department FROM users')}
         rows = {}
 
         def row(u):
             key = u if u else NO_USER
             if key not in rows:
                 rows[key] = {'key': key, 'username': u, 'name': people.get(u) if u else None, 'is_user': u in people,
+                             'department': depts.get(u) if u else None,
                              'cases': 0, 'runs': 0, 'passed': 0, 'failed': 0, 'other': 0,
                              'calls': 0, 'tin': 0, 'tout': 0, 'cost': 0.0}
             return rows[key]
@@ -90,6 +92,8 @@ def make_blueprint(con, admin_required):
         for r in ai:
             row(r['u']).update(calls=r['calls'] or 0, tin=r['tin'] or 0, tout=r['tout'] or 0, cost=float(r['cost'] or 0))
         out = sorted(rows.values(), key=lambda r: (-(r['cases'] + r['runs'] + r['calls']), r['key']))
+        if dept:   # one department ('-' = users without a department, incl. system rows)
+            out = [r for r in out if (r['department'] or '-') == dept]
         total = {k: sum(r[k] for r in out) for k in ('cases', 'runs', 'passed', 'failed', 'other', 'calls', 'tin', 'tout', 'cost')}
         return out, total
 
@@ -141,7 +145,10 @@ def make_blueprint(con, admin_required):
         if detail and (detail not in ('cases', 'runs') or not user):
             abort(400)
         projects = con().execute('SELECT id, name FROM projects ORDER BY name').fetchall()
-        ctx = dict(d_from=d_from, d_to=d_to, today=date.today().isoformat(), pid=pid, projects=projects, inr=pricing.usd_inr(con()),
+        import settings
+        dept = a.get('dept', '').strip()
+        dept = dept if dept in settings.DEPARTMENTS or dept == '-' else ''
+        ctx = dict(dept=dept, d_from=d_from, d_to=d_to, today=date.today().isoformat(), pid=pid, projects=projects, inr=pricing.usd_inr(con()),
                    detail=detail, user=user, status=status, statuses=RUN_STATUSES, no_user=NO_USER)
         fmt_user = '(not recorded)' if user == NO_USER else user
         csv_out = a.get('format') == 'csv'
@@ -166,12 +173,12 @@ def make_blueprint(con, admin_required):
                              for r in rows])
             return render_template('user_report.html', rows=rows, **ctx)
 
-        rows, total = summary(d_from, d_end, pid)
+        rows, total = summary(d_from, d_end, pid, dept)
         if csv_out:
             return _csv(f'user-report-{d_from}-to-{d_to}',
-                        ['User', 'Name', 'Test cases created', 'Test runs', 'Passed', 'Failed', 'Other', 'AI calls',
+                        ['User', 'Name', 'Department', 'Test cases created', 'Test runs', 'Passed', 'Failed', 'Other', 'AI calls',
                          'Input tokens', 'Output tokens', 'Total tokens', 'Cost USD', f'Cost INR (@{pricing.usd_inr(con()):g})'],
-                        [[r['username'] or '(not recorded)', r['name'] or '', r['cases'], r['runs'], r['passed'], r['failed'],
+                        [[r['username'] or '(not recorded)', r['name'] or '', r['department'] or '', r['cases'], r['runs'], r['passed'], r['failed'],
                           r['other'], r['calls'], r['tin'], r['tout'], r['tin'] + r['tout'], f"{r['cost']:.4f}",
                           f"{r['cost'] * pricing.usd_inr(con()):.2f}"] for r in rows])
         return render_template('user_report.html', rows=rows, total=total, **ctx)

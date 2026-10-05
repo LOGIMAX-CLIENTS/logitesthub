@@ -1,0 +1,43 @@
+{% extends 'base.html' %}
+{% block title %}System{% endblock %}
+{% block crumbs %}<span class="tm-crumbs"><b>Settings</b> <span>/</span> System</span>{% endblock %}
+{% block content %}
+{% include '_settings_tabs.html' %}
+
+<div class="row g-3">
+  <div class="col-lg-7">
+    <form class="panel h-100" method="post" action="{{ url_for('settings.system_save') }}">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <h2 class="h6 mb-1">Configuration</h2>
+      <div class="small text-secondary mb-3">Used by every new run and by Generate with AI. Saved changes apply straight away; no restart.</div>
+      {% for key, label, help, default in fields %}
+      <div class="mb-3">
+        <label class="form-label fw-semibold mb-1" for="s{{ loop.index }}">{{ label }}</label>
+        {% if key == 'sys.ai_provider' %}
+        <select class="form-select form-select-sm" id="s{{ loop.index }}" name="{{ key }}">
+          {% for pk, pl in providers.items() %}<option value="{{ pk }}" {{ 'selected' if vals[key] == pk }}>{{ pl }}</option>{% endfor %}</select>
+        {% elif key == 'sys.ai_model' %}
+        <select class="form-select form-select-sm" id="s{{ loop.index }}" name="{{ key }}">
+          {% for m in models %}<option {{ 'selected' if vals[key] == m }}>{{ m }}</option>{% endfor %}</select>
+        {% elif key == 'sys.audit_days' %}
+        <input class="form-control form-control-sm set-num" id="s{{ loop.index }}" name="{{ key }}" type="number" min="7" max="365" step="1" value="{{ vals[key] }}" required>
+        {% else %}
+        <input class="form-control form-control-sm" id="s{{ loop.index }}" name="{{ key }}" value="{{ vals[key] }}" required spellcheck="false">
+        {% endif %}
+        <div class="form-text">{{ help }}{% if vals[key] != default %} Default: <code>{{ default }}</code>{% endif %}</div>
+      </div>
+      {% endfor %}
+      <button class="btn btn-primary btn-sm">Save</button>
+    </form>
+  </div>
+  <div class="col-lg-5">
+    <div class="panel h-100">
+      <h2 class="h6 mb-1">System information</h2>
+      <div class="small text-secondary mb-3">Read-only. The Anthropic key itself is never shown.</div>
+      <dl class="set-info mb-0">
+        {% for k, v in info %}<dt>{{ k }}</dt><dd class="{{ 't-warn' if 'Not set' in v or 'not ' in v }}">{{ v }}</dd>{% endfor %}
+      </dl>
+    </div>
+  </div>
+</div>
+{% endblock %}

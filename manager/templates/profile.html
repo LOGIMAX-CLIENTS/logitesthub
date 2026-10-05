@@ -27,6 +27,13 @@
     </form>
   </div>
   <div class="col-lg-6">
+    {% if me.auth_source == 'pm' %}
+    <div class="panel h-100">
+      <h2 class="h6 mb-3">Password</h2>
+      <p class="text-secondary mb-1">You sign in with your PM account{% if me.pm_login %} (<b>{{ me.pm_login }}</b>){% endif %}.</p>
+      <p class="text-secondary mb-0">Your password is checked by PM and is not stored in LogiTestHub. Change it in PM.</p>
+    </div>
+    {% else %}
     <form method="post" class="panel h-100" autocomplete="off">
       <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="password">
       <h2 class="h6 mb-3">Change password</h2>
@@ -38,8 +45,25 @@
       <input class="form-control mb-3" id="cpw" name="confirm" type="password" minlength="{{ min_pw }}" autocomplete="new-password" required>
       <button class="btn btn-primary">Change password</button>
     </form>
+    {% endif %}
   </div>
 </div>
+
+<form method="post" class="panel mt-3" id="appearance">
+  <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="accent">
+  <h2 class="h6 mb-1">Appearance</h2>
+  <div class="text-secondary small mb-3">Pick the colour for buttons, links and the selected menu item (light or dark mode: the moon / sun button at the top). Only you see your choice.</div>
+  <div class="acc-picks" role="radiogroup" aria-label="Colour">
+    {% for k, label, c1, c2 in accents %}
+    <label class="acc-pick">
+      <input type="radio" name="accent" value="{{ k }}" {{ 'checked' if accent == k }} onchange="this.form.submit()">
+      <span class="acc-dot" style="background: linear-gradient(90deg, {{ c1 }}, {{ c2 }})"></span>
+      <span>{{ label }}{% if k == 'green' %} <span class="text-secondary">(default)</span>{% endif %}</span>
+    </label>
+    {% endfor %}
+  </div>
+  <noscript><button class="btn btn-primary btn-sm mt-3">Save</button></noscript>
+</form>
 
 <div class="panel mt-3 my-ai" id="my-ai">
   <h2 class="h6 mb-1">My AI usage this month</h2>

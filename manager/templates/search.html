@@ -1,0 +1,35 @@
+{% extends 'base.html' %}
+{% block title %}Search{% endblock %}
+{% block content %}
+<div class="page-head mb-3">
+  <h1>Search</h1>
+  <p>{% if q %}{{ found.projects|length }} project{{ 's' if found.projects|length != 1 }} and {{ found.cases|length }} test case{{ 's' if found.cases|length != 1 }} for “{{ q }}”{% else %}Type a project name, a test case title or a number like TC-12.{% endif %}</p>
+</div>
+{% if q %}
+{% if found.projects %}
+<h2 class="search-h">Projects</h2>
+<div class="list mb-4">
+  {% for p in found.projects %}
+  <a class="list-row case-row" href="{{ url_for('project', pid=p.id) }}">
+    <span class="proj-icon sm" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.2h7a2 2 0 0 1 2 2v7.8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></svg></span>
+    <div class="min-w-0"><div class="fw-semibold text-truncate">{{ p.name }}</div>{% if p.description %}<div class="small text-secondary text-truncate">{{ p.description }}</div>{% endif %}</div>
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+{% if found.cases %}
+<h2 class="search-h">Test cases</h2>
+<div class="list">
+  {% for c in found.cases %}
+  <a class="list-row case-row" href="{{ url_for('case', cid=c.id) }}">
+    <span class="search-tc">TC-{{ c.tc_no }}</span>
+    <div class="min-w-0"><div class="fw-semibold text-truncate">{{ c.title }}</div><div class="small text-secondary">{{ c.project }}</div></div>
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+{% if not found.projects and not found.cases %}
+<div class="panel text-secondary">Nothing matches “{{ q }}”. Try fewer words, or a test case number like TC-12.</div>
+{% endif %}
+{% endif %}
+{% endblock %}

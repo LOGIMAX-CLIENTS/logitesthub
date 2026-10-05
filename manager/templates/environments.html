@@ -1,7 +1,24 @@
 {% extends 'base.html' %}
 {% block title %}Environments{% endblock %}
-{% block crumbs %}<span class="tm-crumbs"><b>Environments</b> <span>/</span> Admin</span>{% endblock %}
+{% block scripts %}
+<script>
+document.querySelectorAll('.db-test').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var msg = b.nextElementSibling;
+    b.disabled = true; msg.className = 'db-test-msg small ms-1 text-secondary'; msg.textContent = 'Connecting…';
+    var fd = new FormData(); fd.append('csrf', {{ csrf|tojson }});
+    fetch(b.dataset.url, { method: 'POST', body: fd, credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (j) { msg.className = 'db-test-msg small ms-1 ' + (j.ok ? 't-pass' : 't-fail'); msg.textContent = j.message || (j.ok ? 'Connected' : 'Failed'); })
+      .catch(function () { msg.className = 'db-test-msg small ms-1 t-fail'; msg.textContent = 'Could not reach LogiTestHub.'; })
+      .finally(function () { b.disabled = false; });
+  });
+});
+</script>
+{% endblock %}
+{% block crumbs %}<span class="tm-crumbs"><b>Settings</b> <span>/</span> Environments</span>{% endblock %}
 {% block content %}
+{% include '_settings_tabs.html' %}
 <div class="d-flex flex-wrap gap-2 align-items-center justify-content-between mb-3">
   <div><h1 class="h4 mb-0">Environments</h1>
     <div class="text-secondary small">Where tests run. Test cases use <code>{{ '{{' }}base_url{{ '}}' }}</code>, <code>{{ '{{' }}username{{ '}}' }}</code>, <code>{{ '{{' }}password{{ '}}' }}</code>, <code>{{ '{{' }}branch{{ '}}' }}</code>; the environment picked for a run fills them in.</div></div>
@@ -23,6 +40,34 @@
       <input class="form-control form-control-sm" id="{{ pre }}Br" name="branch" value="{{ e.branch or '' if e else '' }}" placeholder="All"></div>
     <div class="col-md-3"><label class="form-label" for="{{ pre }}Note">Note</label>
       <input class="form-control form-control-sm" id="{{ pre }}Note" name="note" value="{{ e.note or '' if e else '' }}" maxlength="255"></div>
+    <div class="col-12"><details class="small" {{ 'open' if e and e.db_host }}>
+      <summary class="text-secondary">Database, read-only (optional): lets tests check what was saved with "Assert SQL" / "Remember SQL"</summary>
+      <div class="row g-2 mt-1">
+        <div class="col-md-4"><label class="form-label" for="{{ pre }}DbHost">Host</label>
+          <input class="form-control form-control-sm" id="{{ pre }}DbHost" name="db_host" value="{{ e.db_host or '' if e else '' }}" maxlength="255" placeholder="127.0.0.1" autocomplete="off"></div>
+        <div class="col-md-2"><label class="form-label" for="{{ pre }}DbPort">Port</label>
+          <input class="form-control form-control-sm" id="{{ pre }}DbPort" name="db_port" value="{{ e.db_port or '' if e else '' }}" inputmode="numeric" placeholder="3306"></div>
+        <div class="col-md-2"><label class="form-label" for="{{ pre }}DbName">Database</label>
+          <input class="form-control form-control-sm" id="{{ pre }}DbName" name="db_name" value="{{ e.db_name or '' if e else '' }}" maxlength="64" placeholder="src_v3"></div>
+        <div class="col-md-2"><label class="form-label" for="{{ pre }}DbUser">Read-only user</label>
+          <input class="form-control form-control-sm" id="{{ pre }}DbUser" name="db_user" value="{{ e.db_user or '' if e else '' }}" maxlength="64" autocomplete="off" placeholder="lth_readonly"></div>
+        <div class="col-md-2"><label class="form-label" for="{{ pre }}DbPw">Password</label>
+          <input class="form-control form-control-sm" id="{{ pre }}DbPw" name="db_password" type="password" autocomplete="new-password"
+                 placeholder="{{ 'Saved - leave blank to keep' if e and e.has_db_password else 'Not set' }}"></div>
+        <div class="col-12 form-text">Use a user that can only <b>SELECT</b> (never root / admin). Queries run on the LogiTestHub server in a read-only session; the password never leaves it.
+          {% if e and e.db_host %}<label class="ms-2"><input class="form-check-input me-1" type="checkbox" name="clear_db">Remove database</label>{% endif %}</div>
+      </div></details></div>
+    <div class="col-12"><details class="small" {{ 'open' if e and (e.login_steps or e.menu_url) }}>
+      <summary class="text-secondary">Advanced (optional): menu page and custom login steps, used by "Set up modules"</summary>
+      <div class="row g-2 mt-1">
+        <div class="col-md-12"><label class="form-label" for="{{ pre }}Menu">Menu page URL</label>
+          <input class="form-control form-control-sm" id="{{ pre }}Menu" name="menu_url" value="{{ e.menu_url or '' if e else '' }}" maxlength="500" placeholder="Leave blank: the page after login is used. e.g. index.php/admin/dashboard or https://app.example.com/home">
+          <div class="form-text">Only if the app's menu appears on a different page than the one after login. A path is joined to the Base URL.</div></div>
+        <div class="col-md-12"><label class="form-label" for="{{ pre }}Steps">Login steps</label>
+          <textarea class="form-control form-control-sm font-monospace" id="{{ pre }}Steps" name="login_steps" rows="4" maxlength="4000" spellcheck="false"
+            placeholder="Leave blank: the login form is found automatically. For unusual logins, one step per line, e.g.&#10;Type 'ACME' into the Company Code field.&#10;Type {{ '{{' }}username{{ '}}' }} into the User Id field.&#10;Type {{ '{{' }}password{{ '}}' }} into the Password field.&#10;Click the Sign In button.">{{ e.login_steps or '' if e else '' }}</textarea>
+          <div class="form-text">Standard steps only (Navigate / Type … into the X field / Select … from the X dropdown / Click the X button / Assert …). The Base URL is opened first.</div></div>
+      </div></details></div>
   </div>
 {% endmacro %}
 
@@ -53,7 +98,8 @@
     </div>
     <div class="env-meta">
       <span>User <b>{{ e.username or '-' }}</b></span><span>Password <b>{{ 'saved (encrypted)' if e.has_password else 'not set' }}</b></span>
-      <span>Branch <b>{{ e.branch or '-' }}</b></span>{% if e.note %}<span>{{ e.note }}</span>{% endif %}<span>Updated {{ e.updated_at|ago }}</span>
+      <span>Branch <b>{{ e.branch or '-' }}</b></span><span>Database <b>{{ (e.db_user ~ '@' ~ e.db_host ~ '/' ~ e.db_name) if e.db_host else 'not set' }}</b>{% if e.db_host %}
+        <button type="button" class="btn btn-link btn-sm p-0 ms-1 align-baseline db-test" data-url="{{ url_for('environment_db_test', eid=e.id) }}">Test connection</button><span class="db-test-msg small ms-1"></span>{% endif %}</span>{% if e.note %}<span>{{ e.note }}</span>{% endif %}<span>Updated {{ e.updated_at|ago }}</span>
     </div>
     <div class="collapse" id="edit{{ e.id }}">
       <form method="post" action="{{ url_for('environment_update', eid=e.id) }}" class="mt-3" autocomplete="off">

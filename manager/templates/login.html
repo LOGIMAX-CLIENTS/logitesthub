@@ -1,26 +1,98 @@
 {% extends 'base.html' %}
+{% set v2 = request.args.get('intro') == 'v2' %}{# default = version 1 (LMX, chosen 2026-10-04); /login?intro=v2 = the green design #}
 {% block title %}Sign in{% endblock %}
-{% block bodyclass %}login-page{% endblock %}
+{% block bodyclass %}login-page{{ ' lg-v2' if v2 }}{% endblock %}
+{% block head %}<script>document.documentElement.setAttribute('data-bs-theme', 'light');   // the artwork is light: sign-in always uses the light design
+  // 4 s intro (static/login-intro.js): hide the page until its overlay is up; failsafe: never hidden longer than 3 s
+  if (!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches)) {
+    document.documentElement.classList.add('li-pending');
+    setTimeout(function () { document.documentElement.classList.remove('li-pending'); }, 3000);
+  }</script>{% endblock %}
 {% block content %}
-<div class="login-shell">
-  <div class="login-hero">
-    <img src="{{ url_for('static', filename='logo.svg') }}" alt="" width="72" height="72">
-    <div class="wm wm-lg">Logi<b>TestHub</b></div>
-    <div class="login-tag">Plan • Test • Track • Deliver</div>
-    <p>AI test cases, headless runs and screen recordings for every Logimax product, in one place.</p>
+{% if not v2 %}
+<div class="lg-deco" aria-hidden="true">{# decoration in the empty space left / right of the sign-in box (static/login-deco.js places it) #}
+  {% for side, icons in [('l', [('check', '#16a37f'), ('code', '#3b82f6'), ('bug', '#e0479e')]), ('r', [('chart', '#f08a2c'), ('shield', '#6d4df2'), ('play', '#2f7cf6')])] %}
+  <div class="lg-deco-side lg-deco-{{ side }}">
+    <svg class="lg-deco-orbit" viewBox="-160 -70 320 140"><defs><linearGradient id="lgo{{ side }}" x1="0" x2="1"><stop offset="0" stop-color="#5aa8ff" stop-opacity=".55"/><stop offset=".6" stop-color="#a35cf0" stop-opacity=".45"/><stop offset="1" stop-color="#f08ad0" stop-opacity=".3"/></linearGradient></defs>
+      <ellipse rx="150" ry="52" fill="none" stroke="url(#lgo{{ side }})" stroke-width="2.2" transform="rotate(-14)"/></svg>
+    <span class="lg-deco-ball"></span>
+    {% for name, col in icons %}
+    <span class="lg-deco-tile t{{ loop.index }}" style="color: {{ col }}">
+      {% if name == 'check' %}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8 12.5 2.8 2.8L16.5 9.5"/></svg>
+      {% elif name == 'code' %}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m8.5 8-4 4 4 4M15.5 8l4 4-4 4M13.5 5.5l-3 13"/></svg>
+      {% elif name == 'bug' %}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="7.5" y="7" width="9" height="12" rx="4.5"/><path d="M9.5 7a2.5 2.5 0 0 1 5 0M12 11v8M4 11h3.5M16.5 11H20M4.5 16H7.5M16.5 16h3M5 6l2.5 2.5M19 6l-2.5 2.5"/></svg>
+      {% elif name == 'chart' %}<svg viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="13" width="4" height="7" rx="1.2"/><rect x="10" y="9" width="4" height="11" rx="1.2"/><rect x="16" y="5" width="4" height="15" rx="1.2"/></svg>
+      {% elif name == 'shield' %}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 5 6.5v5c0 4.2 3 7.6 7 9 4-1.4 7-4.8 7-9v-5z"/><path d="m9 12 2.2 2.2L15.5 10"/></svg>
+      {% else %}<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>{% endif %}
+    </span>
+    {% endfor %}
   </div>
-  <div class="login-card">
-    <h1>Sign in</h1>
-    <p class="text-secondary">Use your LogiTestHub account</p>
-    <form method="post">
-      <input type="hidden" name="csrf" value="{{ csrf }}">
-      <label class="form-label" for="u">Username</label>
-      <input class="form-control mb-3" id="u" name="username" autocomplete="username" required autofocus>
-      <label class="form-label" for="p">Password</label>
-      <input class="form-control mb-4" id="p" name="password" type="password" autocomplete="current-password" required>
-      <button class="btn btn-primary w-100">Sign in</button>
-    </form>
-    <div class="login-foot">by Logimax Technologies</div>
-  </div>
+  {% endfor %}
 </div>
+{% endif %}
+<div class="lg-shell">
+  <section class="lg-hero">
+    {% if v2 %}
+    <img class="lg-hero-img" src="{{ url_for('static', filename='login-hero-v2.jpg') }}" width="788" height="824"
+         alt="LogiTestHub: quality, automation, growth. Smarter testing for stronger products. Plan, create, run and track test cases seamlessly across all your Logimax products: test cases, test runs, insights, better products.">
+    {% else %}
+    <img class="lg-hero-img" src="{{ url_for('static', filename='login-hero.jpg') }}" width="765" height="822"
+         alt="LogiTestHub, faster testing, stronger products. AI test cases, headless runs and screen recordings for every Logimax product, in one place: test cases, test runs, insights, better products.">
+    <script>   // the picture in the remembered colour (green / orange versions; blue and purple use the original)
+      (function (img) { var a = document.documentElement.getAttribute('data-accent');
+        if (a === 'green' || a === 'orange') img.src = img.src.replace('login-hero.jpg', 'login-hero-' + a + '.jpg'); })(document.currentScript.previousElementSibling);
+    </script>
+    {% endif %}
+  </section>
+
+  <section class="lg-card">
+    {% if v2 %}<div class="lg-top"><span>New to LogiTestHub?</span>
+      <button class="lg-top-btn" type="button" data-bs-toggle="collapse" data-bs-target="#forgotNote" aria-controls="forgotNote">Contact Admin</button></div>{% endif %}
+    <h1>Sign in</h1>
+    <p class="lg-sub">{{ 'Use your PM username / email and PM password' if pm_on else 'Use your LogiTestHub account' }}</p>
+    <form method="post" novalidate>
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label class="form-label" for="u">{{ 'PM username or email' if pm_on else 'Username' }}</label>
+      <div class="lg-field">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4.5 20.5a7.5 7.5 0 0 1 15 0"/></svg>
+        <input id="u" name="username" autocomplete="username" required autofocus value="{{ request.form.get('username', '') }}">
+      </div>
+      <label class="form-label" for="p">Password</label>
+      <div class="lg-field">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><rect x="5" y="10.5" width="14" height="10" rx="2.5"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/></svg>
+        <input id="p" name="password" type="password" autocomplete="current-password" required>
+        <button class="lg-eye" type="button" id="pwToggle" aria-label="Show password" aria-pressed="false">
+          <svg class="i-show" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></svg>
+          <svg class="i-hide" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/><path d="M4 4l16 16"/></svg>
+        </button>
+      </div>
+      <div class="lg-row">
+        <label class="lg-check"><input class="form-check-input" type="checkbox" name="remember" value="1"> Remember me</label>
+        <button class="lg-link" type="button" data-bs-toggle="collapse" data-bs-target="#forgotNote" aria-expanded="false" aria-controls="forgotNote">Forgot password?</button>
+      </div>
+      <div class="collapse" id="forgotNote"><div class="lg-note">
+        {% if pm_on %}PM accounts: reset your password in PM, then sign in here with the new one. Local LogiTestHub accounts: ask your admin to reset it (Settings → Users).
+        {% else %}Ask your LogiTestHub admin to reset it in Settings → Users, then sign in with the new password.{% endif %}
+      </div></div>
+      <button class="btn btn-primary lg-submit">Sign in
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+    </form>
+    <div class="lg-foot">by <b>Logimax</b> Technologies</div>
+  </section>
+</div>
+{% endblock %}
+{% block scripts %}
+{% if not v2 %}<script src="{{ url_for('static', filename='login-deco.js') }}"></script>{% endif %}
+<script src="{{ url_for('static', filename='login-intro-v2.js' if v2 else 'login-intro.js') }}"></script>
+<script>
+(function () {   // show / hide the password
+  var b = document.getElementById('pwToggle'), p = document.getElementById('p');
+  b.addEventListener('click', function () {
+    var show = p.type === 'password';
+    p.type = show ? 'text' : 'password';
+    b.setAttribute('aria-pressed', show); b.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+    b.classList.toggle('on', show); p.focus();
+  });
+})();
+</script>
 {% endblock %}

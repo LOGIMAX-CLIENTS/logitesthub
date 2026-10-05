@@ -1,0 +1,15 @@
+{
+  "default": {
+    "host": "127.0.0.1", "port": 3307,
+    "user": "logitesthub", "password": "<logitesthub db password>", "database": "logitesthub"
+  },
+  "unified": {
+    "host": "<Unified_DB host>", "port": 3306,
+    "user": "<read-only user: SELECT on Unified_DB.Members only>", "password": "<password>", "database": "Unified_DB",
+    "members": {
+      "table": "Members", "id_column": "id", "login_columns": ["username", "email"],
+      "password_column": "password", "name_column": "first_name", "last_name_column": "last_name",
+      "active_column": "is_active", "deleted_column": null
+    }
+  }
+}

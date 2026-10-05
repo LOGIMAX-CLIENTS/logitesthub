@@ -1,0 +1,79 @@
+{% extends 'base.html' %}
+{% block title %}AI usage · {{ ('TC-' ~ case.tc_no) if case else 'not linked' }}{% endblock %}
+{% block crumbs %}<span class="tm-crumbs"><a href="{{ url_for('ai_usage') }}">AI Usage</a> <span>/</span> <b>{{ ('TC-' ~ case.tc_no) if case else 'Not linked to a test case' }}</b></span>{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap gap-2 align-items-end justify-content-between mb-3">
+  <div class="min-w-0">
+    <a class="small" href="{{ url_for('ai_usage') }}">&larr; AI Usage</a>
+    {% if case %}
+    <h1 class="h4 mb-0"><a href="{{ url_for('case', cid=case.id) }}">TC-{{ case.tc_no }}</a> {{ case.title }}</h1>
+    <div class="text-secondary small">{{ case.project }} · every AI call made for this test case (all dates)</div>
+    {% elif cid %}
+    <h1 class="h4 mb-0">Deleted test case #{{ cid }}</h1>
+    {% else %}
+    <h1 class="h4 mb-0">AI calls not linked to a test case</h1>
+    <div class="text-secondary small">Test Assistant chats that were not saved as a test case yet, and other calls without a case.</div>
+    {% endif %}
+  </div>
+  <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('ai_usage_case', cid=cid, format='csv') }}">Export CSV</a>
+</div>
+
+<div class="tiles mb-3 au-case-tiles">
+  <div class="tile"><span class="n">{{ total.calls }}</span><span>AI calls</span></div>
+  <div class="tile"><span class="n">{{ total.input_tokens|tok }}</span><span>Input tokens</span></div>
+  <div class="tile"><span class="n">{{ total.output_tokens|tok }}</span><span>Output tokens</span></div>
+  <div class="tile"><span class="n">{{ total.cache_read_tokens|tok }}</span><span>Cache read tokens</span></div>
+  <div class="tile"><span class="n">{{ total.cache_write_tokens|tok }}</span><span>Cache write tokens</span></div>
+  <div class="tile"><span class="n">{{ total.cost_usd|usd }}</span><span>Estimated cost · {{ total.cost_usd|inr(inr) }}</span></div>
+</div>
+
+<div class="panel p-0">
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0 au-table">
+      <thead><tr>
+        <th class="text-start">When</th><th class="text-start">Used for</th><th class="text-start">User</th><th class="text-start">Model</th><th class="text-start">Run</th>
+        <th class="text-end">AI calls</th><th class="text-end">Input</th><th class="text-end">Output</th>
+        <th class="text-end" title="Tokens read again from Claude's cache (cheaper than input)">Cache read</th>
+        <th class="text-end" title="Tokens written to Claude's cache">Cache write</th>
+        <th class="text-end">Total tokens</th><th class="text-end">Cost (USD)</th><th class="text-end">Cost (₹)</th>
+      </tr></thead>
+      <tbody>
+      {% for r in rows %}
+      {% set tot = (r.input_tokens or 0) + (r.output_tokens or 0) + (r.cache_read_tokens or 0) + (r.cache_write_tokens or 0) %}
+      <tr>
+        <td class="text-start text-nowrap" title="{{ r.at|dmy(true) }}">{{ r.at|dmy }}</td>
+        <td class="text-start">{{ kinds.get(r.kind, r.kind) }}{% if r.note %}<div class="small text-secondary">{{ r.note }}</div>{% endif %}</td>
+        <td class="text-start">{{ r.username or '-' }}</td>
+        <td class="text-start text-nowrap">{{ r.model or '-' }}</td>
+        <td class="text-start">{% if r.run_id and r.case_id %}<a href="{{ url_for('case', cid=r.case_id, run=r.run_id) }}">#{{ r.run_id }}</a>{% else %}-{% endif %}</td>
+        <td class="text-end">{{ r.calls or 0 }}</td>
+        <td class="text-end">{{ '{:,}'.format(r.input_tokens or 0) }}</td>
+        <td class="text-end">{{ '{:,}'.format(r.output_tokens or 0) }}</td>
+        <td class="text-end">{{ '{:,}'.format(r.cache_read_tokens or 0) }}</td>
+        <td class="text-end">{{ '{:,}'.format(r.cache_write_tokens or 0) }}</td>
+        <td class="text-end"><b>{{ '{:,}'.format(tot) }}</b></td>
+        <td class="text-end">{{ r.cost_usd|usd }}</td>
+        <td class="text-end">{{ r.cost_usd|inr(inr) }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="13" class="text-center text-secondary py-4">No AI calls for this test case.</td></tr>
+      {% endfor %}
+      </tbody>
+      {% if rows %}
+      <tfoot><tr>
+        <th class="text-start" colspan="5">Total</th>
+        <th class="text-end">{{ total.calls }}</th>
+        <th class="text-end">{{ '{:,}'.format(total.input_tokens) }}</th>
+        <th class="text-end">{{ '{:,}'.format(total.output_tokens) }}</th>
+        <th class="text-end">{{ '{:,}'.format(total.cache_read_tokens) }}</th>
+        <th class="text-end">{{ '{:,}'.format(total.cache_write_tokens) }}</th>
+        <th class="text-end">{{ '{:,}'.format(total.input_tokens + total.output_tokens + total.cache_read_tokens + total.cache_write_tokens) }}</th>
+        <th class="text-end">{{ total.cost_usd|usd }}</th>
+        <th class="text-end">{{ total.cost_usd|inr(inr) }}</th>
+      </tr></tfoot>
+      {% endif %}
+    </table>
+  </div>
+</div>
+<div class="small text-secondary mt-2">Input = new text sent to Claude · Output = Claude's answer · Cache read = text Claude re-used from its cache (much cheaper; reading code makes this large) · Cache write = text stored in the cache for the next call. Cost is an estimate from Anthropic list prices; calls on the Claude subscription are not billed per token.</div>
+{% endblock %}
