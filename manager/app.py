@@ -247,7 +247,7 @@ def login():
         key = (login_id.lower(), request.remote_addr)
         if _throttled(key):
             flash('Too many wrong attempts. Wait 5 minutes and try again.', 'danger')
-            return render_template('login.html', pm_on=pm_on), 429
+            return _login_again(login_id)
         user, msg = None, 'Wrong username or password.'
         # 1. local LogiTestHub accounts (the backup admin keeps working when PM is down)
         u = con().execute("SELECT * FROM users WHERE username=? AND auth_source='local'", (login_id,)).fetchone()
@@ -274,7 +274,18 @@ def login():
             return redirect(nxt if nxt.startswith('/') and not nxt.startswith('//') else url_for('home'))
         _failed(key)
         flash(msg, 'danger')
-    return render_template('login.html', pm_on=pm_on)
+        return _login_again(login_id)
+    # back from a failed sign-in: no intro, the message shows at once and the username is filled in again
+    again = session.pop('login_again', None)
+    return render_template('login.html', pm_on=pm_on, intro=again is None, last_user=again or '')
+
+
+def _login_again(login_id):
+    """Failed sign-in: redirect back to the sign-in page (post / redirect / get), so a refresh just reloads it
+    instead of asking the browser to send the password again."""
+    session['login_again'] = login_id
+    nxt = request.args.get('next', '')
+    return redirect(url_for('login', next=nxt) if nxt else url_for('login'))
 
 
 @app.route('/logout', methods=['POST'])
