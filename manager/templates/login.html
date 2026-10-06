@@ -4,7 +4,7 @@
 {% block bodyclass %}login-page{{ ' lg-v2' if v2 }}{% endblock %}
 {% block head %}<script>document.documentElement.setAttribute('data-bs-theme', 'light');   // the artwork is light: sign-in always uses the light design
   // 4 s intro (static/login-intro.js): hide the page until its overlay is up; failsafe: never hidden longer than 3 s
-  if (!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches)) {
+  if ({{ 'true' if intro else 'false' }} && !(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches)) {
     document.documentElement.classList.add('li-pending');
     setTimeout(function () { document.documentElement.classList.remove('li-pending'); }, 3000);
   }</script>{% endblock %}
@@ -55,7 +55,7 @@
       <label class="form-label" for="u">{{ 'PM username or email' if pm_on else 'Username' }}</label>
       <div class="lg-field">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4.5 20.5a7.5 7.5 0 0 1 15 0"/></svg>
-        <input id="u" name="username" autocomplete="username" required autofocus value="{{ request.form.get('username', '') }}">
+        <input id="u" name="username" autocomplete="username" required autofocus value="{{ last_user }}">
       </div>
       <label class="form-label" for="p">Password</label>
       <div class="lg-field">
@@ -83,7 +83,7 @@
 {% endblock %}
 {% block scripts %}
 {% if not v2 %}<script src="{{ url_for('static', filename='login-deco.js') }}"></script>{% endif %}
-<script src="{{ url_for('static', filename='login-intro-v2.js' if v2 else 'login-intro.js') }}"></script>
+{% if intro %}<script src="{{ url_for('static', filename='login-intro-v2.js' if v2 else 'login-intro.js') }}"></script>{% endif %}
 <script>
 (function () {   // show / hide the password
   var b = document.getElementById('pwToggle'), p = document.getElementById('p');
