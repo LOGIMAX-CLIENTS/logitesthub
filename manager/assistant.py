@@ -13,7 +13,7 @@ import re
 import subprocess
 import threading
 
-from flask import Blueprint, abort, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, abort, flash, jsonify, redirect, render_template, request, url_for
 
 import db
 
@@ -243,7 +243,8 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
     def home():
         p = con().execute('SELECT p.id FROM projects p LEFT JOIN chat_threads t ON t.project_id=p.id AND t.created_by=? '
                           'GROUP BY p.id ORDER BY MAX(t.updated_at) DESC, p.id LIMIT 1', (current_user()['username'],)).fetchone()
-        if not p:
+        if not p:   # the assistant works inside a project: say so instead of silently landing on Projects
+            flash('The Test Assistant works inside a project. Create a project first, then open the Test Assistant.', 'info')
             return redirect(url_for('projects'))
         return redirect(url_for('assistant.page', pid=p['id']))
 
