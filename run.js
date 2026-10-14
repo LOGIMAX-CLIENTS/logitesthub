@@ -13,7 +13,7 @@ const { showIntro } = require('./lib/intro');
 const { aiStep, explain, MODEL: AI_MODEL } = require('./lib/ai');
 const dbsteps = require('./lib/dbsteps');
 
-const DEFAULT_VARS = process.env.LTH_VARS_FILE || 'F:/TestMU-Ai/.testmuai/variables/etail.json';   // Settings -> System
+const DEFAULT_VARS = process.env.LTH_VARS_FILE || 'tests/variables/variables.json';   // Settings -> System
 
 function parseArgs(argv) {
   const a = { file: null, base: null, vars: DEFAULT_VARS, headed: false, ai: !!(process.env.ANTHROPIC_API_KEY || process.env.LTH_SERVER) };   // LTH_SERVER: AI via the LogiTestHub server (lth CLI)
@@ -75,12 +75,30 @@ function parseArgs(argv) {
 
   const results = [];
   const aiTokens = { in: 0, out: 0, cacheRead: 0, cacheWrite: 0, calls: 0, model: AI_MODEL };   // AI usage report
-  let failed = false;
+  let failed = false, cleanupFailed = false;
+  // "## Clean up" (or "## Cleanup" / "## Teardown"): runs when the test FAILED, so the same data can be used again.
+  // When it PASSED the data is kept (people look at it): the steps are reported with their values filled in and
+  // LogiTestHub asks before the next run whether to delete it. LTH_CLEANUP=always cleans up after a pass too.
+  // A step whose {{value}} was never set (the test stopped before it) is skipped, so it never deletes the wrong rows.
+  const CLEANUP = /^(clean[\s-]*up|tear[\s-]*down)\b/i;
+  const keepOnPass = process.env.LTH_CLEANUP !== 'always';
+  const keptSteps = [];
   for (let i = 0; i < tc.steps.length; i++) {
     const s = tc.steps[i];
     const shown = mask(fill(s.text, vars));
+    const cleanup = CLEANUP.test(s.section || '');
     const r = { n: i + 1, section: s.section, text: shown, status: 'skipped', ms: 0, error: '', shot: '', warnings: [] };
-    if (failed) { results.push(r); emit({ type: 'step', ...r }); continue; }
+    if (failed && !cleanup) { results.push(r); emit({ type: 'step', ...r }); continue; }
+    if (cleanup && /\{\{\s*[\w.-]+\s*\}\}/.test(fill(s.text, vars))) {
+      r.warnings.push('Skipped: a value it needs was never set (the test stopped before that step).');
+      results.push(r); emit({ type: 'step', ...r }); continue;
+    }
+    if (cleanup && !failed && keepOnPass) {   // passed: keep the data, remember how to remove it
+      keptSteps.push(fill(s.text, vars));
+      r.warnings.push('Kept: the test passed, so its data stays. You are asked before the next run whether to delete it.');
+      results.push(r); emit({ type: 'step', ...r }); continue;
+    }
+    const wasFailed = failed;   // a clean-up step failing must not hide the test's own failure
 
     const action = parseStep(fill(s.text, vars));
     const t0 = Date.now();
@@ -104,6 +122,16 @@ function parseArgs(argv) {
           r.ai = explain(e);
           if (/no API credits|API key invalid/.test(r.ai)) args.ai = false; // stop retrying every step
         }
+      }
+    } else if (action.kind === 'sqlWrite') {
+      try {
+        const res = await dbsteps.write(action.sql);
+        r.db = `${res.affected} row(s) changed`;
+        r.status = 'passed';
+      } catch (e) {
+        r.status = 'failed';
+        r.error = mask(e.message.split('\n')[0]);
+        failed = true;
       }
     } else if (action.kind === 'sqlRemember' || action.kind === 'sqlAssert') {
       try {
@@ -140,6 +168,11 @@ function parseArgs(argv) {
         failed = true;
       }
     }
+    if (cleanup && r.status === 'failed') {   // keep cleaning up; the run still fails ("data may be left")
+      cleanupFailed = true;
+      failed = wasFailed;
+      r.error = `Clean-up failed, test data may be left behind: ${r.error}`;
+    }
     r.ms = Date.now() - t0;
     r.shot = `step-${String(r.n).padStart(2, '0')}.png`;
     await page.screenshot({ path: path.join(runDir, r.shot) }).catch(() => { r.shot = ''; });
@@ -160,6 +193,8 @@ function parseArgs(argv) {
   }
 
   const needsAI = results.filter(r => r.status === 'needs-ai').length;
+  if (cleanupFailed) failed = true;
+  if (keptSteps.length && !failed) emit({ type: 'cleanup_pending', steps: keptSteps });
   const status = failed ? 'FAILED' : needsAI ? 'PARTIAL' : 'PASSED';
   const summary = {
     test: tc.title, file: args.file, status, durationMs: Date.now() - started,

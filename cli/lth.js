@@ -32,7 +32,7 @@ function positional() {   // words that are not flags or flag values
   const takesValue = new Set(['--server', '--username', '--key', '--url', '--project', '--case', '--file', '--vars',
     '--var', '--secret', '--count', '--folder', '--diff', '--title', '--env',
     '--rows', '--id', '--label', '--parent', '--link', '--sort', '--active', '--out', '--source', '--root',
-    '--kind', '--symptom', '--fix', '--avoid', '--run']);
+    '--kind', '--symptom', '--fix', '--avoid', '--run', '--note', '--task']);
   const out = [];
   for (let i = 1; i < argv.length; i++) {
     if (takesValue.has(argv[i])) { if (argv[i] !== '--diff' || (argv[i + 1] && !argv[i + 1].startsWith('--'))) i++; continue; }
@@ -67,10 +67,11 @@ function saveConfig(c) {
 function needLogin() {
   const c = loadConfig();
   if (!c.server || !c.username || !c.key) fail('not logged in. Run: tester login --server <url> --username <you> --key <access key>');
+  if (wsGet('project')) c.project = wsGet('project');   // inside a workspace its project is the default
   return c;
 }
 
-async function api(c, method, p, body, isForm) {
+async function api(c, method, p, body, isForm, soft = false) {   // soft: throw instead of ending the command
   const headers = { Authorization: 'Basic ' + Buffer.from(`${c.username}:${c.key}`).toString('base64') };
   if (body && !isForm) headers['Content-Type'] = 'application/json';
   let res;
@@ -80,12 +81,15 @@ async function api(c, method, p, body, isForm) {
       signal: AbortSignal.timeout(20 * 60 * 1000),
     });
   } catch (e) {
-    fail(`cannot reach LogiTestHub at ${c.server} (${e.cause?.code || e.message})`);
+    const msg = `cannot reach LogiTestHub at ${c.server} (${e.cause?.code || e.message})`;
+    if (soft) throw new Error(msg);
+    fail(msg, 2, { outcome: 'not_completed', category: 'logitesthub_unreachable' });
   }
   let j = {};
   try { j = await res.json(); } catch { /* not JSON */ }
   if (!res.ok || j.ok === false) {
     const msg = j.message || j.error || `HTTP ${res.status}`;
+    if (soft) throw new Error(`${msg}${res.status >= 500 ? ' (LogiTestHub server error / overloaded)' : ''}`);
     fail(res.status === 401 ? `${msg} Check your username / access key (tester login).` : msg, res.status === 429 ? 4 : 2, j);
   }
   return j;
@@ -95,6 +99,159 @@ const ask = q => new Promise(resolve => {
   const rl = require('readline').createInterface({ input: process.stdin, output: process.stderr });
   rl.question(q, a => { rl.close(); resolve(a.trim()); });
 });
+
+// ---------------------------------------------------------------- the workspace tests/ folder
+// Like kane-cli (TestMu AI): the test cases live in the developer's own project, in tests/, next to the code they
+// test, so they are reviewed and committed with it. tests/tester.json marks the folder and keeps the project's
+// LogiTestHub project id and site URL, so later commands need no --project / --url.
+
+const WS_DIR = 'tests';
+const WS_FILE = 'tester.json';
+
+function findWorkspace(from = process.cwd()) {   // the nearest folder above with tests/tester.json
+  for (let d = path.resolve(from); ; d = path.dirname(d)) {
+    if (fs.existsSync(path.join(d, WS_DIR, WS_FILE))) return d;
+    if (path.dirname(d) === d) return null;
+  }
+}
+function projectRoot(from = process.cwd()) {   // the code project we are in: git root, else a folder with a project file
+  try {
+    return path.resolve(execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: from, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim());
+  } catch { /* not a git repository */ }
+  const marks = ['package.json', 'composer.json', 'pyproject.toml', 'requirements.txt', 'pom.xml', 'go.mod', 'index.php'];
+  for (let d = path.resolve(from); ; d = path.dirname(d)) {
+    if (marks.some(m => fs.existsSync(path.join(d, m)))) return d;
+    if (path.dirname(d) === d || d === os.homedir()) return null;
+  }
+}
+function readWs(root) {
+  try { return JSON.parse(fs.readFileSync(path.join(root, WS_DIR, WS_FILE), 'utf8')); } catch { return {}; }
+}
+function createWs(root, settings = {}) {
+  const dir = path.join(root, WS_DIR);
+  // helpers/: @import files (login.md ...). variables/: test data (base_url, username, password ...) - not committed
+  fs.mkdirSync(path.join(dir, 'helpers'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'variables'), { recursive: true });
+  const ws = { format: 'tester.workspace/v1', variables: 'variables/variables.json', ...readWs(root), ...settings };
+  fs.writeFileSync(path.join(dir, WS_FILE), JSON.stringify(ws, null, 2) + '\n');
+  const vfile = path.join(dir, ws.variables);
+  if (!fs.existsSync(vfile)) fs.writeFileSync(vfile, JSON.stringify({
+    base_url: { value: '' }, username: { value: '' }, password: { value: '', secret: true } }, null, 2) + '\n');
+  const ignore = path.join(dir, '.gitignore');
+  if (!fs.existsSync(ignore)) fs.writeFileSync(ignore, '# test data with passwords stays on this PC\nvariables/\n');
+  const readme = path.join(dir, 'README.md');
+  if (!fs.existsSync(readme)) fs.writeFileSync(readme, `# UI tests (Tester CLI / LogiTestHub)
+
+Each \`*_test.md\` here is one test case in plain English, one step per line. Commit them with the code they test.
+
+    tester run --file ${WS_DIR}/<name>_test.md     run one case
+    tester test                          run every case in this folder
+    tester run "<what to test>"          new case: runs it and saves it here
+    tester case pull <id>                copy a LogiTestHub case here
+
+\`helpers/\` holds shared steps for \`@import\` (e.g. \`@import ../helpers/login.md\`). \`variables/\` holds the test
+data (\`{"username": {"value": ".."}, "password": {"value": "..", "secret": true}}\`): used by every run here, kept out of git.
+LogiTestHub (Settings -> System) uses these two folders too when it runs on this PC.
+
+\`${WS_FILE}\` keeps this project's LogiTestHub project and site URL. A \`case_id:\` line in a case's front matter links
+the file to its LogiTestHub case, so its runs are saved under that case.
+`);
+  return ws;
+}
+// The workspace for this command. First use inside a code project: create tests/ there (no --no-save, not a dry run).
+let WS;
+function workspace(create = false) {
+  if (WS !== undefined && !(create && !WS)) return WS;
+  const root = findWorkspace();
+  if (root) return (WS = { root, dir: path.join(root, WS_DIR), ...readWs(root) });
+  const proj = create && !argv.includes('--no-save') && projectRoot();
+  if (!proj) return (WS = null);
+  createWs(proj);
+  if (!JSON_OUT) console.error(`Created ${path.join(proj, WS_DIR)}${path.sep} for this project's test cases (first use here).`);
+  return (WS = { root: proj, dir: path.join(proj, WS_DIR), created: true });
+}
+const wsGet = key => (workspace() || {})[key];
+function wsSet(settings) {   // remember project / url for the next command in this workspace
+  const ws = workspace();
+  if (!ws) return;
+  const cur = readWs(ws.root);
+  if (Object.entries(settings).every(([k, v]) => v == null || cur[k] === v)) return;
+  createWs(ws.root, Object.fromEntries(Object.entries(settings).filter(([, v]) => v != null)));
+}
+
+// The workspace's test data (tests/variables/...): values that are filled in, as { key: { value, secret } }
+function wsVars() {
+  const ws = workspace();
+  if (!ws) return {};
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(ws.dir, ws.variables || 'variables/variables.json'), 'utf8'));
+    return Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, v && typeof v === 'object' ? v : { value: v }])
+      .filter(([, v]) => v.value != null && String(v.value) !== ''));
+  } catch { return {}; }
+}
+// Tell LogiTestHub which tests/ folder was used last: when it runs on this PC, Settings -> System takes the
+// variables and helpers from there. Never stops the command.
+async function reportWs(c) {
+  const ws = workspace();
+  if (!ws || !c || !c.server) return;
+  try { await api(c, 'POST', '/workspace', { tests_dir: ws.dir, root: ws.root, project: Number(readWs(ws.root).project) || undefined }, false, true); }
+  catch { /* old server or no permission: nothing to do */ }
+}
+
+function urlOpt() {   // --url, else the workspace's site URL
+  const u = flag('--url');
+  return u && u !== true ? u : wsGet('url');
+}
+
+// front matter: read / set one "key: value" line (case_id links a file to its LogiTestHub case)
+function frontGet(text, key) {
+  const fm = (text.match(/^---\s*\n([\s\S]*?)\n---\s*\n/) || [])[1] || '';
+  const m = fm.match(new RegExp(`^\\s*${key}\\s*:\\s*['"]?([^'"\\n]*?)['"]?\\s*$`, 'm'));
+  return m ? m[1] : undefined;
+}
+function frontSet(text, key, value) {
+  const m = text.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*\r?\n/);
+  const line = `${key}: ${value}`;
+  if (!m) return `---\n${line}\n---\n\n${text}`;
+  const re = new RegExp(`^\\s*${key}\\s*:.*$`, 'm');
+  const fm = re.test(m[1]) ? m[1].replace(re, line) : `${line}\n${m[1]}`;
+  return `---\n${fm}\n---\n` + text.slice(m[0].length);
+}
+const frontDel = (text, key) => text.replace(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*\r?\n/, (all, fm) =>
+  `---\n${fm.split('\n').filter(l => !new RegExp(`^\\s*${key}\\s*:`).test(l)).join('\n')}\n---\n`);
+
+function slug(s) {
+  return String(s || 'test').toLowerCase().replace(/\{\{.*?\}\}/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 50) || 'test';
+}
+// The file in tests/ for a case: the one already linked to it (case_id), else a new name that is not taken.
+function caseFile(dir, name, caseId) {
+  if (caseId && fs.existsSync(dir)) {
+    for (const f of fs.readdirSync(dir).filter(x => x.endsWith('_test.md'))) {
+      try { if (Number(frontGet(fs.readFileSync(path.join(dir, f), 'utf8'), 'case_id')) === Number(caseId)) return path.join(dir, f); } catch { /* skip */ }
+    }
+  }
+  let p = path.join(dir, `${name}_test.md`);
+  for (let n = 2; fs.existsSync(p); n++) p = path.join(dir, `${name}_${n}_test.md`);
+  return p;
+}
+const rel = p => path.relative(process.cwd(), p) || p;
+
+// tester init [--project <id|name>] [--url <site>]: make tests/ in this project now (it is also made on first use)
+async function init() {
+  const root = findWorkspace() || projectRoot() || process.cwd();
+  const settings = {};
+  if (flag('--project')) settings.project = (await resolveProject(needLogin(), flag('--project'))).id;
+  if (urlOpt()) settings.url = urlOpt();
+  const ws = createWs(root, settings);
+  WS = undefined;   // read it again: it exists now
+  const c = loadConfig();
+  if (c.server && c.username && c.key) await reportWs(c);
+  print({ ok: true, dir: path.join(root, WS_DIR), ...ws },
+    `Test cases folder: ${path.join(root, WS_DIR)}${path.sep}` +
+    `${ws.project ? `\n  LogiTestHub project: ${ws.project}` : '\n  Add the LogiTestHub project: tester init --project <id|name>'}` +
+    `${ws.url ? `\n  Site URL: ${ws.url}` : '\n  Add the site URL:            tester init --url <site>'}` +
+    `\nNext: tester run "<what to test, in plain English>"   (saved in ${WS_DIR}/ and in LogiTestHub)`);
+}
 
 // ---------------------------------------------------------------- commands
 
@@ -195,7 +352,22 @@ async function generate() {
   if (!JSON_OUT) console.error(`Generating test cases with AI on ${c.server} ... (this can take a few minutes)`);
   const j = await api(c, 'POST', '/ai/generate', body);
   saveConfig({ ...loadConfig(), project: pid });
-  print(j, `${j.message}\n` + j.cases.map(x => `  ${x.tc.padEnd(8)} ${x.title}\n           ${c.server}/cases/${x.id}`).join('\n'));
+  // a copy of each new case in tests/, linked by case_id (review it with the code; tester case push sends edits back)
+  const ws = workspace(true);
+  if (ws) {
+    wsSet({ project: pid });
+    await reportWs(c);
+    for (const x of j.cases) {
+      try {
+        const full = (await api(c, 'GET', `/cases/${x.id}`, null, false, true)).case;
+        const file = caseFile(ws.dir, `${x.tc.replace('-', '')}_${slug(x.title)}`, x.id);
+        fs.writeFileSync(file, frontSet(full.content.replace(/\r\n/g, '\n'), 'case_id', x.id));
+        x.file = file;
+      } catch (e) { x.file_error = e.message; }
+    }
+  }
+  print(j, `${j.message}\n` + j.cases.map(x => `  ${x.tc.padEnd(8)} ${x.title}\n           ${c.server}/cases/${x.id}` +
+    (x.file ? `\n           ${rel(x.file)}` : '')).join('\n'));
 }
 
 // Plain English -> a test case the runner understands: one step per line / sentence.
@@ -207,11 +379,11 @@ function toCase(text, url, title) {
 }
 
 function buildVars() {
-  const vars = {};
+  const vars = wsVars();   // tests/variables/ first; --vars / --var / --secret override it
   if (flag('--vars')) Object.assign(vars, JSON.parse(fs.readFileSync(flag('--vars'), 'utf8')));
   for (const kv of flags('--var')) { const i = kv.indexOf('='); if (i > 0) vars[kv.slice(0, i)] = { value: kv.slice(i + 1) }; }
   for (const kv of flags('--secret')) { const i = kv.indexOf('='); if (i > 0) vars[kv.slice(0, i)] = { value: kv.slice(i + 1), secret: true }; }
-  const url = flag('--url');
+  const url = urlOpt();
   // {{start_url}} = --url exactly as given (where a plain-English test starts). {{base_url}} = the same with a
   // trailing '/', because saved cases append paths to it ({{base_url}}index.php/...).
   if (url && url !== true) {
@@ -221,10 +393,11 @@ function buildVars() {
   return vars;
 }
 
-function runRunner(mdPath, varsPath, env, loginPath) {
+function runRunner(mdPath, varsPath, env, loginPath, baseDir) {
   return new Promise(resolve => {
     const args = [RUN_JS, mdPath, '--vars', varsPath];
     if (loginPath) args.push('--login', loginPath);
+    if (baseDir) args.push('--base', baseDir);   // @import paths: the case file's own folder
     if (argv.includes('--headed')) args.push('--headed');
     if (argv.includes('--no-ai')) args.push('--no-ai');
     const child = spawn(process.execPath, args, { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -241,10 +414,47 @@ async function upload(c, runDir, fields) {
   for (const name of fs.readdirSync(runDir)) {
     const p = path.join(runDir, name);
     // Only the run's own files: a page the app opens in a new tab leaves an extra 'page@<hash>.webm' recording
-    if (!/^[\w.-]{1,120}$/.test(name) || !/\.(ndjson|webm|png|jpg|html|json)$/i.test(name)) continue;
+    if (name === UPLOAD_FILE || !/^[\w.-]{1,120}$/.test(name) || !/\.(ndjson|webm|png|jpg|html|json)$/i.test(name)) continue;
     if (fs.statSync(p).isFile()) form.append('files', new Blob([fs.readFileSync(p)]), name);
   }
-  return api(c, 'POST', '/runs', form, true);
+  return api(c, 'POST', '/runs', form, true, true);
+}
+
+// ---------------------------------------------------------------- the result of a run, as structured JSON
+// outcome: passed | failed | partial | not_completed.  category says what the CLI could tell on its own:
+//   environment  - the site could not be reached / timed out / server error (network, server down or overloaded):
+//                  not a test result - run again later
+//   needs_review - a real failure: the agent decides app_bug (development) or our side (test_outdated, test_data,
+//                  agent_mistake) from the failing step, its screenshots and the code (skill: references/debug.md)
+const UPLOAD_FILE = 'upload.json';   // what to send to LogiTestHub, kept so a failed upload can be retried
+const ENV_RE = /net::ERR_|ERR_CONNECTION|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ERR_NAME_NOT_RESOLVED|ERR_INTERNET_DISCONNECTED|ERR_ADDRESS_UNREACHABLE|ERR_TIMED_OUT|ERR_EMPTY_RESPONSE|Navigation timeout|page\.goto: Timeout|\b(502|503|504)\b|Bad Gateway|Service Unavailable|Gateway Time-?out|Too Many Requests/i;
+
+function analyse(runDir, status) {
+  let steps = [], end = {};
+  try {
+    for (const line of fs.readFileSync(path.join(runDir, 'events.ndjson'), 'utf8').split('\n')) {
+      if (!line.trim()) continue;
+      const e = JSON.parse(line);
+      if (e.type === 'step') steps.push(e); else if (e.type === 'run_end') end = e;
+    }
+  } catch { /* no log: counts stay empty */ }
+  const shot = s => (s && s.shot ? path.join(runDir, s.shot) : null);
+  const i = steps.findIndex(s => s.status === 'failed');
+  const f = i >= 0 ? steps[i] : null;
+  const counts = { total: end.total ?? steps.length, passed: end.passed ?? 0, failed: end.failed ?? 0,
+    skipped: end.skipped ?? 0, needs_ai: end.needsAI ?? 0 };
+  const failed_step = f ? { n: f.n, section: f.section || null, text: f.text, error: f.error || '',
+    screenshot: shot(f), screenshot_before: shot(steps[i - 1]) } : null;
+  // a timeout on the very first page load, or a network / server error anywhere = the environment, not the test
+  const env = f && (ENV_RE.test(f.error || '') || (/^Navigate to/i.test(f.text) && /Timeout/i.test(f.error || '') && i === 0));
+  let outcome = { PASSED: 'passed', FAILED: 'failed', PARTIAL: 'partial' }[status] || 'not_completed';
+  if (outcome === 'failed' && env) outcome = 'not_completed';
+  const category = outcome === 'not_completed' ? 'environment' : outcome === 'failed' ? 'needs_review' : null;
+  const summary = outcome === 'passed' ? `All ${counts.passed} steps passed.`
+    : outcome === 'partial' ? `${counts.needs_ai} step(s) needed AI and did not run; the others passed.`
+    : f ? `Step ${f.n} ${outcome === 'not_completed' ? 'could not run' : 'failed'}: ${f.text} - ${f.error || 'no error text'}`
+    : 'The run did not finish.';
+  return { outcome, category, summary, counts, failed_step };
 }
 
 async function run() {
@@ -253,7 +463,7 @@ async function run() {
   const file = flag('--file');
   const text = positional().join(' ').trim();
   const pid = Number(flag('--project') || c.project) || null;
-  let content, caseId = null, title = flag('--title'), loginPid = pid;
+  let content, caseId = null, title = flag('--title'), loginPid = pid, savedFile = null;
 
   if (caseRef) {   // a saved LogiTestHub test case
     caseId = Number(String(caseRef).replace(/^#/, ''));
@@ -261,11 +471,28 @@ async function run() {
     const j = await api(c, 'GET', `/cases/${caseId}`);
     content = j.case.content;
     loginPid = j.case.project_id;
+    // keep a copy in the workspace tests/ the first time (a file already linked to the case is left as it is)
+    const ws = workspace(true);
+    if (ws) {
+      const f = caseFile(ws.dir, `${j.case.tc.replace('-', '')}_${slug(j.case.title)}`, caseId);
+      if (!fs.existsSync(f)) fs.writeFileSync(f, frontSet(content.replace(/\r\n/g, '\n'), 'case_id', caseId));
+      savedFile = f;
+    }
     if (/@import\s/.test(content)) console.error('Note: this case uses @import helpers; they must exist next to it on this PC, or run it from the LogiTestHub web page.');
   } else if (file && file !== true) {
     content = fs.readFileSync(file, 'utf8');
+    savedFile = path.resolve(file);
+    // a file from tests/ that is linked to its LogiTestHub case: the run is saved under that case
+    const linked = Number(frontGet(content, 'case_id'));
+    if (linked && !argv.includes('--new-case')) caseId = linked;
   } else if (text) {
-    content = toCase(text, flag('--url'), title);
+    content = toCase(text, urlOpt(), title);
+    const ws = workspace(true);   // first use in a project: makes tests/
+    if (ws) {
+      savedFile = caseFile(ws.dir, slug(title || text.split(/[.;\n]/)[0]));
+      fs.writeFileSync(savedFile, content);
+      if (!JSON_OUT) console.error(`Saved the test case as ${rel(savedFile)}`);
+    }
   } else {
     fail('usage: tester run "<what to test, in plain English>" --url <site> [--project <id>]   |   tester run --case <id>   |   tester run --file case_test.md');
   }
@@ -279,6 +506,37 @@ async function run() {
   }
   const vars = buildVars();
   if (/\{\{\s*(base_url|start_url)\s*\}\}/.test(content + loginText) && !vars.base_url) fail('this test needs the site address: add --url <site address> (or --vars file.json).');
+  // A login helper value left out is typed literally ("{{username}}") and every step after it fails on the login page
+  const loginMissing = [...new Set([...loginText.matchAll(/\{\{\s*(\w+)\s*\}\}/g)].map(x => x[1]))].filter(n => !vars[n]);
+  if (loginMissing.length) fail(`the project's login helper needs ${loginMissing.join(', ')}: add ` +
+    loginMissing.map(n => /pass|pwd|secret|pin/i.test(n) ? `--secret ${n}=<value>` : `--var ${n}=<value>`).join(' ') +
+    ' (or --vars file.json, or --no-login).');
+
+  // A passed run of this case may have kept its test data ("## Clean up" runs only after a failure): remove it first?
+  let cleared = [];
+  const envName = flag('--env') && flag('--env') !== true ? flag('--env') : '';
+  if (caseId && !argv.includes('--no-upload') && !argv.includes('--keep')) {
+    const k = await api(c, 'GET', `/cases/${caseId}/kept-data${envName ? '?env=' + encodeURIComponent(envName) : ''}`, null, false, true)
+      .catch(() => ({ ids: [] }));
+    if (k.ids && k.ids.length) {
+      let clean = argv.includes('--clean');
+      if (!clean) {
+        if (JSON_OUT || !process.stdin.isTTY)
+          fail(`a passed run of this case kept its test data (${k.runs.join('; ')}). Run again with --clean (delete it first) or --keep (leave it).`,
+            2, { kept_data: k.runs });
+        clean = /^y/i.test(await ask(`A passed run kept its test data (${k.runs.join('; ')}). Delete it before this run? [y/N] `));
+      }
+      if (clean) {   // its clean-up steps go first, in a section of their own, after the title
+        const lines = content.replace(/\r\n/g, '\n').split('\n');
+        let i = 0;
+        if (lines[0] && lines[0].trim() === '---') i = Math.max(0, lines.findIndex((l, n) => n > 0 && l.trim() === '---') + 1);
+        while (i < lines.length && !lines[i].trim()) i++;
+        if (lines[i] && lines[i].startsWith('# ')) i++;
+        content = [...lines.slice(0, i), '', k.section, ...lines.slice(i)].join('\n');
+        cleared = k.ids;
+      }
+    }
+  }
 
   fs.mkdirSync(RUNS, { recursive: true });
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lth-'));
@@ -293,33 +551,125 @@ async function run() {
     res = await runRunner(mdPath, varsPath, {
       LTH_RUNS_DIR: RUNS, LTH_SERVER: c.server, LTH_USER: c.username, LTH_KEY: c.key, LTH_CASE_ID: caseId || '',
       LTH_ENV: flag('--env') && flag('--env') !== true ? flag('--env') : '',   // database steps: which environment's DB
-    }, loginPath);
+      // @import helpers: the workspace tests/helpers/ (not the PC-wide default)
+      ...(workspace() ? { LTH_HELPERS_DIR: path.join(workspace().dir, 'helpers') } : {}),
+    }, loginPath, savedFile ? path.dirname(savedFile) : null);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });   // the vars file can hold passwords
   }
   const m = res.out.match(/REPORT : (.+)/);
   if (!m) {
     if (/Executable doesn't exist|playwright install/i.test(res.out + res.err)) fail('the browser is not installed yet. Run: tester setup');
-    fail(`the run did not finish: ${(res.err || res.out).trim().split('\n').pop()}`);
+    fail(`the run did not finish: ${(res.err || res.out).trim().split('\n').pop()}`, 5,
+      { outcome: 'not_completed', category: 'run_stopped', summary: 'The browser run stopped before the end (crash, killed or out of memory). Run it again.' });
   }
   const report = m[1].trim();
   const runDir = path.dirname(report);
   const status = (res.out.match(/RESULT : (\w+)/) || [])[1] || 'ERROR';
-  const result = { ok: true, status, report, run_dir: runDir };
+  const result = { ok: true, status, ...analyse(runDir, status), report, run_dir: runDir };
 
   if (!argv.includes('--no-upload')) {
     if (!caseId && !pid) {
+      result.upload = { ok: false, error: 'not saved: no --project given' };
       if (!JSON_OUT) console.log('\nNot saved to LogiTestHub: add --project <id> (tester projects) to keep this run there.');
     } else {
+      const fields = caseId ? { case_id: caseId } : { project_id: pid, content: frontDel(content, 'case_id'), title };
+      if (flag('--task') && flag('--task') !== true) fields.task = flag('--task');   // else the server uses your active task
+      if (envName) fields.env = envName;   // the environment whose data the run used (kept-data questions follow it)
+      if (cleared.length) fields.cleared = cleared.join(',');   // kept data this run removed first
+      fs.writeFileSync(path.join(runDir, UPLOAD_FILE), JSON.stringify(fields));
       if (!JSON_OUT) console.log('\nUploading the run to LogiTestHub ...');
-      const up = await upload(c, runDir, caseId ? { case_id: caseId } : { project_id: pid, content, title });
-      Object.assign(result, { run_id: up.run_id, case_id: up.case_id, url: up.url });
-      if (pid) saveConfig({ ...loadConfig(), project: pid });
-      if (!JSON_OUT) console.log(` VIEW   : ${up.url}`);
+      result.upload = await uploadRun(c, runDir, fields, result);
+      if (result.upload.ok && pid) saveConfig({ ...loadConfig(), project: pid });
+      // link the new file to the case LogiTestHub just made, so its next runs go under the same case
+      if (result.upload.ok && savedFile && !caseId && result.case_id && fs.existsSync(savedFile))
+        fs.writeFileSync(savedFile, frontSet(fs.readFileSync(savedFile, 'utf8'), 'case_id', result.case_id));
     }
   }
+  if (savedFile) result.file = savedFile;
+  // remember what was given explicitly (not the last project used elsewhere on this PC)
+  if (workspace()) wsSet({ project: typeof flag('--project') === 'string' ? pid : caseRef ? loginPid : undefined,
+                           url: typeof flag('--url') === 'string' ? flag('--url') : undefined });
+  await reportWs(c);
+  if (!JSON_OUT && savedFile) console.log(` FILE   : ${rel(savedFile)}`);
+  if (!JSON_OUT) console.log(` RESULT : ${result.outcome.toUpperCase()}${result.category ? ' (' + result.category + ')' : ''} - ${result.summary}`);
   print(result);
-  process.exitCode = { PASSED: 0, FAILED: 1, PARTIAL: 3 }[status] ?? 2;
+  process.exitCode = result.outcome === 'not_completed' ? 5 : ({ PASSED: 0, FAILED: 1, PARTIAL: 3 }[status] ?? 2);
+}
+
+// tester test [folder | file ...]: run every *_test.md in the workspace tests/ (or the given ones), one after the
+// other, each exactly like `tester run --file` (same options). Exit code: the worst result.
+async function testAll() {
+  const ws = workspace();
+  const given = positional();
+  const files = [];
+  for (const g of given.length ? given : ws ? [ws.dir] : []) {
+    if (!fs.existsSync(g)) fail(`not found: ${g}`);
+    if (fs.statSync(g).isDirectory()) {
+      const walk = d => fs.readdirSync(d, { withFileTypes: true }).forEach(e => {
+        const p = path.join(d, e.name);
+        if (e.isDirectory() && !e.name.startsWith('.')) walk(p);
+        else if (e.isFile() && e.name.endsWith('_test.md')) files.push(p);
+      });
+      walk(g);
+    } else files.push(g);
+  }
+  if (!files.length) fail(ws ? `no *_test.md in ${rel(ws.dir)} yet. Make one: tester run "<what to test>"`
+    : `no ${WS_DIR}/ folder here. Run inside your project (tester init), or: tester test <folder>`);
+  files.sort();
+  // the options for every run: everything except the command, its folder / file words and --json
+  const skip = new Set(given);
+  const pass = argv.slice(1).filter(a => a !== '--json' && !skip.has(a));
+  const results = [];
+  for (const [i, f] of files.entries()) {
+    if (!JSON_OUT) console.log(`\n[${i + 1}/${files.length}] ${rel(f)}`);
+    const out = await new Promise(resolve => {
+      const child = spawn(process.execPath, [__filename, 'run', '--file', f, ...pass, '--json'], { stdio: ['ignore', 'pipe', 'inherit'] });
+      let s = '';
+      child.stdout.on('data', d => { s += d; });
+      child.on('close', code => resolve({ code, s }));
+    });
+    let r;
+    try { r = JSON.parse(out.s.slice(out.s.indexOf('{'))); } catch { r = { outcome: 'not_completed', summary: 'no result (see above)' }; }
+    results.push({ file: f, exit: out.code, outcome: r.outcome || (r.ok === false ? 'error' : 'not_completed'),
+      summary: r.summary || r.error || '', url: r.url, case_id: r.case_id });
+    if (!JSON_OUT) console.log(`  ${(r.outcome || 'error').toUpperCase()} - ${r.summary || r.error || ''}${r.url ? `\n  ${r.url}` : ''}`);
+  }
+  const count = o => results.filter(r => r.outcome === o).length;
+  const totals = { total: results.length, passed: count('passed'), failed: count('failed'), partial: count('partial'),
+    not_completed: results.length - count('passed') - count('failed') - count('partial') };
+  print({ ok: true, ...totals, results },
+    `\n${totals.passed}/${totals.total} passed` + (totals.failed ? `, ${totals.failed} failed` : '') +
+    (totals.partial ? `, ${totals.partial} partial` : '') + (totals.not_completed ? `, ${totals.not_completed} not completed` : ''));
+  process.exitCode = totals.failed ? 1 : totals.not_completed ? 5 : totals.partial ? 3 : 0;
+}
+
+// upload a finished run; a network / server problem here never hides the run's own result
+async function uploadRun(c, runDir, fields, result) {
+  try {
+    const up = await upload(c, runDir, fields);
+    Object.assign(result, { run_id: up.run_id, case_id: up.case_id, url: up.url });
+    if (!JSON_OUT) console.log(` VIEW   : ${up.url}`);
+    return { ok: true };
+  } catch (e) {
+    if (!JSON_OUT) console.log(` Not saved to LogiTestHub: ${e.message}\n Try again later: tester upload "${runDir}"`);
+    return { ok: false, error: e.message, retry: `tester upload "${runDir}"` };
+  }
+}
+
+// tester upload <run dir>: send a run whose upload failed (LogiTestHub was unreachable or overloaded)
+async function uploadCmd() {
+  const c = needLogin();
+  const runDir = positional()[0];
+  if (!runDir || !fs.existsSync(path.join(runDir, 'events.ndjson'))) fail('usage: tester upload <run dir>   (the run_dir from the run result)');
+  let fields;
+  try { fields = JSON.parse(fs.readFileSync(path.join(runDir, UPLOAD_FILE), 'utf8')); } catch { fail(`no ${UPLOAD_FILE} in ${runDir}: this run was not meant to be saved (run it again with --project or --case)`); }
+  let status = 'ERROR';
+  try { status = JSON.parse(fs.readFileSync(path.join(runDir, 'events.ndjson'), 'utf8').trim().split('\n').pop()).status || status; } catch { /* keep ERROR */ }
+  const result = { ok: true, status, ...analyse(runDir, status), run_dir: runDir };
+  result.upload = await uploadRun(c, runDir, fields, result);
+  print(result, result.upload.ok ? '' : `Not saved: ${result.upload.error}`);
+  process.exitCode = result.upload.ok ? 0 : 2;
 }
 
 function setup() {
@@ -354,19 +704,28 @@ function help() {
   console.log(`Tester CLI ${PKG.version} - LogiTestHub
 
   tester login [--server <url>] [--username <u>] [--key <access key>]   connect to LogiTestHub
-  tester setup                                       install the headless browser (once)
+  tester init [--project <id|name>] [--url <site>]  make ${WS_DIR}/ in this project for its test cases (also made on first use)
+  tester setup                                      install the headless browser (once)
   tester whoami | tester logout
   tester projects                                    list projects
   tester cases <project id>                          list test cases
+  tester case pull <case id> [--out file.md]         save a case's steps to a file (to fix and run it)
+  tester case push <case id> --file file.md [--dry-run] [--force] [--note "why"]
+                                                     save the fixed steps back into LogiTestHub
   tester run "<test in plain English>" --url <site> [--project <id>]
   tester run --case <case id> --url <site>           run a saved test case
+  tester run --case <id> ... --clean | --keep          a passed run kept its test data: delete it first, or leave it
   tester run --file my_test.md --url <site>          run a test case file
-        [--headed] [--no-ai] [--no-upload] [--no-login] [--env <name>] [--var k=v] [--secret k=v] [--vars file.json]
+  tester test [folder | files]                       run every *_test.md in ${WS_DIR}/ (same options as run)
+        [--headed] [--no-ai] [--no-upload] [--no-login] [--no-save] [--env <name>] [--var k=v] [--secret k=v] [--vars file.json]
         (--env: the LogiTestHub environment whose read-only database "Assert SQL" / "Remember SQL" steps use)
         (the project's login helper runs first; --no-login, or "login: none" in the case, skips it)
   tester generate "<task / bug / requirement>" --project <id> [--count 6] [--diff [base-branch]]
+  tester upload <run dir>                            save a run whose upload failed (LogiTestHub unreachable / busy)
   tester usage                                       your AI use this month
   tester lessons <project id|name>                   lessons learned: read before writing / running a test
+  tester task start PM-LMX-1741 | tester task stop | tester task   PM task: tests you create / run are linked to it
+  tester task PM-LMX-1741                            the task's test cases and their latest results (+ the page PM shows)
   tester lesson add --project <id|name> --kind <app_bug|test_outdated|environment|test_data|agent_mistake>
         --title "<what went wrong>" --avoid "<rule for next time>" [--symptom ..] [--fix ..] [--case <id>] [--run <id>]
   tester skill install                               add the /tester skill to Claude Code (~/.claude/skills/tester)
@@ -376,7 +735,12 @@ function help() {
         [--id id_menu] [--label label] [--parent parent] [--link link] [--sort sort] [--active active] [--source text]
 
   --json   machine-readable output (for AI agents and CI)
-  Exit codes: 0 passed, 1 failed, 3 partial (some steps need AI), 4 AI limit reached, 2 other errors.
+  Exit codes: 0 passed, 1 failed, 3 partial (some steps need AI), 4 AI limit reached,
+              5 not completed (site / network / server problem, or the run stopped: not a test result), 2 other errors.
+  A run's JSON: status, outcome (passed|failed|partial|not_completed), category (environment|needs_review|...),
+              summary, counts, failed_step {n, text, error, screenshot, screenshot_before}, url, upload {ok, error, retry}.
+  Inside a project, test cases are saved as files in ${WS_DIR}/ (made the first time; ${WS_DIR}/${WS_FILE} keeps the
+  LogiTestHub project and site URL, so --project / --url can be left out). --no-save: do not write a file.
   Runs are kept in ${RUNS}`);
 }
 
@@ -507,9 +871,96 @@ async function modules() {
   fail('usage: tester modules pull --project <id|name> | tester modules push <file> [--dry-run] | tester modules build --rows <file> --project <name>');
 }
 
+// ---------------------------------------------------------------- case pull / push: a fix made while debugging goes back
+// into the LogiTestHub case, so the next run (web, Test Run, a teammate, the next session) starts from the fixed steps.
+
+const PULLED = path.join(HOME, 'pulled.json');   // case id -> updated_at of the version pulled (conflict check on push)
+const BACKUPS = path.join(HOME, 'case-backups');
+
+function lineDiff(a, b) {   // small LCS line diff: ['- old', '+ new'] (cases are tens of lines)
+  const x = a.split('\n'), y = b.split('\n');
+  const L = Array.from({ length: x.length + 1 }, () => new Array(y.length + 1).fill(0));
+  for (let i = x.length - 1; i >= 0; i--) for (let j = y.length - 1; j >= 0; j--)
+    L[i][j] = x[i] === y[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const out = [];
+  let i = 0, j = 0;
+  while (i < x.length || j < y.length) {
+    if (i < x.length && j < y.length && x[i] === y[j]) { i++; j++; }
+    else if (j < y.length && (i >= x.length || L[i][j + 1] > L[i + 1][j])) out.push('+ ' + y[j++]);
+    else out.push('- ' + x[i++]);
+  }
+  return out;
+}
+
+async function caseCmd() {
+  const c = needLogin();
+  const [sub, ref] = positional();
+  const id = Number(String(ref || '').replace(/^#/, ''));
+  if (!['pull', 'push'].includes(sub) || !id) fail('usage: tester case pull <case id> [--out file.md]  |  tester case push <case id> --file file.md [--dry-run] [--force] [--note "why"]');
+  let pulled = {};
+  try { pulled = JSON.parse(fs.readFileSync(PULLED, 'utf8')); } catch { /* none yet */ }
+  const cur = (await api(c, 'GET', `/cases/${id}`)).case;
+
+  if (sub === 'pull') {
+    const ws = workspace(true);
+    const out = (flag('--out') !== true && flag('--out'))
+      || (ws ? rel(caseFile(ws.dir, `${cur.tc.replace('-', '')}_${slug(cur.title)}`, id)) : `${cur.tc}_test.md`);
+    fs.writeFileSync(out, ws ? frontSet(cur.content.replace(/\r\n/g, '\n'), 'case_id', id) : cur.content);
+    fs.mkdirSync(HOME, { recursive: true });
+    fs.writeFileSync(PULLED, JSON.stringify({ ...pulled, [id]: cur.updated_at }, null, 2));
+    await reportWs(c);
+    return print({ ok: true, id, tc: cur.tc, title: cur.title, file: path.resolve(out), updated_at: cur.updated_at },
+      `${cur.tc} ${cur.title}\nSaved to ${path.resolve(out)}. Edit it, run it (tester run --file ${out} --project ${cur.project_id}), then: tester case push ${id} --file ${out}`);
+  }
+
+  const file = flag('--file');
+  if (!file || file === true) fail(`tester case push ${id} --file <the fixed _test.md>`);
+  let content;
+  try { content = frontDel(fs.readFileSync(file, 'utf8'), 'case_id').replace(/^﻿/, '').replace(/\r\n/g, '\n').trim() + '\n'; } catch (e) { fail(`cannot read ${file}: ${e.message}`); }
+  const force = argv.includes('--force');
+  const base = pulled[id];
+  if (base && base !== cur.updated_at && !force)
+    fail(`${cur.tc} was changed by ${cur.updated_by || 'someone'} at ${cur.updated_at}, after you pulled it. Pull it again (tester case pull ${id}) and redo your change, or push with --force.`, 2, { error: 'conflict' });
+  const diff = lineDiff(cur.content.replace(/\r\n/g, '\n').trim() + '\n', content);
+  if (!diff.length) return print({ ok: true, id, tc: cur.tc, changed: false }, `${cur.tc}: no change - LogiTestHub already has these steps.`);
+  const shown = diff.slice(0, 60).join('\n') + (diff.length > 60 ? `\n… (+${diff.length - 60} more lines)` : '');
+  if (argv.includes('--dry-run')) return print({ ok: true, id, tc: cur.tc, dry_run: true, diff }, `${cur.tc} ${cur.title} - DRY RUN, nothing saved\n${shown}`);
+
+  fs.mkdirSync(BACKUPS, { recursive: true });   // the server keeps no history of steps: keep the old version here
+  const backup = path.join(BACKUPS, `${cur.tc}-${new Date().toISOString().replace(/[:.]/g, '-')}.md`);
+  fs.writeFileSync(backup, cur.content);
+  const note = flag('--note');
+  const j = await api(c, 'PUT', `/cases/${id}`, { content, expected_updated_at: force ? undefined : (base || cur.updated_at), note: note === true ? undefined : note });
+  fs.writeFileSync(PULLED, JSON.stringify({ ...pulled, [id]: j.updated_at }, null, 2));
+  print({ ok: true, id, tc: cur.tc, changed: j.changed, title: j.title || cur.title, diff, backup, url: `${c.server}/cases/${id}` },
+    `Saved ${cur.tc} in LogiTestHub: ${c.server}/cases/${id}\n${shown}\nOld version kept in ${backup}`);
+}
+
 // ---------------------------------------------------------------- main
 
-const COMMANDS = { login, logout, whoami, projects, cases, usage, generate, run, setup, help, modules, skill, lessons, lesson };
+// PM task: while a task is active every test you create or run is linked to it (also started from the PM task page)
+async function taskCmd() {
+  const c = needLogin();
+  const [sub, code] = positional();
+  if (sub === 'start' && code) {
+    const j = await api(c, 'POST', `/tasks/${encodeURIComponent(code)}/start`);
+    return print(j, `Testing ${j.task}: every test you create or run is linked to it for ${j.hours} hours or until: tester task stop` +
+      (j.stopped ? `\n(${j.stopped} was stopped)` : '') + `\n${j.url}`);
+  }
+  if (sub === 'stop') {
+    const j = await api(c, 'POST', '/task/stop');
+    return print(j, j.stopped ? `Stopped testing ${j.stopped}.` : 'No task was active.');
+  }
+  if (sub && sub !== 'show') {   // tester task PM-LMX-1741
+    const j = await api(c, 'GET', `/tasks/${encodeURIComponent(sub)}`);
+    return print(j, `${j.task}: ${j.cases} test case(s), ${j.passed} passed, ${j.failed} failed\n${j.url}\n` +
+      j.tests.map(x =>`  ${x.tc.padEnd(8)} ${x.status.padEnd(8)} ${x.title}`).join('\n'));
+  }
+  const j = await api(c, 'GET', '/task');
+  print(j, j.task ? `Active task: ${j.task} (tester task stop to end it)` : 'No active task. Start one: tester task start PM-LMX-1741');
+}
+
+const COMMANDS = { init, test: testAll, task: taskCmd, login, logout, whoami, projects, cases, case: caseCmd, usage, generate, run, setup, help, modules, skill, lessons, lesson, upload: uploadCmd };
 (async () => {
   const cmd = argv[0];
   if (!cmd || cmd === '--help' || cmd === '-h') return help();

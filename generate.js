@@ -10,8 +10,8 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { generateCases, explain, MODEL } = require('./lib/ai');
 
-const VARS_FILE = process.env.LTH_VARS_FILE || 'F:/TestMU-Ai/.testmuai/variables/etail.json';   // Settings -> System
-const LOGIN_HELPER = require('path').join(process.env.LTH_HELPERS_DIR || 'F:/TestMU-Ai/.testmuai/tests/Retail/etail-lot-inward/helpers', 'login.md');
+const VARS_FILE = process.env.LTH_VARS_FILE || 'tests/variables/variables.json';   // Settings -> System
+const LOGIN_HELPER = require('path').join(process.env.LTH_HELPERS_DIR || 'tests/helpers', 'login.md');
 const MAX_DIFF_CHARS = 400000;
 
 function parseArgs(argv) {
@@ -103,7 +103,9 @@ function toMarkdown(c) {
   console.log(`\nSaved ${result.cases.length} cases to ${dir}`);
   console.log(`Tokens: in ${result.usage.input_tokens}, out ${result.usage.output_tokens}`);
   // One machine-readable line for LogiTestHub's AI usage report.
-  console.log('USAGE_JSON ' + JSON.stringify({ model: MODEL, calls: 1, in: result.usage.input_tokens || 0, out: result.usage.output_tokens || 0,
+  // via 'claude-code' = the Claude subscription answered (no credits used)
+  console.log('USAGE_JSON ' + JSON.stringify({ model: result.usage.model || MODEL, via: result.usage.via, calls: 1,
+    in: result.usage.input_tokens || 0, out: result.usage.output_tokens || 0,
     cacheRead: result.usage.cache_read_input_tokens || 0, cacheWrite: result.usage.cache_creation_input_tokens || 0 }));
   console.log('Review them, then run:  node run-all.js "' + dir + '"');
 })();
