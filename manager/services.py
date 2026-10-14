@@ -70,6 +70,8 @@ def generate_cases(pid, folder_id, task, count, repo, username, diff_text=None):
                     title = db.case_title(text, '')
                     if title:
                         new_ids.append(db.add_case(c, pid, folder_id, title, text, username))
+                        import pmtasks
+                        pmtasks.tag(c, new_ids[-1], username, 'generate')
         if um and new_ids:   # one AI call made all the cases: split its tokens evenly across them
             usage = json.loads(um.group(1))
             for i, cid in enumerate(new_ids):

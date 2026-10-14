@@ -1,6 +1,6 @@
 {
   "name": "logitesthub-cli",
-  "version": "1.0.0",
+  "version": "1.4.0",
   "description": "Tester CLI (tester): plain-English UI tests in a headless browser, results in LogiTestHub",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"

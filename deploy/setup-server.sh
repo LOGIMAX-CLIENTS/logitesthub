@@ -57,7 +57,8 @@ echo "---- $(date '+%F %T') setup started (instance: $SERVICE) ----"
 # ---------- answers: saved answers of an earlier run (defaults), then values given on the command line /
 # --config (those win: `sudo DB_MODE=rds bash setup-server.sh` is not overridden by the saved file) ----------
 ANSWER_VARS="APP_USER INSTALL_DIR TIMEZONE APP_PORT NGINX_PORT GITHUB_REPO GITHUB_BRANCH DB_MODE RDS_HOST RDS_PORT RDS_MASTER_USER
-  DB_NAME DB_USER PM_DB_HOST PM_DB_PORT PM_DB_NAME PM_DB_USER DOMAIN SSL_MODE CERTBOT_EMAIL ADMIN_USERNAME ADMIN_NAME WEB_SERVER"
+  DB_NAME DB_USER PM_DB_HOST PM_DB_PORT PM_DB_NAME PM_DB_USER PM_MEMBERS_JSON DOMAIN SSL_MODE CERTBOT_EMAIL ADMIN_USERNAME ADMIN_NAME WEB_SERVER
+  LTH_PUBLIC_URL"
 GIVEN=$(for v in $ANSWER_VARS; do [ -n "${!v:-}" ] && declare -p "$v"; done; true)
 if [ -f "$SAVED_CONF" ]; then
   # shellcheck disable=SC1090
@@ -95,6 +96,7 @@ no_quote() { case "$2" in *"'"*|*'\'*|*'"'*) die "$1 must not contain quotes or 
 # values that already exist on this server (re-run): Enter keeps them
 OLD_TOKEN=$( [ -f "$TOKEN_FILE" ] && cat "$TOKEN_FILE" || true )
 OLD_AI_KEY=$( [ -f "$ENV_FILE" ] && sed -n 's/^ANTHROPIC_API_KEY=//p' "$ENV_FILE" || true )
+OLD_PM_KEY=$( [ -f "$ENV_FILE" ] && sed -n 's/^LTH_PM_MCP_KEY=//p' "$ENV_FILE" || true )
 
 echo
 echo "${c_cyn}LogiTestHub server setup${c_off}: answer the questions below (Enter = value in [brackets])."
@@ -140,9 +142,13 @@ echo; echo "  -- PM sign-in (optional: Unified_DB, read-only user) --"
 ask PM_DB_HOST "PM Unified_DB host (Enter = skip, local accounts only)" ""
 if [ -n "$PM_DB_HOST" ]; then
   ask PM_DB_PORT "PM DB port" "3306"
-  ask PM_DB_NAME "PM DB name" "Unified_DB"
+  ask PM_DB_NAME "PM DB name" "Logimax"
   ask PM_DB_USER "PM DB read-only user (SELECT on Members only)" ""
   ask_secret PM_DB_PASSWORD "PM DB read-only password (Enter on a re-run = keep)" "" 0
+  # where PM signs people in: Logimax.auth_user (view over ticketing_system_live.auth_user), username or email, Django pbkdf2
+  ask PM_MEMBERS_JSON "PM user table mapping (JSON)" '{"table": "auth_user", "id_column": "id", "login_columns": ["username", "email"], "password_column": "password", "name_column": "first_name", "last_name_column": "last_name", "active_column": "is_active"}'
+  python3 -c 'import json,sys; m=json.loads(sys.argv[1]); assert isinstance(m, dict) and m.get("table")' "$PM_MEMBERS_JSON" 2>/dev/null \
+    || die "PM members mapping is not valid JSON with a \"table\"" "run again; Enter at that question uses the default"
 fi
 
 echo; echo "  -- Domain / HTTPS --"
@@ -199,6 +205,11 @@ PROTO_VAR="lth_proto_${SERVICE//-/_}"   # nginx map variable: one per instance (
 
 echo; echo "  -- AI + first admin --"
 ask_secret ANTHROPIC_API_KEY "Anthropic API key (sk-ant-...; Enter = skip, AI steps off)" "$OLD_AI_KEY" 0
+# PM integration: the link PM shows for a task's tests is built from the public address; the PM MCP key (from the
+# PM team, pm:write) lets LogiTestHub attach it to the PM task. Enter = keep / skip.
+DEF_PUBLIC=$( [ -n "$DOMAIN" ] && echo "https://$DOMAIN" || echo "" )
+ask LTH_PUBLIC_URL "Public address of this LogiTestHub (links sent to PM, e.g. https://lth.logimaxindia.com)" "${LTH_PUBLIC_URL:-$DEF_PUBLIC}"
+ask_secret LTH_PM_MCP_KEY "PM MCP key for LogiTestHub (from the PM team; Enter = keep / skip)" "$OLD_PM_KEY" 0
 ask ADMIN_USERNAME "Admin username" "admin"
 ask ADMIN_NAME     "Admin full name" "Administrator"
 ask_secret ADMIN_PASSWORD "Admin password, min 8 chars (Enter = skip if this admin already exists)" "" 0
@@ -359,7 +370,7 @@ install -d -m 700 -o "$APP_USER" -g "$APP_USER" "$MGR/data"
 DB_HOST="$DB_HOST" DB_PORT="$DB_PORT" DB_USER="$DB_USER" DB_PASSWORD="$DB_PASSWORD" DB_NAME="$DB_NAME" \
 SSL_CA=$( [ "$DB_MODE" = rds ] && echo "$RDS_CA" || true ) \
 PM_DB_HOST="${PM_DB_HOST:-}" PM_DB_PORT="${PM_DB_PORT:-3306}" PM_DB_USER="${PM_DB_USER:-}" \
-PM_DB_PASSWORD="${PM_DB_PASSWORD:-}" PM_DB_NAME="${PM_DB_NAME:-Unified_DB}" OUT="$MGR/data/mysql.json" \
+PM_DB_PASSWORD="${PM_DB_PASSWORD:-}" PM_DB_NAME="${PM_DB_NAME:-Logimax}" PM_MEMBERS_JSON="${PM_MEMBERS_JSON:-}" OUT="$MGR/data/mysql.json" \
 python3 - <<'PY'
 import json, os
 e = os.environ
@@ -375,6 +386,8 @@ if e.get('PM_DB_HOST'):
     u = cfg.get('unified') or {}
     pw = e['PM_DB_PASSWORD'] or u.get('password', '')
     u.update({'host': e['PM_DB_HOST'], 'port': int(e['PM_DB_PORT']), 'user': e['PM_DB_USER'], 'password': pw, 'database': e['PM_DB_NAME']})
+    if e.get('PM_MEMBERS_JSON'):
+        u['members'] = json.loads(e['PM_MEMBERS_JSON'])
     if e.get('SSL_CA'):
         u['ssl_ca'] = e['SSL_CA']
     cfg['unified'] = u
@@ -413,6 +426,8 @@ install -m 640 -o root -g "$APP_USER" /dev/null "$ENV_FILE"
   echo "LTH_SECURE_COOKIE=$SECURE"
   echo "PYTHONUNBUFFERED=1"
   if [ -n "$ANTHROPIC_API_KEY" ]; then echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY"; fi
+  if [ -n "$LTH_PUBLIC_URL" ]; then echo "LTH_PUBLIC_URL=$LTH_PUBLIC_URL"; fi
+  if [ -n "$LTH_PM_MCP_KEY" ]; then echo "LTH_PM_MCP_KEY=$LTH_PM_MCP_KEY"; fi
 } > "$ENV_FILE"
 ok "written (mode 640)"
 
