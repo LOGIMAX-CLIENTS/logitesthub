@@ -1,11 +1,11 @@
 {% extends 'base.html' %}
-{% block title %}Test Assistant activity{% endblock %}
-{% block crumbs %}<span class="tm-crumbs"><b>Test Assistant</b> <span>/</span> Activity · Admin</span>{% endblock %}
+{% block title %}Tester Assistant activity{% endblock %}
+{% block crumbs %}<span class="tm-crumbs"><b>Tester Assistant</b> <span>/</span> Activity · Admin</span>{% endblock %}
 {% block content %}
 <div class="d-flex flex-wrap gap-2 align-items-end justify-content-between mb-3">
   <div>
-    <h1 class="h4 mb-0">Test Assistant activity</h1>
-    <div class="text-secondary small">Who used the Test Assistant, what they asked, which test cases they saved and how their runs went. Admins only.</div>
+    <h1 class="h4 mb-0">Tester Assistant activity</h1>
+    <div class="text-secondary small">Who used the Tester Assistant, what they asked, which test cases they saved and how their runs went. Admins only.</div>
   </div>
   <form method="get" class="d-flex gap-2 align-items-center">
     <label class="small text-secondary" for="actP">Project</label>
@@ -42,7 +42,7 @@
         <td class="text-start text-nowrap">{{ u.last_at|dmy }}</td>
       </tr>
       {% else %}
-      <tr><td colspan="14" class="text-center text-secondary py-4">Nobody has used the Test Assistant yet.</td></tr>
+      <tr><td colspan="14" class="text-center text-secondary py-4">Nobody has used the Tester Assistant yet.</td></tr>
       {% endfor %}
       </tbody>
       {% if users %}<tfoot><tr><th class="text-start">Total</th><th></th><th class="text-end">{{ total.chats }}</th><th class="text-end">{{ total.messages }}</th><th class="text-end">{{ total.saved }}</th>
