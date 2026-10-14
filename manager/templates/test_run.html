@@ -42,7 +42,7 @@
       {% if tr.mode == 'dynamic' %}
       <div class="col-md-3"><label class="form-label" for="eFolder">Folder</label><select class="form-select form-select-sm" id="eFolder" name="folder_id"><option value="">All folders</option>
         {% for f in folders %}<option value="{{ f.id }}" {{ 'selected' if f.id == tr.folder_id }}>{{ f.name }}</option>{% endfor %}</select></div>{% endif %}
-      <div class="col-md-3"><label class="form-label" for="eEnv">Environment</label><select class="form-select form-select-sm" id="eEnv" name="env_id">{% for e in env_list %}<option value="{{ e.id }}" {{ 'selected' if e.id == tr.env_id }}>{{ e.name }}</option>{% endfor %}</select></div>
+      <div class="col-md-3"><label class="form-label" for="eEnv">Environment</label><select class="form-select form-select-sm" id="eEnv" name="env_id">{% for e in env_list if e.owner is none %}<option value="{{ e.id }}" {{ 'selected' if e.id == tr.env_id }}>{{ e.name }}</option>{% endfor %}</select></div>
       <div class="col-md-2 d-flex align-items-end"><label class="form-check"><input class="form-check-input" type="checkbox" name="only_ready" {{ 'checked' if tr.only_ready }}> Ready for QA only</label></div>
       <div class="col-12"><label class="form-label" for="eDesc">Description</label><input class="form-control form-control-sm" id="eDesc" name="description" value="{{ tr.description or '' }}" maxlength="500"></div>
     </div>
@@ -125,7 +125,7 @@
 <script type="application/json" id="cpData">{{ picker|tojson }}</script>
 
 <div class="modal fade" id="newSched" tabindex="-1" aria-hidden="true">
-  <div class="modal-dialog modal-dialog-centered">{{ m.schedule_form([], env_list, days, today, fixed_run=tr, back=url_for('testruns.detail', tid=tr.id)) }}</div>
+  <div class="modal-dialog modal-dialog-centered">{{ m.schedule_form([], env_list|selectattr('owner', 'none')|list, days, today, fixed_run=tr, back=url_for('testruns.detail', tid=tr.id)) }}</div>
 </div>
 {% endblock %}
 {% block scripts %}<script>

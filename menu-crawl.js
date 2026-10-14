@@ -10,10 +10,10 @@ const { readMenu } = require('./lib/menu');
 const { loadVars, makeMasker } = require('./lib/vars');
 
 const arg = name => { const i = process.argv.indexOf(name); return i > -1 ? process.argv[i + 1] : undefined; };
-const HELPERS = process.env.LTH_HELPERS_DIR || 'F:/TestMU-Ai/.testmuai/tests/Retail/etail-lot-inward/helpers';
+const HELPERS = process.env.LTH_HELPERS_DIR || 'tests/helpers';
 
 (async () => {
-  const varsFile = arg('--vars') || process.env.LTH_VARS_FILE || 'F:/TestMU-Ai/.testmuai/variables/etail.json';
+  const varsFile = arg('--vars') || process.env.LTH_VARS_FILE || 'tests/variables/variables.json';
   const shot = arg('--shot');
   let browser, page, mask = s => s, result;
   try {

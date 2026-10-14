@@ -34,6 +34,52 @@ tester whoami --json
    `tester lesson add ...` so the next test (yours or a teammate's) avoids it.
 4. Also record a lesson when **you** made a mistake the user had to correct (wrong command, wrong URL, wrong
    assumption about a screen): kind `agent_mistake`.
+5. **Save the fix where the test lives.** A fix made only in the run (a temp copy, an edited command) is lost: the
+   next session runs the old steps and fails the same way. In the runs of 2026-10-08 every evening failure repeated
+   a morning failure that had been fixed only in the run. For a saved case, fix it like this:
+   ```
+   tester case pull <case id> --json                     # writes tests/TC<n>_<title>_test.md (the "file" in the JSON) and remembers the version
+   # edit the file, then prove the fix:
+   tester run --file TC-<n>_test.md --project <id> --url <site> --var username=.. --secret password=.. --json
+   tester case push <case id> --file TC-<n>_test.md --dry-run --json   # check the diff: only your fix
+   tester case push <case id> --file TC-<n>_test.md --note "<what was fixed>" --json
+   ```
+   - Push only after the fixed run PASSED, and only the steps you changed (never delete a failing check to pass).
+   - An `app_bug` is not fixed in the case: leave the case as it is.
+   - Push says *changed by someone after you pulled* → pull again, redo the change. `--force` only if the user says so.
+   - The old version is kept in `~/.lth/case-backups/` (say where, in the report).
+   - For a `_test.md` that is not a LogiTestHub case, just save the edited file.
+
+### Pre-run checklist (every run, before you press Enter)
+
+Reading lessons is not enough: on 2026-10-08 the same four mistakes came back hours after their lessons were saved.
+Check the case line by line against this list **and** each lesson's `avoid`:
+
+- [ ] Login values passed: `--var username=.. --secret password=..` (or `--vars file.json`). The CLI stops when they are missing.
+- [ ] No prose in the body: every sentence under a `##` section is run as a step. Notes go in the chat / PR, not the case.
+- [ ] Every element has a hint taken from the view code: `(#id)`, or a class for row-built inputs `(.no_of_pcs)`.
+- [ ] Radios: unique id → `radio button (#id)`; shared id → text only; `label.btn` button group → `button (#id)`.
+- [ ] Dependent / filtered dropdowns: the parent (Cost Centre, Product, Design) is chosen first, then `Wait 2 seconds.`
+- [ ] The option text exists in the data the dropdown is built from (check with SQL), not in a setting or another table.
+- [ ] No hard-coded stock, counts or ids that a save changes: `Remember SQL` the current value and assert `{{value}}`.
+- [ ] Assertion texts copied from the JS / view (exact spacing and punctuation), not guessed.
+- [ ] A test that saves: tell the user, and only on Local / QA.
+
+## Test cases live in the project's `tests/` folder
+
+Like kane-cli, test cases are files in the developer's own project: `tests/<name>_test.md`, committed with the code.
+- The first `tester run "<plain English>"`, `tester generate` or `tester case pull` inside a project (git repo) makes
+  `tests/` there with `tests/tester.json` (LogiTestHub project id + site URL). `tester init --project <id> --url <site>`
+  makes it up front. Inside it `--project` / `--url` can be left out.
+- Every new plain-English test, generated case and pulled case is written to `tests/`. A `case_id: <id>` line in the
+  front matter links the file to its LogiTestHub case: `tester run --file tests/x_test.md` saves the run under that case.
+- `tester test --json` runs every `tests/*_test.md` (same options as `run`); exit code = the worst result.
+- Fix a failing case **in its file in `tests/`**, run it, then `tester case push <case_id> --file tests/x_test.md`.
+- `--no-save`: do not write a file (a one-off check).
+- `tests/helpers/`: `@import` files (`@import ../helpers/login.md`). `tests/variables/variables.json`: test data
+  (base_url, username, password as `{"value": .., "secret": true}`), used by every run there, kept out of git - with it
+  filled in, `--var` / `--secret` are not needed. LogiTestHub's Settings -> System uses these two folders as well
+  (the project the CLI last used on that PC), unless a fixed path is saved there.
 
 ## 1. Find where the test belongs
 
@@ -98,20 +144,69 @@ Assert SQL "SELECT 1 FROM ret_taging WHERE tag_lot_id = {{last_lot}}" returns a 
 - `Remember ... as name` keeps the value for later tests in the same environment: the next test uses `{{name}}`
   (e.g. lot add remembers `last_lot`, tagging selects `'{{last_lot}}'`).
 - Values compare as text exactly as MySQL returns them (`10.500`, `8.00`, `300`).
+- Test data that needs a past date (chit instalments, due dates): `Set up SQL "UPDATE ... WHERE ..."` on an
+  environment that allows it (see `references/write-case.md`). Never on a live database; ask the user first.
 
-## 4. Read the result
+## 4. Read the result and report it (always as JSON)
 
-stdout JSON: `{ ok, status, report, run_dir, run_id, case_id, url }`.
+`tester run --json` prints the run result:
+```
+{ "ok": true, "status": "FAILED", "outcome": "failed", "category": "needs_review",
+  "summary": "Step 7 failed: Click the Save button. - locator.waitFor: Timeout 10000ms exceeded.",
+  "counts": { "total": 12, "passed": 6, "failed": 1, "skipped": 5, "needs_ai": 0 },
+  "failed_step": { "n": 7, "section": "Save", "text": "...", "error": "...", "screenshot": "...", "screenshot_before": "..." },
+  "url": "<LogiTestHub run page>", "run_id": 91, "run_dir": "...", "upload": { "ok": true } }
+```
 
-| Exit | Meaning | Do |
-|---|---|---|
-| 0 | PASSED | Report it with the `url` |
-| 1 | FAILED | Follow `references/debug.md`: failing step + screenshot → kind → fix code or test → run again → `tester lesson add` |
-| 3 | PARTIAL | Some steps needed AI and could not run (e.g. no API credits) — say which; rewrite them in the shapes above if possible |
-| 4 | AI limit reached | Stop and tell the user (admin can add extra in LogiTestHub) |
-| 2 | Other error | Show the message (bad URL, not logged in, case not found) |
+| Exit | outcome | Meaning | Do |
+|---|---|---|---|
+| 0 | `passed` | Every step passed | Report PASSED with the `url` |
+| 1 | `failed` (`needs_review`) | A real failure | Follow `references/debug.md`: decide **development bug** or **our side**, then report |
+| 5 | `not_completed` (`environment`) | Site unreachable, network down, timeout loading the page, server error / overloaded (502/503/504) | Not a test result. Wait ~1 minute and run once more; still the same → report NOT COMPLETED. No code or test change, no `app_bug` |
+| 5 | `not_completed` (`run_stopped`) | The browser run stopped before the end | Run once more; again → report NOT COMPLETED with the message |
+| 3 | `partial` | Steps needed AI and could not run (e.g. no API credits) | Say which; rewrite them in the shapes above if possible |
+| 4 | — | AI limit reached | Stop and tell the user (admin can add extra in LogiTestHub) |
+| 2 | — | Other error (bad URL, not logged in, case not found, LogiTestHub unreachable before the run) | Show the message |
 
-Always give the user the LogiTestHub `url` so they can watch the recording.
+`upload.ok: false` means the run finished but LogiTestHub could not save it (server unreachable / busy): the
+`status` / `outcome` are still the real result. Retry later with the `upload.retry` command (`tester upload <run_dir>`).
+
+**Finish every test with this verdict (a JSON block, then one plain sentence for the user):**
+```json
+{
+  "result": "PASSED | FAILED | NOT_COMPLETED | PARTIAL",
+  "side": "none | development | our_side | environment",
+  "kind": "none | app_bug | test_outdated | test_data | agent_mistake | environment",
+  "summary": "one line: what happened",
+  "step": { "n": 7, "text": "Click the Save button.", "expected": "...", "actual": "..." },
+  "evidence": { "screenshot": "...", "screenshot_before": "...", "code": "file:line that shows the cause" },
+  "fix": "what was changed (our side), or the suggested fix for the developer (development bug)",
+  "retried": "PASSED after the fix | still failing | not retried",
+  "url": "LogiTestHub run page",
+  "saved_to_logitesthub": true,
+  "lesson_saved": "lesson title, or none"
+}
+```
+- `development` (= `app_bug`): the screen does the wrong thing. **Report it; do not change application code unless the
+  user asked you to fix bugs.** Give the expected vs actual result and the code location so a developer can fix it.
+- `our_side` (`test_outdated`, `test_data`, `agent_mistake`): the test was wrong, not the app. Fix the test, run again,
+  and report the PASSING run (`retried`).
+- `environment`: neither the app nor the test failed; it could not be checked (network, server down or overloaded).
+- Omit `step` / `evidence` when the run passed. Always give the `url` when the run was saved.
+
+## PM task (PM-LMX-1741 ...)
+
+When the user names a PM task, or `tester task --json` shows an active one, the tests belong to that task:
+```
+tester task --json                          # active task? (set by "Start testing" on the PM task page, or:)
+tester task start PM-LMX-1741 --json        # everything you create / run from now on is linked to it
+tester run ... --task PM-LMX-1741 --json    # or link just this run's case
+tester task PM-LMX-1741 --json              # its test cases + latest results + the page PM shows at Review
+tester task stop --json                     # when the work on the task is done
+```
+- The task page link goes to the PM task by itself (PM prefills it as the test report link at Review). Do not
+  attach links to PM yourself.
+- Finish by giving the user the task page `url` and the passed / failed count.
 
 ## 5. Generate test cases for a change
 
@@ -135,4 +230,5 @@ Push only adds; it never deletes or renames.
 ## Other
 
 `tester lessons <project> --json` (lessons learned) · `tester lesson add --project .. --kind .. --title .. --avoid ..` ·
+`tester case pull <id>` / `tester case push <id> --file ..` (fix a saved case) ·
 `tester usage --json` (AI use this month) · `tester help` (all options). Runs are kept locally in `~/.lth/runs`.

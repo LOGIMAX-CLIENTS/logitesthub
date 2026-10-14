@@ -1,0 +1,59 @@
+{% extends 'base.html' %}
+{% block title %}{{ code }} · Test cases{% endblock %}
+{% block crumbs %}<span class="tm-crumbs"><b>PM task</b> <span>/</span> {{ code }}</span>{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap gap-2 align-items-center justify-content-between mb-3">
+  <div>
+    <h1 class="h4 mb-0">📌 {{ code }}</h1>
+    <div class="text-secondary small">Test cases written for this PM task and how their latest run went. This page is the link PM shows at Review.</div>
+  </div>
+  <div class="d-flex flex-wrap gap-2">
+    {% if mine %}
+    <a class="btn btn-outline-danger btn-sm" href="{{ url_for('pmtasks.stop_task', code=code) }}">■ Stop testing</a>
+    {% else %}
+    <a class="btn btn-success btn-sm" href="{{ url_for('pmtasks.start_task', code=code) }}">▶ Start testing</a>
+    {% endif %}
+    <a class="btn btn-primary btn-sm" href="{{ url_for('pmtasks.assistant', code=code) }}">Tester Assistant</a>
+  </div>
+</div>
+
+{% if mine %}<div class="alert alert-success py-2 small">🟢 You are testing <b>{{ code }}</b>: every test case you create or run (web, Tester Assistant, Tester CLI) is linked to it. It stops when you click Stop, start another task, or after {{ hours }} hours.</div>{% endif %}
+
+<div class="tiles mb-3">
+  <div class="tile"><span class="n">{{ s.cases }}</span><span>Test cases</span></div>
+  <div class="tile"><span class="n t-pass">{{ s.passed }}</span><span>Passed (latest run)</span></div>
+  <div class="tile"><span class="n t-fail">{{ s.failed }}</span><span>Failed</span></div>
+  <div class="tile"><span class="n">{{ s.other }}</span><span>Not run / other</span></div>
+</div>
+
+<div class="panel p-0 mb-3">
+  <table class="table table-sm align-middle mb-0">
+    <thead><tr><th class="ps-3">Test case</th><th>Project</th><th>Latest run</th><th>Why it failed</th><th>Linked by</th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td class="ps-3"><a href="{{ url_for('case', cid=r.id) }}"><b>TC-{{ r.tc_no }}</b></a> {{ r.title }}</td>
+        <td class="small text-secondary">{{ r.project }}</td>
+        <td>{% if r.run_status %}<a href="{{ url_for('case', cid=r.id, run=r.run_id) }}"><span class="badge st-{{ r.run_status|lower }}">{{ r.run_status }}</span></a>
+            <span class="small text-secondary">{{ r.passed or 0 }}/{{ r.total or 0 }} · {{ r.run_at|ago }}</span>
+            {% else %}<span class="badge st-none">NOT RUN</span>{% endif %}</td>
+        <td class="small">{% if r.run_status in ('FAILED', 'ERROR') %}{% if r.fail_step %}Step {{ r.fail_step }}: {% endif %}{{ (r.fail_reason or '')[:140] }}{% endif %}</td>
+        <td class="small text-secondary">{{ r.added_by }} · {{ r.source }} · {{ r.added_at|ago }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="text-center text-secondary py-4">No test cases linked yet. Click <b>Start testing</b>, then create or run tests, or open the <b>Tester Assistant</b>.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="panel small">
+  <b>PM link:</b>
+  {% if link and link.status == 'attached' %}<span class="badge st-passed">ATTACHED</span> {{ link.message }} <span class="text-secondary">({{ link.attached_by }}, {{ link.at|ago }})</span>
+  {% elif link %}<span class="badge st-failed">NOT ATTACHED</span> {{ link.message }}
+  {% else %}<span class="badge st-none">NOT YET</span> It is attached when someone starts testing this task or opens its Tester Assistant.{% endif %}
+  {% if pm_key and not (link and link.status == 'attached') %}
+  <form class="d-inline ms-2" method="post" action="{{ url_for('pmtasks.attach_now', code=code) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn btn-link btn-sm p-0 align-baseline">Attach now</button></form>{% endif %}
+  {% if not pm_key %}<div class="text-secondary mt-1">This server has no PM MCP key yet (LTH_PM_MCP_KEY), so the link cannot be sent to PM. Share this page's address by hand until then.</div>{% endif %}
+</div>
+{% endblock %}

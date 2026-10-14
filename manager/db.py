@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS ai_usage (
   run_id INT, kind VARCHAR(16) NOT NULL, model VARCHAR(64), calls INT NOT NULL DEFAULT 0,
   input_tokens BIGINT NOT NULL DEFAULT 0, output_tokens BIGINT NOT NULL DEFAULT 0,
   cache_read_tokens BIGINT NOT NULL DEFAULT 0, cache_write_tokens BIGINT NOT NULL DEFAULT 0,
-  cost_usd DOUBLE NOT NULL DEFAULT 0, note TEXT,
+  cost_usd DOUBLE NOT NULL DEFAULT 0, note TEXT, via VARCHAR(16) NOT NULL DEFAULT 'api',
   KEY ix_ai_usage_case (case_id),
   KEY ix_ai_usage_at (at)
 ) ENGINE=InnoDB;
@@ -266,6 +266,12 @@ def init():
                 if f:
                     cur.execute('UPDATE runs SET fail_step=%s, fail_text=%s, fail_reason=%s WHERE id=%s',
                                 (f['step'], f['text'], f['reason'], r['id']))
+        # Who paid for an AI call: 'api' (Anthropic credits) or 'subscription' (Claude plan via Claude Code: tokens, no cost)
+        cur.execute("SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() "
+                    "AND TABLE_NAME='ai_usage' AND COLUMN_NAME='via'")
+        if not cur.fetchone()['n']:
+            cur.execute("ALTER TABLE ai_usage ADD COLUMN via VARCHAR(16) NOT NULL DEFAULT 'api' AFTER note")
+            cur.execute("UPDATE ai_usage SET via='subscription', cost_usd=0 WHERE note LIKE '%Claude subscription%'")
         # Login helper per project: put in front of every case of that project when it runs
         cur.execute("SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() "
                     "AND TABLE_NAME='projects' AND COLUMN_NAME='login_helper'")
@@ -323,7 +329,7 @@ def add_case(con, project_id, folder_id, title, content, user, source_path=None)
 
 
 VAR_RE = re.compile(r'\{\{\s*([\w.-]+)\s*\}\}')
-VARS_FILE = 'F:/TestMU-Ai/.testmuai/variables/etail.json'
+VARS_FILE = os.path.join(DATA, 'tests', 'variables', 'variables.json')   # set from Settings -> System at start
 
 
 def load_vars(path=None):
@@ -424,15 +430,20 @@ def record_finished_run(con, run_id, run_dir):
                           'WHERE r.id=?', (run_id,)).fetchone()
         record_ai_usage(con, 'run', ai, username=run['run_by'], project_id=run['project_id'],
                         case_id=run['case_id'], run_id=run_id)
+    import cleanup   # data a passed run kept ("## Clean up" steps), and kept data this run removed
+    cleanup.record(con, run_id, run_dir, steps)
 
 
 def record_ai_usage(con, kind, u, username=None, project_id=None, case_id=None, run_id=None, share=1.0, note=None):
-    """u = {model, calls, in, out, cacheRead, cacheWrite}. share < 1 splits one AI call across several cases."""
+    """u = {model, calls, in, out, cacheRead, cacheWrite, via}. share < 1 splits one AI call across several cases.
+    via 'claude-code' = answered by the Claude subscription: its tokens are kept for the report, but it costs no
+    credits (the plan has session / weekly limits instead), so cost is 0 and the budget ignores it."""
     import pricing
     model = u.get('model') or pricing.DEFAULT_MODEL
+    via = 'subscription' if u.get('via') in ('claude-code', 'subscription') else 'api'
     t = {k: int(round((u.get(k) or 0) * share)) for k in ('in', 'out', 'cacheRead', 'cacheWrite')}
-    cost = pricing.cost_usd(model, t['in'], t['out'], t['cacheRead'], t['cacheWrite'])
+    cost = 0.0 if via == 'subscription' else pricing.cost_usd(model, t['in'], t['out'], t['cacheRead'], t['cacheWrite'])
     con.execute('INSERT INTO ai_usage(at, username, project_id, case_id, run_id, kind, model, calls, input_tokens, '
-                'output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                'output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, note, via) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                 (now(), username, project_id, case_id, run_id, kind, model, int(u.get('calls') or 0),
-                 t['in'], t['out'], t['cacheRead'], t['cacheWrite'], cost, note))
+                 t['in'], t['out'], t['cacheRead'], t['cacheWrite'], cost, note, via))

@@ -138,7 +138,7 @@
         <label><input type="radio" name="selection" value="rule" onchange="document.getElementById('trRule').hidden=false"> <b>By folder</b><span>everything in a folder, picked each time it runs</span></label>
       </div>
       <label class="form-label mt-2" for="trEnv">Environment</label>
-      <select class="form-select form-select-sm" id="trEnv" name="env_id">{% for e in env_list %}<option value="{{ e.id }}">{{ e.name }} · {{ e.base_url }}</option>{% endfor %}</select>
+      <select class="form-select form-select-sm" id="trEnv" name="env_id">{% for e in env_list if e.owner is none %}<option value="{{ e.id }}">{{ e.name }} · {{ e.base_url }}</option>{% endfor %}</select>
       <label class="form-check mt-3"><input class="form-check-input" type="checkbox" name="only_ready"> When it runs, skip cases not marked <b>Ready for QA</b></label>
       <div class="small text-secondary mt-2">Cases run one after another in TC order; each one starts when the previous one finishes, pass or fail.</div>
     </div>
@@ -148,7 +148,7 @@
 
 <!-- Create schedule -->
 <div class="modal fade" id="newSched" tabindex="-1" aria-hidden="true">
-  <div class="modal-dialog modal-dialog-centered">{{ m.schedule_form(all_runs, env_list, days, today, back=url_for('testruns.index', tab='scheduled')) }}</div>
+  <div class="modal-dialog modal-dialog-centered">{{ m.schedule_form(all_runs, env_list|selectattr('owner', 'none')|list, days, today, back=url_for('testruns.index', tab='scheduled')) }}</div>
 </div>
 {% endblock %}
 {% block scripts %}

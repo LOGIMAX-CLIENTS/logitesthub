@@ -333,7 +333,7 @@ def register(app, con, login_required, current_user, project_or_404):
         for r in rows:
             if r['parent_id'] and r['parent_id'] in names:
                 existing.setdefault(names[r['parent_id']].lower(), []).append(r['name'].lower())
-        return render_template('modules_setup.html', p=p, envs=envs.all_envs(c), n_folders=len(rows),
+        return render_template('modules_setup.html', p=p, envs=envs.all_envs(c, current_user()), n_folders=len(rows),
                                new=request.args.get('new') == '1', existing=existing)
 
     @bp.route('/projects/<int:pid>/modules/read', methods=['POST'])

@@ -249,8 +249,8 @@ def make_blueprint(deps):
         if folder_id and not con().execute('SELECT 1 FROM folders WHERE id=? AND project_id=?', (folder_id, pid)).fetchone():
             return None, 'That folder is not in the chosen project.'
         env_id = f.get('env_id', type=int) or None
-        if env_id and not con().execute('SELECT 1 FROM environments WHERE id=?', (env_id,)).fetchone():
-            env_id = None
+        if env_id and not con().execute('SELECT 1 FROM environments WHERE id=? AND owner IS NULL', (env_id,)).fetchone():
+            env_id = None   # a Test Run is shared: never a personal environment (another user could not reach it)
         return {'name': name, 'project_id': pid, 'folder_id': folder_id, 'env_id': env_id,
                 'only_ready': 1 if f.get('only_ready') else 0, 'description': f.get('description', '').strip()[:500] or None}, None
 
@@ -330,7 +330,9 @@ def make_blueprint(deps):
     @login_required
     def run_now(tid):
         tr = tr_or_404(tid)
-        eid, msg = execute(con(), tr, current_user()['username'], request.form.get('env_id', type=int))
+        want = request.form.get('env_id', type=int)
+        env = envs.get(con(), want, current_user()) if want else None   # the user's own Local is fine for a run now
+        eid, msg = execute(con(), tr, current_user()['username'], env['id'] if env else None)
         flash(msg, 'info' if eid else 'warning')
         return redirect(url_for('testruns.detail', tid=tid, exec=eid) if eid else url_for('testruns.detail', tid=tid))
 
@@ -370,6 +372,9 @@ def make_blueprint(deps):
             flash(err, 'danger')
             return redirect(back)
         env_id = f.get('env_id', type=int) or tr['env_id']
+        if env_id and not con().execute('SELECT 1 FROM environments WHERE id=? AND owner IS NULL', (env_id,)).fetchone():
+            flash('Schedules run on their own, so they need a shared environment (Dev / QA ...), not a personal one.', 'danger')
+            return redirect(back)
         nxt = next_run(kind, run_at, at_time, weekdays, datetime.now())
         with con():
             con().execute('INSERT INTO schedules(test_run_id, kind, run_at, at_time, weekdays, env_id, active, next_run_at, '

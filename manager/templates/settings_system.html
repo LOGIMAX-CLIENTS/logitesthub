@@ -21,10 +21,22 @@
           {% for m in models %}<option {{ 'selected' if vals[key] == m }}>{{ m }}</option>{% endfor %}</select>
         {% elif key == 'sys.audit_days' %}
         <input class="form-control form-control-sm set-num" id="s{{ loop.index }}" name="{{ key }}" type="number" min="7" max="365" step="1" value="{{ vals[key] }}" required>
+        {% elif key in auto_keys %}
+        <input class="form-control form-control-sm" id="s{{ loop.index }}" name="{{ key }}" value="{{ vals[key] }}" spellcheck="false"
+               placeholder="Automatic: {{ auto[key] }}">
         {% else %}
         <input class="form-control form-control-sm" id="s{{ loop.index }}" name="{{ key }}" value="{{ vals[key] }}" required spellcheck="false">
         {% endif %}
+        {% if key in auto_keys %}
+        <div class="form-text">{{ help }}
+          {% if vals[key] %}<br>Now a fixed path. Clear the box and save to go back to automatic.
+          {% else %}<br>In use: <code>{{ auto[key] }}</code>
+            {% if auto.source.root %}(project <b>{{ auto.source.root }}</b>, last used by the tester CLI{% if auto.source.by %} - {{ auto.source.by }}{% endif %}{% if auto.source.at %}, {{ auto.source.at|dmy }}{% endif %})
+            {% else %}(LogiTestHub's own folder: no project has used the tester CLI on this PC yet){% endif %}
+          {% endif %}</div>
+        {% else %}
         <div class="form-text">{{ help }}{% if vals[key] != default %} Default: <code>{{ default }}</code>{% endif %}</div>
+        {% endif %}
       </div>
       {% endfor %}
       <button class="btn btn-primary btn-sm">Save</button>
