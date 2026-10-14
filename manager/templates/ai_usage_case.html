@@ -12,7 +12,7 @@
     <h1 class="h4 mb-0">Deleted test case #{{ cid }}</h1>
     {% else %}
     <h1 class="h4 mb-0">AI calls not linked to a test case</h1>
-    <div class="text-secondary small">Test Assistant chats that were not saved as a test case yet, and other calls without a case.</div>
+    <div class="text-secondary small">Tester Assistant chats that were not saved as a test case yet, and other calls without a case.</div>
     {% endif %}
   </div>
   <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('ai_usage_case', cid=cid, format='csv') }}">Export CSV</a>

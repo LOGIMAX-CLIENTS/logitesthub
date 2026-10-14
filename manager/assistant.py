@@ -35,7 +35,7 @@ HISTORY = 14            # messages sent to the AI (latest)
 
 # ---------------------------------------------------------------- AI context + call
 
-def project_context(con, p, env_id=None):
+def project_context(con, p, env_id=None, code_env=None, user=None):
     """What the AI needs to write a runnable case for this project: login helper yes/no, the module list with page
     links (so it picks the right screen and URL), the environment and the variable names it may use."""
     import envs
@@ -43,7 +43,7 @@ def project_context(con, p, env_id=None):
     helper = (p.get('login_helper') or '').strip()
     lines.append('Login helper: YES - the project signs in before every test; write NO login steps.' if helper
                  else 'Login helper: NO - start the test with a "Sign in" section using {{username}} / {{password}}.')
-    env = envs.get(con, env_id)   # the 'Run on' environment picked on the page (else the default)
+    env = envs.get(con, env_id, user)   # the 'Run on' environment picked on the page (else the default)
     base = (env['base_url'] if env else '') or ''
     if env:
         lines.append(f'Environment the test will run on: {env["name"]}, base_url = {base}')
@@ -52,14 +52,32 @@ def project_context(con, p, env_id=None):
         if tail:   # e.g. eTail: base_url ends with /admin/ - the repo folder admin/ must not be repeated in page paths
             lines.append(f"{{{{base_url}}}} already ends with '/{tail}/'. Page paths go straight after it: "
                          f"{{{{base_url}}}}index.php/<controller>/<method> - never start a path with '{tail}/'.")
-    if os.environ.get('LTH_AI_PROVIDER') == 'claude-code':
-        # the subscription answers chat; screenshot-judged steps in a run still need API credits
+    # which environments can run database steps, so a scenario that needs them is kept whole and sent to the right one
+    where, params = envs.visible_sql(user) if user else ('1=1', [])
+    all_e = con.execute(f'SELECT * FROM environments WHERE {where} ORDER BY is_default DESC, name', params).fetchall()
+    with_db = [e['name'] for e in all_e if envs.db_configured(e)]
+    with_write = [e['name'] for e in all_e if envs.db_write_configured(e)]
+    if env and envs.db_configured(env):
+        lines.append('Database steps: Remember SQL / Assert SQL are available on this environment (read-only).'
+                     + (' Set up SQL (test-data INSERT / UPDATE / DELETE with a WHERE) is ALLOWED here.'
+                        if envs.db_write_configured(env) else
+                        f' Set up SQL is NOT allowed here (allowed on: {", ".join(with_write) or "none"}).'))
+    else:
+        lines.append(f'Database steps: NOT available on "{env["name"] if env else "?"}". Available on: {", ".join(with_db) or "none"}'
+                     f' (Set up SQL on: {", ".join(with_write) or "none"}). If the scenario needs them, still write them and '
+                     'tell the user to pick that environment in "Run on" - never cut the scenario down.')
+    if os.environ.get('LTH_AI_PROVIDER') == 'claude-code' and not os.environ.get('ANTHROPIC_API_KEY'):
+        # the subscription answers chat; screenshot-judged steps in a run still need API credits (none on this server)
         lines.append("Run-time AI: NOT available. Free-text checks cannot run now - use ONLY the exact step shapes listed "
                      "(no \"does not contain\", no \"... is visible in the header\" sentences). "
                      "Prefer: Assert the text 'X' is visible.")
-    if p.get('repo_commit') and os.environ.get('LTH_AI_PROVIDER') == 'claude-code':
-        lines.append(f"Code repository: {p.get('repo_url')} branch {p.get('repo_branch')} commit {p['repo_commit'][:10]} "
-                     "(in your current folder - look the screen up there).")
+    if code_env and code_env.get('repo_commit') and os.environ.get('LTH_AI_PROVIDER') == 'claude-code':
+        if code_env['repo_commit'] == 'local':   # a folder on this server, read in place (e.g. the Local XAMPP site)
+            lines.append(f"Code ({code_env['name']}): the application folder on this PC (your current folder - look the "
+                         "screen up there). It may hold config files with passwords: never read or quote them.")
+        else:
+            lines.append(f"Code repository ({code_env['name']}): {code_env.get('repo_url')} branch {code_env.get('repo_branch')} "
+                         f"commit {code_env['repo_commit'][:10]} (in your current folder - look the screen up there).")
     names = sorted(set(['base_url', 'username', 'password', 'branch'] + list(envs._base_values().keys())))
     lines.append('Variables you may use as {{name}}: ' + ', '.join(names[:60]))
     rows = con.execute('SELECT id, parent_id, name, link FROM folders WHERE project_id=? AND archived=0 ORDER BY sort, name',
@@ -244,7 +262,7 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
         p = con().execute('SELECT p.id FROM projects p LEFT JOIN chat_threads t ON t.project_id=p.id AND t.created_by=? '
                           'GROUP BY p.id ORDER BY MAX(t.updated_at) DESC, p.id LIMIT 1', (current_user()['username'],)).fetchone()
         if not p:   # the assistant works inside a project: say so instead of silently landing on Projects
-            flash('The Test Assistant works inside a project. Create a project first, then open the Test Assistant.', 'info')
+            flash('The Tester Assistant works inside a project. Create a project first, then open the Tester Assistant.', 'info')
             return redirect(url_for('projects'))
         return redirect(url_for('assistant.page', pid=p['id']))
 
@@ -283,9 +301,11 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
             'SELECT DISTINCT created_by FROM chat_threads WHERE project_id=? ORDER BY created_by', (pid,))] if is_admin else []
         folders = con().execute('SELECT * FROM folders WHERE project_id=? AND archived=0 ORDER BY sort, name', (pid,)).fetchall()
         b = budget.status(con(), me)
+        all_envs = envs.all_envs(con(), me)
         return render_template('assistant.html', p=p, threads=threads, thread=thread, readonly=readonly, who=who, users=users,
                                msgs=messages_of(thread['id']) if thread else [], folders=folders,
-                               envs=envs.all_envs(con()), ai_ok=b['ok'], ai_msg=b['message'], code_ready=bool(coderepo.code_dir(p)),
+                               envs=all_envs, ai_ok=b['ok'], ai_msg=b['message'],
+                               code_envs=[e for e in all_envs if coderepo.code_dir(e)],
                                code_provider_ok=os.environ.get('LTH_AI_PROVIDER') == 'claude-code',
                                projects=con().execute('SELECT id, name FROM projects ORDER BY name').fetchall())
 
@@ -369,9 +389,21 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
             hist.insert(len(hist) - 1, {'role': 'user', 'text': 'My current version of the draft (edited by me):\n'
                                         + str(body.get('draft_title') or '') + '\n' + str(edited)[:12000]})
         import coderepo
+        import envs
         key = f"{me['username']}:{str(body.get('req') or '')[:40]}"
         env_id = body.get('env_id') if str(body.get('env_id') or '').isdigit() else None
-        data, usage, model, err = ask_ai(hist, project_context(con(), p, env_id), coderepo.code_dir(p), key)
+        # the code picked in the Code dropdown ('' = none); older pages without it: the Run on environment's code
+        ce = body.get('code_env_id', env_id)
+        code_env = envs.get(con(), ce, me) if str(ce or '').isdigit() else (None if ce == '' else envs.get(con(), None, me))
+        code = coderepo.code_dir(code_env)
+        import knowledge   # flow docs (knowledge_brain) that match what the user is talking about
+        flows = knowledge.for_conversation(p['name'], '\n'.join(h['text'] for h in hist if h['role'] == 'user'))
+        context = project_context(con(), p, env_id, code_env if code else None, me) + ('\n' + flows if flows else '')
+        tc = con().execute('SELECT task_code FROM chat_threads WHERE id=?', (tid,)).fetchone()
+        if tc and tc['task_code']:   # opened from a PM task (reviewer's button): the tests are for that task
+            context += (f"\nThis chat writes test cases for PM task {tc['task_code']} (they are linked to it when saved). "
+                        "If the user has not said what the task changed, ask what to check for this task.")
+        data, usage, model, err = ask_ai(hist, context, code, key)
         if err == STOPPED:
             return jsonify({'ok': False, 'stopped': True, 'thread_id': tid})
         if err:
@@ -380,7 +412,8 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
             return jsonify({'ok': False, 'thread_id': tid, 'error': msg})
         draft = data.get('draft')
         u = data.get('understanding') or {}
-        out = {'understanding': u, 'questions': data.get('questions') or [], 'draft': draft,
+        out = {'understanding': u, 'questions': data.get('questions') or [], 'choices': data.get('choices') or [], 'draft': draft,
+               'lesson': data.get('lesson') if isinstance(data.get('lesson'), dict) else None,
                'draft_text': draft_to_text(draft) if draft else '',
                'folder_id': match_folder(con(), pid, u.get('module'), u.get('sub_module'))}
         mid = add_message(tid, 'assistant', data.get('reply') or '', out)
@@ -389,7 +422,7 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
             u = usage or {}   # Anthropic usage names -> the names record_ai_usage reads
             db.record_ai_usage(c, 'chat', {'model': u.get('model') or model, 'calls': 1, 'in': u.get('input_tokens', 0),
                                            'out': u.get('output_tokens', 0), 'cacheRead': u.get('cache_read_input_tokens', 0),
-                                           'cacheWrite': u.get('cache_creation_input_tokens', 0)},
+                                           'cacheWrite': u.get('cache_creation_input_tokens', 0), 'via': u.get('via')},
                                username=me['username'], project_id=pid,
                                case_id=c.execute('SELECT case_id FROM chat_threads WHERE id=?', (tid,)).fetchone()['case_id'],
                                note=f'Test Assistant chat #{tid}' + (' (Claude subscription via Claude Code)' if u.get('via') == 'claude-code' else ''))
@@ -453,6 +486,8 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
         with c:
             cid = db.add_case(c, pid, fid, title, content, me['username'])
             c.execute('UPDATE chat_threads SET case_id=? WHERE id=?', (cid, tid))
+            import pmtasks   # a chat opened from a PM task links to that task; otherwise the user's active task
+            pmtasks.tag(c, cid, me['username'], 'assistant', t['task_code'] if t else None)
             link_chat_usage(c, tid, cid)   # the chat's AI cost now counts for this test case
         case = con().execute('SELECT * FROM cases WHERE id=?', (cid,)).fetchone()
         run_id, note = None, ''
@@ -465,14 +500,46 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
         return jsonify({'ok': True, 'case_id': cid, 'tc_no': case['tc_no'], 'run_id': run_id, 'note': note,
                         'case_url': url_for('case', cid=cid), 'run_url': url_for('case', cid=cid, run=run_id) if run_id else None})
 
+    @bp.route('/projects/<int:pid>/assistant/<int:tid>/lesson', methods=['POST'])
+    @login_required
+    def save_lesson(pid, tid):
+        """The lesson the assistant wrote after explaining a failure -> the project's lessons (same title = counted again)."""
+        import lessons
+        import settings
+        project_or_404(pid)
+        t = thread_or_404(pid, tid)
+        me = current_user()
+        if t['created_by'] != me['username']:
+            abort(403)
+        if not settings.can(con(), me['role'], 'runs.run'):
+            return jsonify({'ok': False, 'error': 'Your role cannot record lessons.'}), 403
+        mid = int(_payload().get('message_id') or 0)
+        m = con().execute("SELECT id, data FROM chat_messages WHERE id=? AND thread_id=? AND role='assistant'", (mid, tid)).fetchone()
+        data = json.loads(m['data']) if m and m['data'] else {}
+        if not data.get('lesson'):
+            return jsonify({'ok': False, 'error': 'No lesson in that message.'}), 404
+        if data.get('lesson_saved'):
+            return jsonify({'ok': True, 'id': data['lesson_saved'], 'created': False, 'already': True})
+        v, errs = lessons.clean(dict(data['lesson'], case_id=t['case_id']))
+        if errs:
+            return jsonify({'ok': False, 'error': ' '.join(errs)}), 400
+        c = con()
+        with c:
+            lid, created = lessons.add(c, pid, v, me['username'], 'assistant')
+            data['lesson_saved'] = lid
+            c.execute('UPDATE chat_messages SET data=? WHERE id=?', (json.dumps(data), mid))
+        return jsonify({'ok': True, 'id': lid, 'created': created})
+
     @bp.route('/projects/<int:pid>/assistant/run/<int:rid>')
     @login_required
     def run_status(pid, rid):
         project_or_404(pid)
-        r = con().execute('SELECT r.id, r.case_id, r.status, r.passed, r.failed, r.needs_ai, r.skipped, r.total, r.error, r.duration_ms '
+        r = con().execute('SELECT r.id, r.case_id, r.status, r.passed, r.failed, r.needs_ai, r.skipped, r.total, r.error, r.duration_ms, '
+                          'r.env_name, r.fail_step, r.fail_text, r.fail_reason '
                           'FROM runs r JOIN cases c ON c.id=r.case_id WHERE r.id=? AND c.project_id=?', (rid, pid)).fetchone()
         if not r:
             abort(404)
+        # why it did not pass, in the chat: the failing step and its reason (filled when the run finishes)
         return jsonify({'ok': True, **r, 'done': r['status'] not in ('running', 'queued'),
                         'url': url_for('case', cid=r['case_id'], run=rid)})
 
