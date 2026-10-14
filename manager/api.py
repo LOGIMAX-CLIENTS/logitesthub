@@ -166,6 +166,22 @@ def whoami():
     return jsonify({'ok': True, 'username': u['username'], 'name': u['name'], 'role': u['role']})
 
 
+@bp.post('/workspace')
+@api_auth
+def workspace_report():
+    """{"tests_dir": "F:/xampp/htdocs/etail/tests", "root": ..., "project": 3}: the tester CLI's tests/ folder. When it
+    is on this PC, Settings -> System uses its variables/ and helpers/ (unless fixed paths are saved there)."""
+    import settings
+    body = request.get_json(silent=True) or {}
+    tests_dir = str(body.get('tests_dir') or '').strip()
+    if not tests_dir or len(tests_dir) > 500:
+        return _error(400, 'tests_dir is required.')
+    used = settings.set_workspace(g.api_con, tests_dir, str(body.get('root') or '')[:500],
+                                  body.get('project') if isinstance(body.get('project'), int) else None,
+                                  g.api_user['username'])
+    return jsonify({'ok': True, 'used': used})
+
+
 @bp.get('/projects')
 @api_auth
 def projects():
@@ -189,11 +205,42 @@ def cases(pid):
 @bp.get('/cases/<int:cid>')
 @api_auth
 def case(cid):
-    r = g.api_con.execute('SELECT c.id, c.tc_no, c.title, c.content, c.project_id, f.name AS folder FROM cases c '
-                          'LEFT JOIN folders f ON f.id=c.folder_id WHERE c.id=?', (cid,)).fetchone()
+    r = g.api_con.execute('SELECT c.id, c.tc_no, c.title, c.content, c.project_id, c.updated_at, c.updated_by, '
+                          'f.name AS folder FROM cases c LEFT JOIN folders f ON f.id=c.folder_id WHERE c.id=?', (cid,)).fetchone()
     if not r:
         return _error(404, 'Test case not found.')
     return jsonify({'ok': True, 'case': dict(r, tc=f"TC-{r['tc_no']}")})
+
+
+@bp.put('/cases/<int:cid>')
+@api_auth
+def case_update(cid):
+    """Saves corrected steps from the CLI / IDE (tester case push), so a fix made while debugging is not lost.
+    expected_updated_at = the version the caller started from: someone else's newer edit is refused (409), not overwritten."""
+    import settings
+    data = request.get_json(silent=True) or {}
+    content = str(data.get('content') or '').replace('\r\n', '\n').strip() + '\n'
+    title = db.case_title(content, '')
+    if not title:
+        return _error(400, 'The case needs a title: a line starting with "# ".')
+    r = g.api_con.execute('SELECT id, tc_no, content, updated_at, updated_by FROM cases WHERE id=?', (cid,)).fetchone()
+    if not r:
+        return _error(404, 'Test case not found.')
+    expected = data.get('expected_updated_at')
+    if expected and expected != r['updated_at']:
+        return jsonify({'ok': False, 'error': 'conflict', 'updated_at': r['updated_at'], 'updated_by': r['updated_by'],
+                        'message': f"TC-{r['tc_no']} was changed by {r['updated_by'] or 'someone'} at {r['updated_at']} "
+                                   'after you pulled it. Pull it again and redo your change (or push with --force).'}), 409
+    if content == r['content']:
+        return jsonify({'ok': True, 'changed': False, 'updated_at': r['updated_at']})
+    now = db.now()
+    with g.api_con:
+        g.api_con.execute('UPDATE cases SET title=?, content=?, updated_by=?, updated_at=? WHERE id=?',
+                          (title, content, g.api_user['username'], now, cid))
+    settings.write_audit(g.api_user['username'], 'api.case_update', 'test case', cid, 'ok',
+                         f"TC-{r['tc_no']} steps updated from the CLI / IDE" + (f": {data['note'][:200]}" if data.get('note') else ''),
+                         None, request.remote_addr)
+    return jsonify({'ok': True, 'changed': True, 'title': title, 'updated_at': now})
 
 
 # ---------------------------------------------------------------- modules (tester modules pull / push)
@@ -286,6 +333,68 @@ def lessons_add(pid):
     return jsonify({'ok': True, 'id': lid, 'created': created})
 
 
+# ---------------------------------------------------------------- data a passed run kept (tester run --clean / --keep)
+
+@bp.get('/cases/<int:cid>/kept-data')
+@api_auth
+def kept_data(cid):
+    """What passed runs of this case left on the environment (--env), and the section that removes it."""
+    import cleanup
+    env_row = _env_from(request.args.get('env'))[0] if request.args.get('env') else None
+    rows = cleanup.pending(g.api_con, cid, env_row['id'] if env_row else None)
+    return jsonify({'ok': True, 'ids': [r['id'] for r in rows], 'runs': cleanup.describe(rows), 'section': cleanup.section(rows)})
+
+
+# ---------------------------------------------------------------- PM tasks (tester task ...)
+
+@bp.get('/task')
+@api_auth
+def task_active():
+    """The caller's active PM task (Start testing), or null."""
+    import pmtasks
+    return jsonify({'ok': True, 'task': pmtasks.active_task(g.api_con, g.api_user['username'])})
+
+
+@bp.post('/tasks/<code>/start')
+@api_auth
+def task_start(code):
+    import pmtasks
+    c = pmtasks.norm(code)
+    if not c:
+        return _error(400, 'Task code like PM-LMX-1741.')
+    old = pmtasks.start(g.api_con, g.api_user['username'], c)
+    pmtasks.attach_later(c, g.api_user['username'])
+    return jsonify({'ok': True, 'task': c, 'stopped': old, 'hours': pmtasks.ACTIVE_HOURS,
+                    'url': f"{pmtasks.public_base()}/tasks/{c}"})
+
+
+@bp.post('/task/stop')
+@api_auth
+def task_stop():
+    import pmtasks
+    code = pmtasks.active_task(g.api_con, g.api_user['username'])
+    pmtasks.stop(g.api_con, g.api_user['username'])
+    return jsonify({'ok': True, 'stopped': code})
+
+
+@bp.get('/tasks/<code>')
+@api_auth
+def task_get(code):
+    """The task's test cases with their latest run, plus the PM link state."""
+    import pmtasks
+    c = pmtasks.norm(code)
+    if not c:
+        return _error(400, 'Task code like PM-LMX-1741.')
+    rows = pmtasks.task_cases(g.api_con, c)
+    link = g.api_con.execute('SELECT status, message FROM pm_task_links WHERE task_code=?', (c,)).fetchone()
+    base = pmtasks.public_base()
+    return jsonify({'ok': True, 'task': c, 'url': f'{base}/tasks/{c}', **pmtasks.summary(rows),
+                    'pm_link': dict(link) if link else None,
+                    'tests': [{'id': r['id'], 'tc': f"TC-{r['tc_no']}", 'title': r['title'], 'status': r['run_status'] or 'NOT RUN',
+                               'fail_step': r['fail_step'], 'fail_reason': r['fail_reason'],
+                               'url': f"{base}/cases/{r['id']}" + (f"?run={r['run_id']}" if r['run_id'] else '')} for r in rows]})
+
+
 # ---------------------------------------------------------------- read-only checks on the app's database
 
 def _env_from(value):
@@ -293,8 +402,9 @@ def _env_from(value):
     v = str(value or '').strip()
     if not v:
         return None, _error(400, 'Say which environment: --env <name> (Settings -> Environments).')
-    row = g.api_con.execute('SELECT * FROM environments WHERE id=? OR name=?',
-                            (int(v) if v.isdigit() else -1, v)).fetchone()
+    me = g.api_user['username']
+    row = g.api_con.execute('SELECT * FROM environments WHERE (id=? OR name=?) AND (owner IS NULL OR owner=?) '
+                            'ORDER BY owner IS NULL LIMIT 1', (int(v) if v.isdigit() else -1, v, me)).fetchone()
     if not row:
         return None, _error(404, f'Environment "{v}" not found.')
     return row, None
@@ -313,6 +423,30 @@ def sql():
         r = envs.db_query(env, body.get('sql'))
     except envs.DbError as e:
         return _error(400, str(e))
+    return jsonify({'ok': True, 'env': env['name'], **r})
+
+
+@bp.post('/sql-write')
+@api_auth
+def sql_write():
+    """{"env": "Local", "sql": "UPDATE ... WHERE ..."} -> rows changed. Test-data setup ("Set up SQL" steps) on an
+    environment where an admin allowed it; one statement, written to the audit log with who ran it."""
+    import envs
+    import settings
+    body = request.get_json(silent=True) or {}
+    env, err = _env_from(body.get('env'))
+    if err:
+        return err
+    sql_text = str(body.get('sql') or '')
+    try:
+        r = envs.db_write(env, sql_text)
+    except envs.DbError as e:
+        settings.write_audit(g.api_user['username'], 'api.sql_write', 'environment', env['id'], 'failed',
+                             f'Set up SQL on {env["name"]} refused / failed: {e} | {sql_text[:500]}', None, request.remote_addr)
+        return _error(400, str(e))
+    settings.write_audit(g.api_user['username'], 'api.sql_write', 'environment', env['id'], 'ok',
+                         f'Set up SQL on {env["name"]}: {r["affected"]} row(s) changed'
+                         + (f' (run {body["run"]})' if body.get('run') else '') + f' | {sql_text[:500]}', None, request.remote_addr)
     return jsonify({'ok': True, 'env': env['name'], **r})
 
 
@@ -483,16 +617,23 @@ def run_upload():
                 title = (f.get('title') or db.case_title(content, '') or 'CLI test')[:180]
                 folder = db.get_or_create_folder(con, pid, 'CLI runs')
                 case_id = db.add_case(con, pid, folder, title, content + '\n', user)
-            run_id = con.execute("INSERT INTO runs(case_id, status, started_at, run_by, env_name) VALUES (?,?,?,?,?)",
+            env_row = _env_from(f.get('env'))[0] if f.get('env') else None   # the --env whose database the run used
+            run_id = con.execute("INSERT INTO runs(case_id, status, started_at, run_by, env_name, env_id) VALUES (?,?,?,?,?,?)",
                                  (case_id, 'running', db.to_local(summary.get('at')), user,
-                                  (f.get('env') or 'Local (CLI)')[:40])).lastrowid
+                                  (f"{env_row['name']} (CLI)" if env_row else 'Local (CLI)')[:40],
+                                  env_row['id'] if env_row else None)).lastrowid
+            import cleanup   # kept data the CLI removed at the start of this run (tester run --clean)
+            cleanup.mark(con, (f.get('cleared') or '').split(','), case_id, run_id)
             db.record_finished_run(con, run_id, run_dir)
+            import pmtasks
+            task = pmtasks.tag(con, case_id, user, 'cli', f.get('task'))
     except Exception as e:   # nothing half-saved: remove the folder
         shutil.rmtree(run_dir, ignore_errors=True)
         return _error(400, f'Upload failed: {e}')
     base = request.host_url.rstrip('/')
     return jsonify({'ok': True, 'run_id': run_id, 'case_id': case_id, 'status': summary.get('status'),
-                    'url': f'{base}/cases/{case_id}?run={run_id}'})
+                    'url': f'{base}/cases/{case_id}?run={run_id}', 'task': task,
+                    'task_url': f'{base}/tasks/{task}' if task else None})
 
 
 @bp.app_errorhandler(404)

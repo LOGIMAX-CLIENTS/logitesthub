@@ -94,12 +94,31 @@
   <div><label class="form-label" for="f2">To</label><input class="form-control form-control-sm" id="f2" type="date" name="to" value="{{ d_to }}"></div>
   <div><label class="form-label" for="f3">Project</label><select class="form-select form-select-sm" id="f3" name="project"><option value="">All</option>{% for p in projects %}<option value="{{ p.id }}" {{ 'selected' if pid == p.id }}>{{ p.name }}</option>{% endfor %}</select></div>
   <div><label class="form-label" for="f4">User</label><select class="form-select form-select-sm" id="f4" name="user"><option value="">All</option>{% for u in users %}<option {{ 'selected' if user == u }}>{{ u }}</option>{% endfor %}</select></div>
-  <div><label class="form-label" for="f5">Used for</label><select class="form-select form-select-sm" id="f5" name="kind"><option value="">All</option><option value="run" {{ 'selected' if kind == 'run' }}>AI steps in runs</option><option value="generate" {{ 'selected' if kind == 'generate' }}>Generate with AI</option><option value="cli-step" {{ 'selected' if kind == 'cli-step' }}>AI steps from CLI / IDE</option></select></div>
+  <div><label class="form-label" for="f5">Used for</label><select class="form-select form-select-sm" id="f5" name="kind"><option value="">All</option><option value="run" {{ 'selected' if kind == 'run' }}>AI steps in runs</option><option value="generate" {{ 'selected' if kind == 'generate' }}>Generate with AI</option><option value="cli-step" {{ 'selected' if kind == 'cli-step' }}>AI steps from CLI / IDE</option><option value="chat" {{ 'selected' if kind == 'chat' }}>Tester Assistant chat</option></select></div>
+  <div><label class="form-label" for="f6">Paid by</label><select class="form-select form-select-sm" id="f6" name="via"><option value="">All</option><option value="api" {{ 'selected' if via == 'api' }}>Anthropic API (credits)</option><option value="subscription" {{ 'selected' if via == 'subscription' }}>Claude subscription</option></select></div>
   <div class="au-btns"><button class="btn btn-primary btn-sm">Apply</button><a class="btn btn-link btn-sm" href="{{ url_for('ai_usage') }}">Reset</a></div>
 </form>
 
+{% set q = '?from=' ~ d_from ~ '&to=' ~ d_to ~ '&project=' ~ (pid or '') ~ '&user=' ~ (user|urlencode) ~ '&kind=' ~ kind %}
+<div class="au-src mb-3">
+  {% set s = by_via.get('api') %}
+  <a class="au-src-card {{ 'on' if via == 'api' }}" href="{{ url_for('ai_usage') }}{{ q }}&via={{ '' if via == 'api' else 'api' }}#usage">
+    <span class="au-src-name">Anthropic API · credits</span>
+    <span class="n">{{ (s.cost if s else 0)|usd }} <small>· {{ (s.cost if s else 0)|inr(inr) }}</small></span>
+    <span>{{ s.calls or 0 if s else 0 }} AI calls · {{ ((s.tin or 0) + (s.tout or 0) if s else 0)|tok }} tokens · AI steps in runs and from the CLI</span>
+  </a>
+  {% set s = by_via.get('subscription') %}
+  <a class="au-src-card {{ 'on' if via == 'subscription' }}" href="{{ url_for('ai_usage') }}{{ q }}&via={{ '' if via == 'subscription' else 'subscription' }}#usage">
+    <span class="au-src-name">Claude subscription · no credits</span>
+    <span class="n">{{ ((s.tin or 0) + (s.tout or 0) if s else 0)|tok }} <small>tokens</small></span>
+    <span>{{ s.calls or 0 if s else 0 }} AI calls · Tester Assistant and Generate with AI · limited by the plan's session / weekly limits, not money</span>
+  </a>
+</div>
+{% if via %}<div class="small text-secondary mb-2" id="usage">Showing only <b>{{ 'Anthropic API' if via == 'api' else 'Claude subscription' }}</b> calls · <a href="{{ url_for('ai_usage') }}{{ q }}#usage">show all</a></div>{% endif %}
+
 <div class="tiles mb-3">
-  <div class="tile"><span class="n">{{ totals.cost|usd }}</span><span>Estimated cost · {{ totals.cost|inr(inr) }}</span></div>
+  {% if via == 'subscription' %}<div class="tile"><span class="n">No charge</span><span>Claude subscription · session / weekly limits</span></div>
+  {% else %}<div class="tile"><span class="n">{{ totals.cost|usd }}</span><span>Estimated cost · {{ totals.cost|inr(inr) }}</span></div>{% endif %}
   <div class="tile"><span class="n">{{ totals.calls or 0 }}</span><span>AI calls</span></div>
   <div class="tile"><span class="n">{{ totals.tin|tok }}</span><span>Input tokens</span></div>
   <div class="tile"><span class="n">{{ totals.tout|tok }}</span><span>Output tokens</span></div>
@@ -128,7 +147,7 @@
       <tbody>
       {% for r in by_case %}
       <tr>
-        <td class="text-start">{% if r.tc_no %}<a href="{{ url_for('case', cid=r.case_id) }}"><b>TC-{{ r.tc_no }}</b></a> <span class="text-secondary">{{ r.title|truncate(60, True, '…') }}</span>{% elif r.case_id %}<span class="text-secondary">(deleted test case #{{ r.case_id }})</span>{% else %}<span class="text-secondary">(not linked to a test case{{ ': Test Assistant chats not saved yet' if r.chats }})</span>{% endif %}</td>
+        <td class="text-start">{% if r.tc_no %}<a href="{{ url_for('case', cid=r.case_id) }}"><b>TC-{{ r.tc_no }}</b></a> <span class="text-secondary">{{ r.title|truncate(60, True, '…') }}</span>{% elif r.case_id %}<span class="text-secondary">(deleted test case #{{ r.case_id }})</span>{% else %}<span class="text-secondary">(not linked to a test case{{ ': Tester Assistant chats not saved yet' if r.chats }})</span>{% endif %}</td>
         <td class="text-start">{{ r.project or '-' }}</td>
         <td class="text-end">{{ r.runs }}</td><td class="text-end">{{ 'Yes' if r.gens else '' }}</td>
         <td class="text-end"><a href="{{ url_for('ai_usage_case', cid=r.case_id or 0) }}" title="Every AI call of this test case">{{ r.calls or 0 }}</a></td>
@@ -138,7 +157,7 @@
         <td class="text-start">{{ r.last_at|ago }}</td>
       </tr>
       {% else %}
-      <tr><td colspan="12" class="text-secondary text-center py-4">No AI usage in this period. Usage appears after runs with AI steps or Generate with AI (needs API credits).</td></tr>
+      <tr><td colspan="12" class="text-secondary text-center py-4">No AI usage in this period. Usage appears after runs with AI steps, Generate with AI or Tester Assistant chats.</td></tr>
       {% endfor %}
       </tbody>
       {% if by_case %}<tfoot><tr><th class="text-start" colspan="4">Total</th><th class="text-end">{{ totals.calls or 0 }}</th><th class="text-end">{{ '{:,}'.format(totals.tin or 0) }}</th><th class="text-end">{{ '{:,}'.format(totals.tout or 0) }}</th><th class="text-end">{{ '{:,}'.format(by_case|sum(attribute='tcr')) }}</th><th class="text-end">{{ '{:,}'.format(by_case|sum(attribute='tcw')) }}</th><th class="text-end">{{ totals.cost|usd }}</th><th class="text-end">{{ totals.cost|inr(inr) }}</th><th></th></tr></tfoot>{% endif %}
@@ -162,9 +181,9 @@
       <div class="au-head"><b>Recent AI activity</b></div>
       <div class="au-recent">
         {% for r in recent %}
-        <div class="au-ev"><span class="au-kind au-{{ r.kind }}">{{ {'run': 'Run', 'generate': 'Generate', 'cli-step': 'CLI'}.get(r.kind, r.kind) }}</span>
+        <div class="au-ev"><span class="au-kind au-{{ r.kind }}">{{ {'run': 'Run', 'generate': 'Generate', 'cli-step': 'CLI', 'chat': 'Assistant'}.get(r.kind, r.kind) }}</span>
           <span class="min-w-0 flex-grow-1 text-truncate">{% if r.tc_no %}TC-{{ r.tc_no }} {{ r.title }}{% endif %}{% if r.run_id %} · Run #{{ r.run_id }}{% endif %}</span>
-          <span class="text-secondary small text-nowrap">{{ r.username }} · {{ r.at|ago }} · {{ ((r.input_tokens or 0) + (r.output_tokens or 0))|tok }} tok · {{ r.cost_usd|usd }}</span></div>
+          <span class="text-secondary small text-nowrap">{{ r.username }} · {{ r.at|ago }} · {{ ((r.input_tokens or 0) + (r.output_tokens or 0))|tok }} tok · {{ 'subscription' if r.via == 'subscription' else r.cost_usd|usd }}</span></div>
         {% else %}<div class="text-secondary small p-3">No AI activity yet.</div>{% endfor %}
       </div>
     </div>

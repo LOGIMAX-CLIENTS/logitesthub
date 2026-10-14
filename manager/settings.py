@@ -12,6 +12,7 @@ import functools
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timedelta
@@ -86,18 +87,20 @@ ENDPOINT_PERM = {
     'run_share': 'runs.share', 'run_share_link': 'runs.share', 'run_unshare': 'runs.share',
     'project_new': 'projects.create',
     'reports.users': 'reports.view',
-    'project_login': 'cases.edit', 'api.sql': 'runs.run', 'api.memory_set': 'runs.run', 'modules.setup': 'cases.edit', 'modules.read': 'cases.edit', 'modules.parse': 'cases.edit',
+    'project_login': 'cases.edit', 'api.sql': 'runs.run', 'api.sql_write': 'runs.run', 'api.memory_set': 'runs.run', 'modules.setup': 'cases.edit', 'modules.read': 'cases.edit', 'modules.parse': 'cases.edit',
     'modules.apply': 'cases.edit', 'modules.shot': 'cases.edit', 'modules.parse_file': 'cases.edit',
-    'api.modules_push': 'cases.edit',
+    'api.modules_push': 'cases.edit', 'api.case_update': 'cases.edit',
     'assistant.send': 'ai.generate', 'assistant.save': 'cases.create',
     'lessons.new': 'cases.edit', 'lessons.update': 'cases.edit', 'api.lessons_add': 'runs.run',
+    'api.workspace_report': 'runs.run',
 }
 
 SYSTEM = [   # key, label, help, default
-    ('sys.vars_file', 'Variables file', 'JSON with base_url, username, password, branch... used when a run has no environment.',
-     'F:/TestMU-Ai/.testmuai/variables/etail.json'),
-    ('sys.helpers_dir', 'Shared helpers folder', 'Where "@import ../helpers/login.md" is found for cases that have no folder of their own.',
-     'F:/TestMU-Ai/.testmuai/tests/Retail/etail-lot-inward/helpers'),
+    # '' = automatic: the tests/ folder of the project the tester CLI last worked in (see _auto_paths)
+    ('sys.vars_file', 'Variables file', 'JSON with base_url, username, password, branch... used when a run has no environment. '
+     'Leave empty to use tests/variables/ of the project where test cases were last created.', ''),
+    ('sys.helpers_dir', 'Shared helpers folder', 'Where "@import ../helpers/login.md" is found for cases that have no folder of their own. '
+     'Leave empty to use tests/helpers/ of the project where test cases were last created.', ''),
     ('sys.ai_provider', 'AI provider', 'Anthropic API uses the API key on this server and its credits. Claude subscription runs the '
      'Test Assistant and Generate with AI through Claude Code signed in on this PC (for testing; screenshot steps in runs '
      'still use the API).', 'api'),
@@ -254,7 +257,90 @@ def _form_summary():
 def _get(con, key):
     import budget
     v = budget.get_setting(con, key)
+    if v in (None, '') and key in AUTO_KEYS:
+        return _auto_paths(con)[key]
     return v if v not in (None, '') else SYS_DEFAULT.get(key)
+
+
+# ---------------------------------------------------------------- the project's tests/ folder (tester CLI workspace)
+# The tester CLI keeps test cases in the developer's project, in tests/ (tests/tester.json, tests/helpers/,
+# tests/variables/). Each CLI command there reports that folder (POST /api/v1/workspace); when it is on this PC, an
+# empty "Variables file" / "Shared helpers folder" means that folder's variables and helpers. With no such folder
+# yet, LogiTestHub's own data/tests/ is used, so nothing points into another product's folders.
+
+AUTO_KEYS = ('sys.vars_file', 'sys.helpers_dir')
+WORKSPACE_KEY = 'sys.workspace'   # JSON: {tests_dir, root, project, by, at}
+LEGACY = {   # where these lived before (TestMU-Ai); their files are copied in once so existing cases keep working
+    'sys.vars_file': 'F:/TestMU-Ai/.testmuai/variables/etail.json',
+    'sys.helpers_dir': 'F:/TestMU-Ai/.testmuai/tests/Retail/etail-lot-inward/helpers',
+}
+
+
+def workspace(con):
+    import budget
+    try:
+        ws = json.loads(budget.get_setting(con, WORKSPACE_KEY) or '{}')
+    except ValueError:
+        ws = {}
+    return ws if ws.get('tests_dir') and os.path.isfile(os.path.join(ws['tests_dir'], 'tester.json')) else {}
+
+
+def set_workspace(con, tests_dir, root, project, username):
+    """Called by the CLI. Only a folder on this PC counts (a CLI on another PC reports a path we cannot read)."""
+    import budget
+    tests_dir = os.path.abspath(tests_dir)
+    if not os.path.isfile(os.path.join(tests_dir, 'tester.json')):
+        return False
+    old = workspace(con)
+    budget.set_setting(con, WORKSPACE_KEY, json.dumps({'tests_dir': tests_dir, 'root': root, 'project': project,
+                                                       'by': username, 'at': db.now()}))
+    con.commit()
+    if old.get('tests_dir') != tests_dir:
+        apply_system(con)
+    return True
+
+
+def _filled(vars_file):
+    """True when the variables file has at least one value (the CLI's new template has only empty ones)."""
+    try:
+        with open(vars_file, encoding='utf-8') as f:
+            raw = json.load(f)
+        return any(str(v.get('value', '') if isinstance(v, dict) else v).strip() for v in raw.values())
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def _auto_paths(con):
+    ws = workspace(con)
+    tests = ws.get('tests_dir') or os.path.join(db.DATA, 'tests')
+    helpers = os.path.join(tests, 'helpers')
+    vdir = os.path.join(tests, 'variables')
+    name = 'variables.json'
+    try:
+        with open(os.path.join(tests, 'tester.json'), encoding='utf-8') as f:
+            name = os.path.basename(json.load(f).get('variables') or '') or name
+    except (OSError, ValueError, AttributeError):
+        if os.path.isdir(vdir):
+            name = next((x for x in sorted(os.listdir(vdir)) if x.endswith('.json')), name)
+    vars_file = os.path.join(vdir, name)
+    try:
+        os.makedirs(helpers, exist_ok=True)
+        os.makedirs(vdir, exist_ok=True)
+        old_h = LEGACY['sys.helpers_dir']   # first time: bring the helpers (login.md ...) and variables over
+        if os.path.isdir(old_h) and not any(x.endswith('.md') for x in os.listdir(helpers)):
+            for x in os.listdir(old_h):
+                if os.path.isfile(os.path.join(old_h, x)):
+                    shutil.copy2(os.path.join(old_h, x), os.path.join(helpers, x))
+        if not _filled(vars_file):   # missing, or the CLI's empty template
+            if os.path.isfile(LEGACY['sys.vars_file']):
+                shutil.copy2(LEGACY['sys.vars_file'], vars_file)
+            elif not os.path.isfile(vars_file):
+                with open(vars_file, 'w', encoding='utf-8') as f:
+                    f.write('{}\n')
+    except OSError:
+        pass   # read-only folder: the paths are still shown, the runner reports what is missing
+    return {'sys.vars_file': vars_file.replace('\\', '/'), 'sys.helpers_dir': helpers.replace('\\', '/'),
+            'source': ws}
 
 
 def _int(v, default, lo, hi):
@@ -267,7 +353,8 @@ def _int(v, default, lo, hi):
 def apply_system(con):
     """Pushes the System settings to the places that read them: db.VARS_FILE for the web app, and
     environment variables inherited by every runner / generator process started afterwards."""
-    db.VARS_FILE = _get(con, 'sys.vars_file')
+    import envs
+    db.VARS_FILE = envs.BASE_VARS = _get(con, 'sys.vars_file')
     os.environ['LTH_VARS_FILE'] = db.VARS_FILE
     os.environ['LTH_HELPERS_DIR'] = _get(con, 'sys.helpers_dir')
     os.environ['ETAIL_AI_MODEL'] = _get(con, 'sys.ai_model')
@@ -337,6 +424,12 @@ def register(app, con, admin_required, current_user):
         if not c0.execute("SELECT COUNT(*) AS n FROM users WHERE role='superadmin'").fetchone()['n']:
             cur.execute("UPDATE users SET role='superadmin' WHERE role='admin'")
             c0._raw.commit()
+        # the old TestMU-Ai paths saved here before: back to automatic (the project's tests/ folder), once
+        import budget
+        for k, old in LEGACY.items():
+            if (budget.get_setting(c0, k) or '').replace('\\', '/').rstrip('/') == old:
+                budget.set_setting(c0, k, '')
+        c0.commit()
         apply_system(c0)
     finally:
         c0.close()
@@ -495,9 +588,12 @@ def register(app, con, admin_required, current_user):
     def system():
         import pricing
         c = con()
+        import budget
         vals = {k: _get(c, k) for k, _, _, _ in SYSTEM}
+        for k in AUTO_KEYS:   # empty = automatic: the box stays empty and shows the folder in use
+            vals[k] = budget.get_setting(c, k) or ''
         return render_template('settings_system.html', fields=SYSTEM, vals=vals, models=list(pricing.PRICES), providers=AI_PROVIDERS,
-                               info=_system_info(c))
+                               info=_system_info(c), auto=_auto_paths(c), auto_keys=AUTO_KEYS)
 
     @bp.route('/system', methods=['POST'])
     @super_required
@@ -509,12 +605,13 @@ def register(app, con, admin_required, current_user):
         new = {k: f.get(k, '').strip() for k, _, _, _ in SYSTEM}
         errors = []
         try:
-            with open(new['sys.vars_file'], encoding='utf-8') as fh:
-                if not isinstance(json.load(fh), dict):
-                    raise ValueError
+            if new['sys.vars_file']:   # empty = automatic
+                with open(new['sys.vars_file'], encoding='utf-8') as fh:
+                    if not isinstance(json.load(fh), dict):
+                        raise ValueError
         except (OSError, ValueError):
             errors.append(f'Variables file: "{new["sys.vars_file"]}" is not a readable JSON file.')
-        if not os.path.isdir(new['sys.helpers_dir']):
+        if new['sys.helpers_dir'] and not os.path.isdir(new['sys.helpers_dir']):
             errors.append(f'Shared helpers folder: "{new["sys.helpers_dir"]}" does not exist.')
         if new['sys.ai_provider'] not in AI_PROVIDERS:
             errors.append('AI provider: choose one from the list.')
@@ -526,7 +623,7 @@ def register(app, con, admin_required, current_user):
             for e in errors:
                 flash(e, 'danger')
             return redirect(url_for('settings.system'))
-        old = {k: _get(c, k) for k in new}
+        old = {k: (budget.get_setting(c, k) or '') if k in AUTO_KEYS else _get(c, k) for k in new}
         with c:
             for k, v in new.items():
                 budget.set_setting(c, k, v)

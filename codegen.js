@@ -4,7 +4,7 @@
 const fs = require('fs');
 const { generate } = require('./lib/codegen');
 
-const DEFAULT_VARS = process.env.LTH_VARS_FILE || 'F:/TestMU-Ai/.testmuai/variables/etail.json';   // Settings -> System
+const DEFAULT_VARS = process.env.LTH_VARS_FILE || 'tests/variables/variables.json';   // Settings -> System
 const arg = name => { const i = process.argv.indexOf(name); return i > -1 ? process.argv[i + 1] : undefined; };
 let input = '';
 process.stdin.setEncoding('utf8');

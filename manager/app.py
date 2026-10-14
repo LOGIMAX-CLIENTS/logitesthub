@@ -111,7 +111,7 @@ def _globals():
         session['csrf'] = secrets.token_hex(16)
     me = current_user()
     nav_projects = con().execute('SELECT id, name FROM projects ORDER BY name').fetchall() if me else []
-    env_list = envs.all_envs(con()) if me else []
+    env_list = envs.all_envs(con(), me) if me else []
     my_key = con().execute('SELECT key_hint FROM api_keys WHERE user_id=?', (me['id'],)).fetchone() if me else None
     return {'csrf': session['csrf'], 'me': me, 'nav_projects': nav_projects, 'my_key': my_key, 'env_list': env_list,
             'credit_chip': credit_chip(me) if me else None}
@@ -852,7 +852,10 @@ def _import_md(pid, folder_id, text, user):
     title = db.case_title(text, '')
     if not title:
         return None
-    return db.add_case(con(), pid, folder_id, title, text, user)
+    cid = db.add_case(con(), pid, folder_id, title, text, user)
+    import pmtasks
+    pmtasks.tag(con(), cid, user, 'import')   # the user's active PM task, if any
+    return cid
 
 
 @app.route('/projects/<int:pid>/cases/import', methods=['POST'])
@@ -937,15 +940,18 @@ def cases_bulk(pid):
     elif action == 'run':
         import budget
         b = budget.status(con(), current_user())
-        env = envs.get(con(), request.form.get('env_id', type=int))
+        env = envs.get(con(), request.form.get('env_id', type=int), current_user())
         started = 0
         for r in rows:
             if con().execute("SELECT 1 FROM runs WHERE case_id=? AND status IN ('running', 'queued')", (r['id'],)).fetchone():
                 continue
             with con():
-                rid = con().execute('INSERT INTO runs(case_id, status, started_at, run_by, env_name) VALUES (?,?,?,?,?)',
-                                    (r['id'], 'running', db.now(), current_user()['username'], env['name'] if env else None)).lastrowid
-            threading.Thread(target=_run_case, args=(rid, r['content'], not b['ok'], case_base_dir(r), env['id'] if env else None,
+                rid = con().execute('INSERT INTO runs(case_id, status, started_at, run_by, env_name, env_id) VALUES (?,?,?,?,?,?)',
+                                    (r['id'], 'running', db.now(), current_user()['username'], env['name'] if env else None,
+                                     env['id'] if env else None)).lastrowid
+            import cleanup   # several cases at once: nobody to ask, so data passed runs kept is removed first
+            content, _ = cleanup.prepare(con(), r['id'], env['id'] if env else None, rid, r['content'])
+            threading.Thread(target=_run_case, args=(rid, content, not b['ok'], case_base_dir(r), env['id'] if env else None,
                                                      pid), daemon=True).start()
             started += 1
         flash(f'Queued {started} run(s) on {env["name"] if env else "the default environment"}. They run one after another on this PC.'
@@ -1044,6 +1050,8 @@ def case_new(pid):
         with con():
             cid = db.add_case(con(), pid, request.form.get('folder_id', type=int) or None, title, content,
                               current_user()['username'])
+            import pmtasks
+            pmtasks.tag(con(), cid, current_user()['username'], 'web')
         return redirect(url_for('case', cid=cid))
     return render_template('case_edit.html', p=p, folders=folders, content=TEMPLATE_CASE, case=None,
                            folder_id=request.args.get('folder', type=int))
@@ -1151,7 +1159,13 @@ def case(cid):
     gen, gen_error = generate_code(c)   # cached; also drives the Verified/Unverified pill
     any_running = any(r['status'] in ('running', 'queued') for r in runs)
     cstate = code_state(c, gen)
-    return render_template('case.html', c=c, runs=runs, run=run, steps=steps, has_video=has_video,
+    import pmtasks
+    import cleanup
+    ask = request.args.get('ask_cleanup', type=int)
+    ask_env = envs.get(con(), ask, current_user()) if ask is not None else None
+    kept = cleanup.pending(con(), c['id'], ask_env['id'] if ask_env else None) if ask is not None else []
+    return render_template('case.html', c=c, runs=runs, run=run, steps=steps, has_video=has_video, task_codes=pmtasks.codes_of(con(), c['id']),
+                           ask_cleanup=({'env': ask_env, 'rows': cleanup.describe(kept)} if kept else None),
                            history=run_history(runs), fail=run_fail(run, steps),
                            tab=tab, any_running=any_running, public=False, gen=gen, gen_error=gen_error,
                            cstate=cstate, code_open=bool(request.args.get('item') or request.args.get('file')),
@@ -1341,16 +1355,24 @@ def _run_case(run_id, content, no_ai=False, base_dir=None, env_id=None, project_
                 c.execute("UPDATE runs SET status='ERROR', error=? WHERE id=?", (err, run_id))
 
 
-def start_case_run(c, env_id=None):
+def start_case_run(c, env_id=None, cleanup_choice=None):
     """Starts one run of a test case in the background (same path for the Run test button and the Test Assistant).
-    Returns (run_id, budget status). Over the AI limit the run still goes, without AI steps."""
+    Returns (run_id, budget status). Over the AI limit the run still goes, without AI steps.
+    cleanup_choice 'delete': the data a passed run of this case kept on this environment is removed first."""
     import budget
     b = budget.status(con(), current_user())
-    env = envs.get(con(), env_id)
+    env = envs.get(con(), env_id, current_user())
+    import pmtasks
     with con():
-        run_id = con().execute('INSERT INTO runs(case_id, status, started_at, run_by, env_name) VALUES (?,?,?,?,?)',
-                               (c['id'], 'running', db.now(), current_user()['username'], env['name'] if env else None)).lastrowid
-    threading.Thread(target=_run_case, args=(run_id, c['content'], not b['ok'], case_base_dir(c), env['id'] if env else None,
+        run_id = con().execute('INSERT INTO runs(case_id, status, started_at, run_by, env_name, env_id) VALUES (?,?,?,?,?,?)',
+                               (c['id'], 'running', db.now(), current_user()['username'], env['name'] if env else None,
+                                env['id'] if env else None)).lastrowid
+        pmtasks.tag(con(), c['id'], current_user()['username'], 'run')
+    content = c['content']
+    if cleanup_choice == 'delete':
+        import cleanup
+        content, _ = cleanup.prepare(con(), c['id'], env['id'] if env else None, run_id, content)
+    threading.Thread(target=_run_case, args=(run_id, content, not b['ok'], case_base_dir(c), env['id'] if env else None,
                                              c['project_id']), daemon=True).start()
     return run_id, b
 
@@ -1362,7 +1384,13 @@ def case_run(cid):
     if con().execute("SELECT 1 FROM runs WHERE case_id=? AND status IN ('running', 'queued')", (cid,)).fetchone():
         flash('This test is already running.', 'warning')
         return redirect(url_for('case', cid=cid))
-    run_id, b = start_case_run(c, request.form.get('env_id', type=int))
+    import cleanup
+    env = envs.get(con(), request.form.get('env_id', type=int), current_user())
+    choice = request.form.get('cleanup')
+    if choice not in ('delete', 'keep') and cleanup.pending(con(), cid, env['id'] if env else None):
+        # a passed run kept its test data on this environment: ask first (the case page shows the question)
+        return redirect(url_for('case', cid=cid, ask_cleanup=env['id'] if env else 0))
+    run_id, b = start_case_run(c, env['id'] if env else None, choice)
     if not b['ok']:
         flash(b['message'] + ' This run skips AI steps; the other steps still run.', 'warning')
     else:
@@ -1450,18 +1478,39 @@ def shared_file(token, name):
     return _send_artifact(_shared_run(token), name)
 
 
-# ---------------------------------------------------------------- environments (admins manage, everyone picks)
+# ---------------------------------------------------------------- environments
+# Shared ones (owner NULL: Dev / QA / Live) are managed by admins and everyone picks them. Every user may also keep
+# personal ones (owner = their username, e.g. "Local" = their own XAMPP site) that only they see and use.
 
-def _env_form(existing=None):
+def _is_admin(me):
+    import settings
+    return bool(me) and settings.is_admin(me['role'])
+
+
+def _env_owner_for_form(existing, me):
+    """Owner the saved environment gets: an existing one keeps its owner; a new one is personal unless an admin
+    picked 'Shared with everyone'."""
+    if existing:
+        return existing['owner']
+    return None if _is_admin(me) and request.form.get('scope') == 'shared' else me['username']
+
+
+def _env_editable(e, me):
+    return bool(e) and (e['owner'] == me['username'] if e['owner'] else _is_admin(me))
+
+
+def _env_form(existing=None, owner=None):
     f = request.form
     name, url = f.get('name', '').strip(), envs.normalise_url(f.get('base_url'))
     if not envs.NAME_RE.match(name):
         return None, 'Name: 2-40 letters, numbers, space, dot, dash or underscore (e.g. QA, Dev, Local).'
     if not url:
         return None, 'Base URL must start with http:// or https:// (e.g. https://qa.example.com/admin/).'
-    clash = con().execute('SELECT id FROM environments WHERE name=?', (name,)).fetchone()
+    # unique among the shared ones and within one user's personal ones; a personal name may not hide a shared one
+    clash = con().execute('SELECT id FROM environments WHERE name=? AND (owner IS NULL OR owner=? OR ?)',
+                          (name, owner or '', 1 if owner is None else 0)).fetchone()
     if clash and (not existing or clash['id'] != existing['id']):
-        return None, f'An environment named "{name}" already exists.'
+        return None, f'An environment named "{name}" already exists: pick another name.'
     pw = f.get('password', '')
     pw_enc = (existing['password_enc'] if existing else None) if pw == '' else envs.encrypt(pw)
     if f.get('clear_password'):
@@ -1478,11 +1527,25 @@ def _env_form(existing=None):
         return None, 'Database: use a read-only user (SELECT only), never root / admin.'
     dpw = f.get('db_password', '')
     db_pw_enc = (existing['db_password_enc'] if existing else None) if dpw == '' else envs.encrypt(dpw)
+    # test-data setup ("Set up SQL" steps): separate write user, off unless ticked, never on a live environment
+    db_wuser = f.get('db_write_user', '').strip()[:64] or None
+    wpw = f.get('db_write_password', '')
+    db_wpw_enc = (existing['db_write_password_enc'] if existing else None) if wpw == '' else envs.encrypt(wpw)
+    allow_write = 1 if f.get('db_allow_write') else 0
+    if allow_write:
+        if envs.LIVE_NAME.search(name):
+            return None, f'"{name}" looks like a live environment: "Set up SQL" (database writes) cannot be switched on there.'
+        missing = [label for label, val in (('database host', db_host), ('database name', db_name), ('Write user', db_wuser),
+                                            ('Write password', db_wpw_enc)) if not val]
+        if missing:
+            return None, f'Set up SQL is ticked, but {", ".join(missing)} {"is" if len(missing) == 1 else "are"} empty: type them in and save again.'
     if f.get('clear_db') or not db_host:
-        db_host = db_name = db_user = db_pw_enc = None
+        db_host = db_name = db_user = db_pw_enc = db_wuser = db_wpw_enc = None
         db_port = ''
+        allow_write = 0
     return {'db_host': db_host, 'db_port': int(db_port) if db_port else None, 'db_name': db_name, 'db_user': db_user,
-            'db_password_enc': db_pw_enc,
+            'db_password_enc': db_pw_enc, 'db_write_user': db_wuser, 'db_write_password_enc': db_wpw_enc,
+            'db_allow_write': allow_write,
             'name': name, 'base_url': url, 'username': f.get('username', '').strip()[:120] or None,
             'password_enc': pw_enc, 'branch': f.get('branch', '').strip()[:120] or None,
             'note': f.get('note', '').strip()[:255] or None,
@@ -1491,62 +1554,99 @@ def _env_form(existing=None):
 
 
 @app.route('/admin/environments', methods=['GET', 'POST'])
-@admin_required
+@login_required
 def environments():
+    me = current_user()
     if request.method == 'POST':
-        v, err = _env_form()
+        owner = _env_owner_for_form(None, me)
+        v, err = _env_form(owner=owner)
+        rv, rerr = coderepo.form_values(request.form)
+        if not rerr and coderepo.is_local(rv.get('repo_url')) and not _is_admin(me):
+            rerr = 'A code folder on the LogiTestHub server can only be set by an admin: use a repository https address.'
+        err = err or rerr
         if err:
             flash(err, 'danger')
         else:
             with con():
-                first = not con().execute('SELECT COUNT(*) AS n FROM environments').fetchone()['n']
-                con().execute('INSERT INTO environments(name, base_url, username, password_enc, branch, note, is_default, '
-                              'created_by, updated_at, login_steps, menu_url, db_host, db_port, db_name, db_user, '
-                              'db_password_enc) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                              (v['name'], v['base_url'], v['username'], v['password_enc'], v['branch'], v['note'],
-                               1 if first else 0, current_user()['username'], db.now(), v['login_steps'], v['menu_url'],
-                               v['db_host'], v['db_port'], v['db_name'], v['db_user'], v['db_password_enc']))
-            flash(f'Environment "{v["name"]}" added.', 'success')
+                first = owner is None and not con().execute(
+                    'SELECT COUNT(*) AS n FROM environments WHERE owner IS NULL').fetchone()['n']
+                eid = con().execute('INSERT INTO environments(name, base_url, username, password_enc, branch, note, is_default, '
+                                    'created_by, updated_at, login_steps, menu_url, db_host, db_port, db_name, db_user, '
+                                    'db_password_enc, db_write_user, db_write_password_enc, db_allow_write, owner) '
+                                    'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                                    (v['name'], v['base_url'], v['username'], v['password_enc'], v['branch'], v['note'],
+                                     1 if first else 0, me['username'], db.now(), v['login_steps'], v['menu_url'],
+                                     v['db_host'], v['db_port'], v['db_name'], v['db_user'], v['db_password_enc'],
+                                     v['db_write_user'], v['db_write_password_enc'], v['db_allow_write'], owner)).lastrowid
+                coderepo.save(con(), eid, rv)
+            if rv['repo_url']:
+                coderepo.start_sync(eid)   # after the save is committed, so the copy reads the new settings
+            flash(f'Environment "{v["name"]}" added' + (' (only you see it)' if owner else ' (shared with everyone)') + '.'
+                  + (' Copying its code repository now.' if rv['repo_url'] and not coderepo.is_local(rv['repo_url']) else ''),
+                  'success')
         return redirect(url_for('environments'))
-    return render_template('environments.html', envs=envs.all_envs(con()))
+    return render_template('environments.html', envs=envs.all_envs(con(), me), can_shared=_is_admin(me))
 
 
 @app.route('/admin/environments/<int:eid>', methods=['POST'])
-@admin_required
+@login_required
 def environment_update(eid):
+    me = current_user()
     e = con().execute('SELECT * FROM environments WHERE id=?', (eid,)).fetchone() or abort(404)
+    if not envs.visible(e, me):
+        abort(404)   # another user's personal environment
+    if not _env_editable(e, me):
+        abort(403)   # shared ones: admins only
     action = request.form.get('action')
+    resync = False
     with con():
         if action == 'default':
-            con().execute('UPDATE environments SET is_default=(id=?)', (eid,))
+            if e['owner']:
+                flash('Only a shared environment can be the default.', 'danger')
+                return redirect(url_for('environments') + f'#env{eid}')
+            con().execute('UPDATE environments SET is_default=(id=? AND owner IS NULL)', (eid,))
             flash(f'"{e["name"]}" is now the default environment.', 'success')
         elif action == 'delete':
             if e['is_default']:
                 flash('Make another environment the default before deleting this one.', 'danger')
             else:
                 con().execute('DELETE FROM environments WHERE id=?', (eid,))
+                import shutil
+                shutil.rmtree(coderepo.repo_dir(eid), ignore_errors=True)   # its code copy goes with it
                 flash(f'Environment "{e["name"]}" deleted. Past runs keep its name.', 'success')
         else:
-            v, err = _env_form(e)
+            v, err = _env_form(e, owner=e['owner'])
+            rv, rerr = coderepo.form_values(request.form, e)
+            if (not rerr and coderepo.is_local(rv.get('repo_url')) and rv.get('repo_url') != e['repo_url']
+                    and not _is_admin(me)):
+                rerr = 'A code folder on the LogiTestHub server can only be set by an admin: use a repository https address.'
+            err = err or rerr
             if err:
                 flash(err, 'danger')
             else:
                 con().execute('UPDATE environments SET name=?, base_url=?, username=?, password_enc=?, branch=?, note=?, '
                               'login_steps=?, menu_url=?, db_host=?, db_port=?, db_name=?, db_user=?, db_password_enc=?, '
-                              'updated_at=? WHERE id=?',
+                              'db_write_user=?, db_write_password_enc=?, db_allow_write=?, updated_at=? WHERE id=?',
                               (v['name'], v['base_url'], v['username'], v['password_enc'], v['branch'], v['note'],
                                v['login_steps'], v['menu_url'], v['db_host'], v['db_port'], v['db_name'], v['db_user'],
-                               v['db_password_enc'], db.now(), eid))
-                flash(f'Environment "{v["name"]}" saved.', 'success')
-    return redirect(url_for('environments'))
+                               v['db_password_enc'], v['db_write_user'], v['db_write_password_enc'], v['db_allow_write'],
+                               db.now(), eid))
+                coderepo.save(con(), eid, rv)
+                resync = coderepo.needs_sync(e, rv)
+                flash(f'Environment "{v["name"]}" saved.' + (' Copying its code repository now.' if resync else ''), 'success')
+    if resync:
+        coderepo.start_sync(eid)   # after the save is committed, so the copy reads the new settings
+    return redirect(url_for('environments') + f'#env{eid}')
 
 
 @app.route('/admin/environments/<int:eid>/db-test', methods=['POST'])
-@admin_required
+@login_required
 def environment_db_test(eid):
     """Connects with the saved read-only user and proves it cannot write."""
     from flask import jsonify
     e = con().execute('SELECT * FROM environments WHERE id=?', (eid,)).fetchone() or abort(404)
+    if not _env_editable(e, current_user()):
+        abort(404)
     try:
         r = envs.db_query(e, 'SELECT DATABASE() AS db, CURRENT_USER() AS who, VERSION() AS v')
     except envs.DbError as ex:
@@ -1665,7 +1765,7 @@ def ai_credit_delete(cid):
 DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 
 
-AI_KIND = {'run': 'AI step in a run', 'generate': 'Generate with AI', 'cli-step': 'AI step from CLI / IDE', 'chat': 'Test Assistant chat'}
+AI_KIND = {'run': 'AI step in a run', 'generate': 'Generate with AI', 'cli-step': 'AI step from CLI / IDE', 'chat': 'Tester Assistant chat'}
 
 
 @app.route('/admin/ai-usage/case/<int:cid>')
@@ -1726,13 +1826,20 @@ def ai_usage():
         where.append('u.username=?')
         params.append(user)
     kind = a.get('kind', '')
-    if kind in ('run', 'generate', 'cli-step'):
+    if kind in AI_KIND:
         where.append('u.kind=?')
         params.append(kind)
-    w = ' AND '.join(where)
     agg = ('SUM(u.calls) AS calls, SUM(u.input_tokens) AS tin, SUM(u.output_tokens) AS tout, '
            'SUM(u.cache_read_tokens + u.cache_write_tokens) AS tcache, SUM(u.cost_usd) AS cost')
     c = con()
+    # the two ways AI is paid for, before the source filter itself so both cards always show
+    by_via = {r['via']: r for r in c.execute(f'SELECT u.via, {agg} FROM ai_usage u WHERE {" AND ".join(where)} GROUP BY u.via',
+                                             params).fetchall()}
+    via = a.get('via', '')
+    if via in ('api', 'subscription'):
+        where.append('u.via=?')
+        params.append(via)
+    w = ' AND '.join(where)
     totals = c.execute(f'SELECT COUNT(*) AS events, {agg}, COUNT(DISTINCT u.case_id) AS cases FROM ai_usage u WHERE {w}', params).fetchone()
     by_case = c.execute(
         f'SELECT u.case_id, MAX(cs.tc_no) AS tc_no, MAX(cs.title) AS title, MAX(p.name) AS project, COUNT(DISTINCT u.run_id) AS runs, '
@@ -1764,7 +1871,7 @@ def ai_usage():
            'month': budget.month_bounds(), 'today': date.today().isoformat()}
     return render_template('ai_usage.html', bud=bud, totals=totals, by_case=by_case, by_user=by_user, by_day=by_day,
                            recent=recent, projects=projects, users=users, d_from=d_from, d_to=d_to, pid=pid,
-                           user=user, kind=kind, inr=pricing.usd_inr(con()), prices=pricing.PRICES)
+                           user=user, kind=kind, via=via, by_via=by_via, inr=pricing.usd_inr(con()), prices=pricing.PRICES)
 
 
 def money_filter(usd, inr_rate=None):
@@ -1823,8 +1930,9 @@ def start_case_runs(c, cases, env, username, exec_id=None):
     Every case runs whatever happened to the one before it (pass, fail or error). Returns the run ids."""
     items = []
     for case in cases:
-        rid = c.execute('INSERT INTO runs(case_id, status, started_at, run_by, env_name, exec_id) VALUES (?,?,?,?,?,?)',
-                        (case['id'], 'queued', db.now(), username, env['name'] if env else None, exec_id)).lastrowid
+        rid = c.execute('INSERT INTO runs(case_id, status, started_at, run_by, env_name, exec_id, env_id) VALUES (?,?,?,?,?,?,?)',
+                        (case['id'], 'queued', db.now(), username, env['name'] if env else None, exec_id,
+                         env['id'] if env else None)).lastrowid
         items.append((rid, case))
 
     def worker():
@@ -1837,7 +1945,10 @@ def start_case_runs(c, cases, env, username, exec_id=None):
                 u = w.execute('SELECT id, username FROM users WHERE username=?', (username,)).fetchone()
                 no_ai = not budget.status(w, u)['ok'] if u else False   # re-checked per case: the limit can be hit mid-run
             try:
-                _run_case(rid, case['content'], no_ai, case_base_dir(case), env['id'] if env else None, case['project_id'])
+                import cleanup   # nobody to ask: data a passed run kept is removed first
+                with db.connect() as w:
+                    content, _ = cleanup.prepare(w, case['id'], env['id'] if env else None, rid, case['content'])
+                _run_case(rid, content, no_ai, case_base_dir(case), env['id'] if env else None, case['project_id'])
             except Exception as ex:   # never stop the queue because one case broke
                 with db.connect() as w:
                     w.execute("UPDATE runs SET status='ERROR', error=? WHERE id=?", (f'Runner crashed: {ex}'[:300], rid))
@@ -1873,6 +1984,13 @@ coderepo.register(app, con, admin_required, project_or_404)
 
 import lessons   # noqa: E402  (lessons learned per project: read by the /tester skill, Test Assistant and Generate)
 lessons.register(app, con, login_required, current_user, project_or_404)
+
+import pmtasks   # noqa: E402  (PM task codes on test cases: Start / Stop testing, task page, link attached to PM)
+pmtasks.register(app, con, login_required, current_user)
+
+import cleanup   # noqa: E402  (test data a passed run kept: asked about before the next run)
+with db.connect() as _c:
+    cleanup.init(_c)
 
 
 if __name__ == '__main__':
