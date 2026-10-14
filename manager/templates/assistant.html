@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
-{% block title %}Test Assistant · {{ p.name }}{% endblock %}
-{% block crumbs %}<span class="tm-crumbs"><a href="{{ url_for('project', pid=p.id) }}">{{ p.name }}</a> <span>/</span> <b>Test Assistant</b></span>{% endblock %}
-{% block mainclass %}container-fluid{% endblock %}
+{% block title %}Tester Assistant · {{ p.name }}{% endblock %}
+{% block crumbs %}<span class="tm-crumbs"><a href="{{ url_for('project', pid=p.id) }}">{{ p.name }}</a> <span>/</span> <b>Tester Assistant</b></span>{% endblock %}
+{% block mainclass %}container-fluid as-page{% endblock %}
 {% block content %}
 <div class="as-wrap">
   <!-- conversations -->
@@ -33,16 +33,23 @@
   </aside>
 
   <!-- chat -->
-  <section class="as-main panel p-0" aria-label="Test Assistant chat">
+  <section class="as-main panel p-0" aria-label="Tester Assistant chat">
     <header class="as-head">
       <div class="min-w-0">
-        <div class="fw-bold">Test Assistant</div>
+        <div class="fw-bold">Tester Assistant{% if thread and thread.task_code %} <a class="task-badge" href="{{ url_for('pmtasks.page', code=thread.task_code) }}" title="Test cases saved in this chat are linked to this PM task">📌 {{ thread.task_code }}</a>{% endif %}</div>
         <div class="small text-secondary text-truncate">Describe a test in your own words. I show what I understood and a draft test case; you edit, save and run it.</div>
       </div>
       <div class="d-flex gap-2 align-items-center">
-        {% if code_ready and code_provider_ok %}<a href="{{ url_for('coderepo.page', pid=p.id) if is_admin else '#' }}" class="as-code on" title="Reads {{ p.repo_url }} ({{ p.repo_branch }}, {{ p.repo_commit[:10] }}) to take exact field ids and messages">Code: {{ p.repo_branch }} · {{ p.repo_commit[:7] }}</a>
-        {% elif code_ready %}<span class="as-code" title="Reading code needs Settings → System → AI provider: Claude subscription">Code connected (not used with the API provider)</span>
-        {% elif is_admin %}<a class="as-code" href="{{ url_for('coderepo.page', pid=p.id) }}">Connect code</a>{% endif %}
+        {# which code the assistant reads: any environment whose repository is copied (Settings -> Environments);
+           follows "Run on" when that environment has code, and can be changed on its own #}
+        {% if code_envs and code_provider_ok %}
+        <label class="small text-secondary" for="asCodeSel">Code</label>
+        <select class="form-select form-select-sm w-auto as-code-sel" id="asCodeSel" title="The code the assistant reads to take exact field ids and messages">
+          {% for e in code_envs %}<option value="{{ e.id }}" {{ 'selected' if e.is_default }} title="{{ e.repo_url }} ({{ e.repo_branch or 'main' }}, {{ e.repo_commit[:10] }})">{{ e.name }} · {% if e.repo_commit == 'local' %}this PC folder{% else %}{{ e.repo_branch or 'main' }} · {{ e.repo_commit[:7] }}{% endif %}</option>{% endfor %}
+          <option value="">No code</option>
+        </select>
+        {% elif code_envs %}<span class="as-code" title="Reading code needs Settings → System → AI provider: Claude subscription">Code connected (not used with the API provider)</span>
+        {% elif is_admin %}<a class="as-code" href="{{ url_for('environments') }}" title="Set an environment's code repository in Settings → Environments">Connect code</a>{% endif %}
         <label class="small text-secondary" for="asEnv">Run on</label>
         <select class="form-select form-select-sm w-auto" id="asEnv">
           {% for e in envs %}<option value="{{ e.id }}" {{ 'selected' if e.is_default }}>{{ e.name }}</option>{% endfor %}
@@ -79,9 +86,23 @@
 {% endblock %}
 {% block scripts %}
 <script>
+(function () {   // the chat fills the window below the top bar: --as-h = space left from where the chat starts
+  var wrap = document.querySelector('.as-wrap');
+  if (!wrap) return;
+  function fit() { wrap.style.setProperty('--as-h', Math.max(420, window.innerHeight - wrap.getBoundingClientRect().top - 12) + 'px'); }
+  fit(); window.addEventListener('resize', fit);
+})();
+(function () {   // Run on picks its own code when it has one; otherwise the Code choice stays (e.g. read Dev's code, run on Local)
+  var run = document.getElementById('asEnv'), code = document.getElementById('asCodeSel');
+  if (!run || !code) return;
+  function has(sel, v) { for (var i = 0; i < sel.options.length; i++) if (sel.options[i].value === v) return true; return false; }
+  run.addEventListener('change', function () { if (has(code, run.value)) code.value = run.value; });
+  if (has(code, run.value)) code.value = run.value;
+})();
 (function () {
   var CSRF = {{ csrf|tojson }}, PID = {{ p.id }}, THREAD = {{ (thread.id if thread else none)|tojson }}, READONLY = {{ readonly|tojson }};
   var URL_SEND = {{ url_for('assistant.send', pid=p.id)|tojson }}, URL_BASE = {{ url_for('assistant.page', pid=p.id)|tojson }};
+  var URL_LESSONS = {{ url_for('lessons.page', pid=p.id)|tojson }};
   var MSGS = {{ msgs|tojson }};
   var box = document.getElementById('asMsgs'), empty = document.getElementById('asEmpty');
   var form = document.getElementById('asForm'), text = document.getElementById('asText'), sendBtn = document.getElementById('asSend'), stopBtn = document.getElementById('asStop');
@@ -164,15 +185,88 @@
         var st = String(j.status || 'ERROR');
         badge.className = 'badge st-' + st.toLowerCase(); badge.textContent = st;
         var parts = [];
-        if (j.total) parts.push((j.passed || 0) + ' of ' + j.total + ' steps passed');
+        if (st === 'PASSED') parts.push('All ' + (j.total || 0) + ' steps passed');
+        else if (j.total) parts.push((j.passed || 0) + ' of ' + j.total + ' steps passed');
         if (j.failed) parts.push(j.failed + ' failed');
         if (j.needs_ai) parts.push(j.needs_ai + ' need AI');
-        if (j.error) parts.push(j.error);
+        if (j.env_name) parts.push('on ' + j.env_name);
         info.textContent = parts.join(' · ') || 'Finished.';
+        link.textContent = 'Run #' + rid + ': watch the recording and steps';
+        if (st !== 'PASSED') {   // why it did not pass: the step, the reason, and a one-click "fix it" back to the assistant
+          var why = el('div', 'as-runwhy');
+          if (j.fail_step) why.appendChild(el('div', 'as-runwhy-step', 'Step ' + j.fail_step + ': ' + (j.fail_text || '')));
+          var reason = j.fail_reason || j.error || (j.needs_ai ? 'Some steps need AI and could not run.' : 'The run did not finish.');
+          why.appendChild(el('div', 'as-runwhy-reason', 'Reason: ' + reason));
+          card.insertBefore(why, link);
+          if (!READONLY) {
+            var fix = el('button', 'btn btn-sm btn-outline-primary align-self-start', 'Fix this with the assistant'); fix.type = 'button';
+            fix.addEventListener('click', function () {
+              fix.disabled = true;
+              send('Run #' + rid + ' ' + st + (j.fail_step ? ' at step ' + j.fail_step + ': ' + (j.fail_text || '') : '') +
+                   '\nReason: ' + reason + '\nFind the cause in the code and give me the corrected draft.');
+            });
+            card.appendChild(fix);
+          }
+        }
         scrollDown();
       }).catch(function () { setTimeout(poll, 5000); });
     }
     poll();
+  }
+
+  // "Pick one" questions (payment mode of each instalment ...): click an option per question, then send them as one answer
+  function choicesCard(choices) {
+    var card = el('div', 'as-card as-questions');
+    card.appendChild(el('div', 'as-card-title', 'Pick one for each'));
+    var picked = {};
+    var go = el('button', 'btn btn-primary btn-sm mt-2', 'Send answers'); go.type = 'button'; go.disabled = true;
+    choices.forEach(function (c, i) {
+      var block = el('div', 'as-choice');
+      block.appendChild(el('div', 'as-choice-q', c.question));
+      var opts = el('div', 'as-choice-opts');
+      (c.options || []).forEach(function (o) {
+        var b = el('button', 'as-chip', o); b.type = 'button';
+        b.addEventListener('click', function () {
+          opts.querySelectorAll('.as-chip').forEach(function (x) { x.classList.remove('on'); });
+          b.classList.add('on'); picked[i] = o;
+          go.disabled = Object.keys(picked).length < choices.length || busy;
+        });
+        opts.appendChild(b);
+      });
+      block.appendChild(opts); card.appendChild(block);
+    });
+    go.addEventListener('click', function () {
+      send(choices.map(function (c, i) { return c.question + ': ' + picked[i]; }).join('\n'));
+      card.querySelectorAll('button').forEach(function (x) { x.disabled = true; });
+    });
+    card.appendChild(go);
+    return card;
+  }
+
+  // the lesson the assistant wrote after explaining a failure: one click saves it for every next test
+  var KIND = { app_bug: '🐞 App bug', test_outdated: '🧪 Test out of date', environment: '🌐 Environment', test_data: '🗂️ Test data', agent_mistake: '🧪 How we test' };
+  function lessonCard(d, mid) {
+    var l = d.lesson, card = el('div', 'as-card as-lesson');
+    card.appendChild(el('div', 'as-card-title', '📚 Lesson for next time · ' + (KIND[l.kind] || l.kind)));
+    card.appendChild(el('div', 'fw-semibold', l.title));
+    card.appendChild(el('div', 'small text-secondary mt-1', l.avoid));
+    var line = el('div', 'd-flex align-items-center gap-2 mt-2');
+    var btn = el('button', 'btn btn-sm btn-outline-primary', 'Save lesson'); btn.type = 'button';
+    var note = el('span', 'small text-secondary');
+    function done(j) { btn.disabled = true; btn.textContent = 'Saved';
+      note.innerHTML = ''; var a = el('a', null, 'Lesson #' + j.id); a.href = URL_LESSONS; note.appendChild(a);
+      note.appendChild(document.createTextNode(j.created === false ? ' (same mistake seen before: counted again)' : ' saved: every next test reads it')); }
+    if (d.lesson_saved) done({ id: d.lesson_saved, created: true });
+    btn.onclick = function () {
+      if (!THREAD || READONLY) return;
+      btn.disabled = true;
+      post(URL_BASE + '/' + THREAD + '/lesson', { message_id: mid }).then(function (j) {
+        if (j.ok) done(j); else { btn.disabled = false; note.className = 'small t-fail'; note.textContent = j.error || 'Not saved.'; }
+      });
+    };
+    if (READONLY) btn.hidden = true;
+    line.appendChild(btn); line.appendChild(note); card.appendChild(line);
+    return card;
   }
 
   function assistantMessage(m) {
@@ -183,6 +277,8 @@
       var q = el('div', 'as-card as-questions'); q.appendChild(el('div', 'as-card-title', 'Please tell me'));
       var ul = el('ul', 'mb-0'); d.questions.forEach(function (x) { ul.appendChild(el('li', null, x)); }); q.appendChild(ul); row.appendChild(q);
     }
+    if (d.choices && d.choices.length) row.appendChild(choicesCard(d.choices));
+    if (d.lesson) row.appendChild(lessonCard(d, m.id));
     if (d.draft) row.appendChild(draftCard(d, m.id));
     scrollDown();
   }
@@ -192,6 +288,7 @@
     if (m.data && m.data.type === 'saved') {
       var a = el('a', 'small ms-2', 'Open TC-' + m.data.tc_no); a.href = '/cases/' + m.data.case_id + (m.data.run_id ? '?run=' + m.data.run_id : '');
       row.querySelector('.as-bubble').appendChild(a);
+      if (m.data.run_id) runCard(m.data.run_id);   // after a reload the run's result (pass / why it failed) shows again
     }
   }
 
@@ -233,6 +330,7 @@
     var thinking = bubble('assistant', 'Thinking…'); thinking.classList.add('as-thinking');
     reqId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     var data = { thread_id: THREAD, text: msg, req: reqId, env_id: document.getElementById('asEnv') ? document.getElementById('asEnv').value : null };
+    var codeSel = document.getElementById('asCodeSel'); if (codeSel) data.code_env_id = codeSel.value;   // '' = no code
     if (lastDraft) { data.draft_title = lastDraft.title.value; data.draft_text = lastDraft.steps.value; }
     post(URL_SEND, data).then(function (j) {
       thinking.remove();

@@ -3,6 +3,10 @@
 Test cases only say {{base_url}}, {{username}}, {{password}}, {{branch}}; the environment picked for a
 run fills them in, on top of the shared variables file (the rest of the test data comes from there).
 Passwords are stored encrypted (Fernet, key in data/env.key) and never sent back to the browser.
+
+Shared environments (owner NULL: Dev / QA / Live) are added by admins and everyone can pick them.
+Personal environments (owner = a username: e.g. "Local" = that user's own XAMPP site) are seen and used only by
+their owner - in the run pickers, the Tester Assistant, the CLI (--env) and schedules never use them.
 """
 import json
 import os
@@ -13,7 +17,7 @@ from cryptography.fernet import Fernet, InvalidToken
 
 import db
 
-BASE_VARS = 'F:/TestMU-Ai/.testmuai/variables/etail.json'   # shared test data (same default as run.js)
+BASE_VARS = db.VARS_FILE   # shared test data: Settings -> System (settings.apply_system keeps it current)
 _KEY_FILE = os.path.join(db.DATA, 'env.key')
 NAME_RE = re.compile(r'^[A-Za-z0-9 ._-]{2,40}$')
 
@@ -68,11 +72,19 @@ def init(con):
                             # read-only database of the app under test, for "Assert SQL" / "Remember SQL" steps
                             ('environments', 'db_host', 'ALTER TABLE environments ADD COLUMN db_host VARCHAR(255) NULL, '
                              'ADD COLUMN db_port INT NULL, ADD COLUMN db_name VARCHAR(64) NULL, '
-                             'ADD COLUMN db_user VARCHAR(64) NULL, ADD COLUMN db_password_enc TEXT NULL')):
+                             'ADD COLUMN db_user VARCHAR(64) NULL, ADD COLUMN db_password_enc TEXT NULL'),
+                            # test-data setup ("Set up SQL" steps): a separate write user, off unless switched on
+                            ('environments', 'db_allow_write', 'ALTER TABLE environments ADD COLUMN db_write_user VARCHAR(64) NULL, '
+                             'ADD COLUMN db_write_password_enc TEXT NULL, ADD COLUMN db_allow_write TINYINT NOT NULL DEFAULT 0'),
+                            # personal environments: owner = username (only they see it); NULL = shared
+                            ('environments', 'owner', 'ALTER TABLE environments ADD COLUMN owner VARCHAR(64) NULL')):
         n = con.execute('SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() '
                         'AND TABLE_NAME=? AND COLUMN_NAME=?', (table, col)).fetchone()['n']
         if not n:
             con.execute(ddl)
+    # names are unique per owner (each user may have their own "Local"), so the old table-wide UNIQUE goes
+    for ix in con.execute("SHOW INDEX FROM environments WHERE Column_name='name' AND Non_unique=0").fetchall():
+        con.execute(f"ALTER TABLE environments DROP INDEX `{ix['Key_name']}`")
     # values a test remembers ("Remember SQL ... as last_lot") for the tests after it, per environment
     con.execute('CREATE TABLE IF NOT EXISTS run_memory (env_id INT NOT NULL, name VARCHAR(64) NOT NULL, '
                 'value VARCHAR(1000) NULL, updated_by VARCHAR(64), updated_at VARCHAR(32) NOT NULL, '
@@ -91,19 +103,39 @@ def init(con):
                          'Created from the shared variables file', 1, 'system', db.now()))
 
 
-def all_envs(con):
+def _username(user):
+    return user if isinstance(user, str) else (user['username'] if user else None)
+
+
+def visible_sql(user):
+    """WHERE part + params: the shared environments and the user's own personal ones."""
+    return '(owner IS NULL OR owner=?)', [_username(user) or '']
+
+
+def visible(env, user):
+    return bool(env) and (env['owner'] is None or env['owner'] == _username(user))
+
+
+def all_envs(con, user=None):
+    """Shared environments first (default on top), then the user's personal ones. user=None: every environment."""
+    where, params = ('WHERE ' + visible_sql(user)[0], visible_sql(user)[1]) if user else ('', [])
     return con.execute('SELECT id, name, base_url, username, branch, note, is_default, updated_at, login_steps, menu_url, '
                        'db_host, db_port, db_name, db_user, (db_password_enc IS NOT NULL) AS has_db_password, '
-                       '(password_enc IS NOT NULL) AS has_password FROM environments ORDER BY is_default DESC, name').fetchall()
+                       'db_write_user, (db_write_password_enc IS NOT NULL) AS has_db_write_password, db_allow_write, '
+                       '(password_enc IS NOT NULL) AS has_password, repo_url, repo_branch, repo_paths, repo_commit, '
+                       'repo_synced_at, repo_status, repo_error, (repo_token_enc IS NOT NULL) AS has_repo_token, owner, created_by '
+                       f'FROM environments {where} ORDER BY owner IS NOT NULL, is_default DESC, name', params).fetchall()
 
 
-def get(con, env_id=None):
-    """The environment by id, else the default one; None if there are none."""
+def get(con, env_id=None, user=None):
+    """The environment by id, else the default (shared) one; None if there are none.
+    With user: only an environment that user may see (shared, or their own) - another user's personal id gives the
+    default instead. Without user (background runs, already checked when they started): any environment."""
     if env_id:
         r = con.execute('SELECT * FROM environments WHERE id=?', (env_id,)).fetchone()
-        if r:
+        if r and (user is None or visible(r, user)):
             return r
-    return con.execute('SELECT * FROM environments ORDER BY is_default DESC, id LIMIT 1').fetchone()
+    return con.execute('SELECT * FROM environments ORDER BY owner IS NOT NULL, is_default DESC, id LIMIT 1').fetchone()
 
 
 def vars_file(env):
@@ -196,6 +228,75 @@ def db_query(env, sql):
     out = [[text(v) for v in r] for r in rows]
     return {'columns': cols, 'rows': out, 'value': out[0][0] if out and out[0] else None,
             'count': len(rows) + len(more)}
+
+
+# ---------------------------------------------------------------- test-data setup ("Set up SQL" steps)
+# e.g. move a chit payment date back a month so the next instalment can be paid today. Only on environments
+# where an admin switched it on, with a separate write user, one statement at a time, every statement audited.
+
+WRITE_START = re.compile(r'^\s*(update|insert|delete)\b', re.I)
+WRITE_BLOCKED = re.compile(r'\b(drop|alter|create|truncate|grant|revoke|rename|lock|unlock|call|handler|load|'
+                           r'into\s+outfile|into\s+dumpfile|sleep|benchmark|get_lock|shutdown|kill)\b|@@', re.I)
+MAX_WRITE_ROWS = 50
+LIVE_NAME = re.compile(r'\b(live|prod|production)\b', re.I)
+
+
+def check_write(sql):
+    """One INSERT / UPDATE / DELETE; UPDATE / DELETE must have a WHERE. Returns the statement or raises DbError."""
+    s = (sql or '').strip().rstrip(';').strip()
+    if not s:
+        raise DbError('Empty SQL.')
+    if len(s) > 4000:
+        raise DbError('SQL too long (max 4000 characters).')
+    if ';' in s or '--' in s or '/*' in s or '#' in s:
+        raise DbError('Only one statement, without comments (no ; -- /* #).')
+    m = WRITE_START.match(s)
+    if not m:
+        raise DbError('A "Set up SQL" step must be one INSERT, UPDATE or DELETE.')
+    if WRITE_BLOCKED.search(s):
+        raise DbError('This statement uses a word that is not allowed in test-data setup (e.g. DROP, ALTER, TRUNCATE).')
+    if m.group(1).lower() in ('update', 'delete') and not re.search(r'\bwhere\b', s, re.I):
+        raise DbError(f'{m.group(1).upper()} needs a WHERE, so it only changes the test\'s own rows.')
+    return s
+
+
+def db_write_configured(env):
+    return bool(env and env['db_host'] and env['db_name'] and env['db_allow_write'] and env['db_write_user'])
+
+
+def db_write(env, sql):
+    """Runs one INSERT / UPDATE / DELETE with the environment's write user, in a transaction that is rolled back
+    when it would change more than MAX_WRITE_ROWS rows. -> {'affected': n}"""
+    import pymysql
+    if not db_write_configured(env):
+        raise DbError(f'Environment "{env["name"] if env else "?"}" does not allow test-data setup '
+                      '(Settings -> Environments -> Database -> Allow "Set up SQL" steps, with a write user).')
+    if LIVE_NAME.search(env['name'] or ''):
+        raise DbError(f'"{env["name"]}" looks like a live environment: test-data setup is never run there.')
+    s = check_write(sql)
+    try:
+        raw = pymysql.connect(host=env['db_host'], port=int(env['db_port'] or 3306), user=env['db_write_user'],
+                              password=decrypt(env['db_write_password_enc']), database=env['db_name'], charset='utf8mb4',
+                              connect_timeout=6, read_timeout=20, write_timeout=20, autocommit=False)
+    except pymysql.MySQLError as e:
+        raise DbError(f'Cannot connect to the test database with the write user ({e.args[1] if len(e.args) > 1 else e}).')
+    try:
+        with raw.cursor() as cur:
+            try:
+                cur.execute('SET SESSION innodb_lock_wait_timeout=10')
+            except pymysql.MySQLError:
+                pass
+            n = cur.execute(s)
+        if n > MAX_WRITE_ROWS:
+            raw.rollback()
+            raise DbError(f'This would change {n} rows (max {MAX_WRITE_ROWS}): nothing was changed. Narrow the WHERE.')
+        raw.commit()
+    except pymysql.MySQLError as e:
+        raw.rollback()
+        raise DbError(f'The statement failed: {e.args[1] if len(e.args) > 1 else e}')
+    finally:
+        raw.close()
+    return {'affected': n}
 
 
 def normalise_url(url):
