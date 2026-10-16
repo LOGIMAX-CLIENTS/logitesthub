@@ -67,7 +67,7 @@
         <td class="ps-3"><a href="{{ url_for('case', cid=l.case_id, run=l.run_id) }}"><b>TC-{{ l.tc_no }}</b> run #{{ l.run_id }}</a>
           {% if l.run_status %}<span class="badge st-{{ l.run_status|lower }}">{{ l.run_status }}</span>{% endif %}</td>
         <td class="small">{{ l.username }}</td>
-        <td class="small">{% if l.status == 'attached' %}<span class="badge st-passed">SENT</span>{% elif l.status == 'pending' %}<span class="badge st-none">PENDING</span>{% else %}<span class="badge st-failed">NOT SENT</span>{% endif %}
+        <td class="small">{% if l.status == 'attached' %}<span class="badge st-passed">SENT</span>{% elif l.status == 'pending' %}<span class="badge st-none">PENDING</span>{% elif l.status == 'waiting' %}<span class="badge st-none">WAITING</span>{% elif l.status == 'skipped' %}<span class="badge st-none">NOT SENT</span>{% else %}<span class="badge st-failed">NOT SENT</span>{% endif %}
           <span class="text-secondary">{{ l.message }}</span></td>
         <td class="small text-secondary">{{ l.at|ago }}</td>
       </tr>
@@ -92,6 +92,10 @@
   {% for q in cli_reqs %}{% if loop.first %}<div class="mt-2"><b>Tester CLI clicks in PM:</b></div>{% endif %}
   <div>{{ q.username or q.member_id }}
     {% if q.status == 'started' %}<span class="badge st-passed">STARTED</span>{% else %}<span class="badge st-failed">{{ q.status|upper|replace('_', ' ') }}</span>{% endif %}
+    <span class="text-secondary">{{ q.message }} · clicked {{ q.requested_at[:16]|replace('T', ' ') }}</span></div>{% endfor %}
+  {% for q in asst_reqs %}{% if loop.first %}<div class="mt-2"><b>Test Assistant clicks in PM (reviewer):</b></div>{% endif %}
+  <div>{{ q.username or q.email or q.member_id }}
+    {% if q.status == 'ready' %}<span class="badge st-passed">READY</span>{% else %}<span class="badge st-failed">{{ q.status|upper|replace('_', ' ') }}</span>{% endif %}
     <span class="text-secondary">{{ q.message }} · clicked {{ q.requested_at[:16]|replace('T', ' ') }}</span></div>{% endfor %}
   {% if not pm_key %}<div class="text-secondary mt-1">No PM key yet (Settings → Integrations), so the link cannot be sent to PM. Share this page's address by hand until then.</div>{% endif %}
 </div>

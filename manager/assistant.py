@@ -431,8 +431,17 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
         import budget
         import coderepo
         import envs
-        p = project_or_404(pid)
+        import pmtasks
         me = current_user()
+        if request.args.get('task') and not request.args.get('t'):   # PM's Test Assistant button: the chat for that task
+            code = pmtasks.norm(request.args['task'])
+            if not code:
+                flash(f'"{request.args["task"]}" is not a PM task code.', 'warning')
+            elif not con().execute('SELECT 1 FROM projects WHERE id=?', (pid,)).fetchone():
+                return redirect(url_for('pmtasks.assistant', code=code))   # that project is not here: pick one
+            else:
+                return redirect(url_for('assistant.page', pid=pid, t=pmtasks.task_thread(con(), me['username'], code, pid)))
+        p = project_or_404(pid)
         # admins (the top role) can see everyone's conversations, read-only; others see only their own
         import settings
         is_admin = settings.is_admin(me['role'])
@@ -461,9 +470,11 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
         folders = con().execute('SELECT * FROM folders WHERE project_id=? AND archived=0 ORDER BY sort, name', (pid,)).fetchall()
         b = budget.status(con(), me)
         all_envs = envs.all_envs(con(), me)
+        review_block = pmtasks.review_check(con(), me['username'], thread['task_code']) \
+            if thread and thread['task_code'] and not readonly else None
         thread_case = con().execute('SELECT id, tc_no FROM cases WHERE id=?', (thread['case_id'],)).fetchone()             if thread and thread['case_id'] else None
         return render_template('assistant.html', p=p, threads=threads, thread=thread, readonly=readonly, who=who, users=users,
-                               thread_case=thread_case,
+                               thread_case=thread_case, review_task=thread['task_code'] if thread else None, review_block=review_block,
                                msgs=messages_of(thread['id']) if thread else [], folders=folders,
                                envs=all_envs, ai_ok=b['ok'], ai_msg=b['message'],
                                code_envs=[e for e in all_envs if coderepo.code_dir(e)],
@@ -798,9 +809,27 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
                           'FROM runs r JOIN cases c ON c.id=r.case_id WHERE r.id=? AND c.project_id=?', (rid, pid)).fetchone()
         if not r:
             abort(404)
+        import pmtasks
         # why it did not pass, in the chat: the failing step and its reason (filled when the run finishes)
         return jsonify({'ok': True, **r, 'done': r['status'] not in ('running', 'queued'),
-                        'url': url_for('case', cid=r['case_id'], run=rid)})
+                        'url': url_for('case', cid=r['case_id'], run=rid), 'pm': pmtasks.run_pm(con(), rid)})
+
+    @bp.route('/projects/<int:pid>/assistant/<int:tid>/pm-send', methods=['POST'])
+    @login_required
+    def pm_send(pid, tid):
+        """Reviewer's "Send to PM" on a run card: a passed run, or a failure the assistant found to be an app bug."""
+        import pmtasks
+        project_or_404(pid)
+        t = thread_or_404(pid, tid)
+        me = current_user()
+        if t['created_by'] != me['username'] or not t['task_code']:
+            abort(403)
+        body = _payload()
+        bug = re.sub(r'\s+', ' ', str(body.get('bug') or '')).strip()[:1500] or None
+        ok, msg = pmtasks.push_run(int(body.get('run_id') or 0), me['username'], bug)
+        if ok:
+            add_message(tid, 'system', f'Run #{body.get("run_id")} sent to PM ({t["task_code"]})' + (' as an app bug.' if bug else '.'))
+        return jsonify({'ok': ok, 'message': msg})
 
     @bp.route('/projects/<int:pid>/assistant/<int:tid>/delete', methods=['POST'])
     @login_required

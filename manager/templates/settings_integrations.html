@@ -44,10 +44,13 @@
 
       <div class="mb-3">
         <label class="form-check-label"><input class="form-check-input me-1" type="checkbox" name="cli_poll" {{ 'checked' if pm.cli_poll }}>
-          <b>Pick up Tester CLI clicks from PM</b></label>
+          <b>Pick up Tester CLI and Test Assistant clicks from PM</b></label>
         <div class="form-text">PM's <b>Tester CLI</b> button queues the task and who clicked it in PM; this server reads that queue
           every few seconds, starts the task for that person's LogiTestHub account and attaches their link. Their work then
-          reaches PM as them. Switch it on in <b>one</b> LogiTestHub server only (the one PM users use), and set the address above.
+          reaches PM as them. PM's <b>Test Assistant</b> button (the task's reviewer, task in Review) opens the Tester Assistant
+          here for the task; the reviewer sends a <b>passed</b> run, or a failure the assistant found to be an <b>app bug</b>,
+          to PM with <b>Send to PM</b> on the run.
+          Switch it on in <b>one</b> LogiTestHub server only (the one PM users use), and set the address above.
           {% if pm.cli_poll %}Read up to {{ pm.cli_since or 'nothing yet' }}.{% endif %}</div>
       </div>
 
@@ -66,6 +69,8 @@
         <li>Set the LogiTestHub address to one PM users can open, then <b>Save</b>.</li>
         <li>Fill each tester's email in <b>Users</b> exactly as in PM, and switch on <b>Pick up Tester CLI clicks</b> on one server.</li>
         <li>On a PM task, click <b>Tester CLI</b>: the task's page here shows the click and whether each run's link was attached.</li>
+        <li>Reviewer: on a PM task in Review, click <b>Test Assistant</b>: the Tester Assistant opens here for that task. Save and
+          run the test cases there. A passed run, or an app bug the assistant found, has <b>Send to PM</b>; a test-side failure is fixed and run again.</li>
       </ol>
     </div>
   </div>
