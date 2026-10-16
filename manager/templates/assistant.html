@@ -36,7 +36,7 @@
   <section class="as-main panel p-0" aria-label="Tester Assistant chat">
     <header class="as-head">
       <div class="min-w-0">
-        <div class="fw-bold">Tester Assistant{% if thread and thread.task_code %} <a class="task-badge" href="{{ url_for('pmtasks.page', code=thread.task_code) }}" title="Test cases saved in this chat are linked to this PM task. Opened from your Test Assistant click in PM: each passed run's link goes to PM (failed runs do not)">📌 {{ thread.task_code }}</a>{% endif %}</div>
+        <div class="fw-bold">Tester Assistant{% if thread and thread.task_code %} <a class="task-badge" href="{{ url_for('pmtasks.page', code=thread.task_code) }}" title="Test cases saved in this chat are linked to this PM task. Send to PM on a run: a passed run, or a failure the assistant found to be an app bug">📌 {{ thread.task_code }}</a>{% endif %}</div>
         <div class="small text-secondary text-truncate">Describe a test in your own words. I show what I understood and a draft test case; you edit, save and run it.</div>
       </div>
       <div class="d-flex gap-2 align-items-center">
@@ -60,6 +60,7 @@
     </header>
     {% if readonly %}<div class="as-banner as-ro">Viewing <b>{{ thread.created_by }}</b>'s conversation (read-only). Only the owner can send messages or save from it.</div>
     {% elif not ai_ok %}<div class="as-banner">{{ ai_msg }}</div>{% endif %}
+    {% if review_block %}<div class="as-banner" role="alert">⚠️ <b>Not the PM reviewer:</b> {{ review_block }} You can still write and run tests here.</div>{% endif %}
 
     <div class="as-msgs" id="asMsgs" aria-live="polite">
       <div class="as-empty" id="asEmpty" {{ 'hidden' if msgs }}>
@@ -106,6 +107,8 @@
 })();
 (function () {
   var CSRF = {{ csrf|tojson }}, PID = {{ p.id }}, THREAD = {{ (thread.id if thread else none)|tojson }}, READONLY = {{ readonly|tojson }};
+  var TASK = {{ (thread.task_code if thread else none)|tojson }};   // PM task of a chat opened from PM's Test Assistant button
+  var REVIEW_BLOCK = {{ (review_block is not none and review_block != '')|tojson }};   // signed in here as someone other than the PM reviewer
   var CASE_TC = {{ (thread_case.tc_no if thread_case else none)|tojson }};   // the test case this chat saved: Save updates it
   var URL_SEND = {{ url_for('assistant.send', pid=p.id)|tojson }}, URL_BASE = {{ url_for('assistant.page', pid=p.id)|tojson }};
   var URL_LESSONS = {{ url_for('lessons.page', pid=p.id)|tojson }};
@@ -218,7 +221,37 @@
     }
   }
 
+  // chat opened from PM's Test Assistant button: a run's link goes to PM only by the reviewer's click - a passed run, or a
+  // failure the assistant found to be an app bug (its lesson kind). A test-side failure is fixed and run again instead.
+  var lastRun = null, bugFor = {}, bugShow = {};
+  function pmBox(card, rid, st, pm) {
+    var line = el('div', 'd-flex flex-wrap align-items-center gap-2');
+    var passed = st === 'PASSED';
+    var btn = el('button', 'btn btn-sm align-self-start ' + (passed ? 'btn-primary' : 'btn-outline-danger'),
+                 passed ? '📤 Send to PM · ' + TASK : '🐞 Send to PM as app bug · ' + TASK); btn.type = 'button';
+    var note = el('span', 'small text-secondary');
+    line.appendChild(btn); line.appendChild(note); card.appendChild(line);
+    function sent(msg) { btn.disabled = true; btn.className = 'btn btn-sm btn-outline-success align-self-start'; btn.textContent = '✅ Sent to PM · ' + TASK;
+                         note.className = 'small text-secondary'; note.textContent = msg || ''; }
+    if (pm.status === 'attached') { sent(pm.message); return; }
+    if (READONLY) { line.hidden = true; return; }
+    if (REVIEW_BLOCK) { btn.disabled = true; note.className = 'small t-fail'; note.textContent = 'Not sent: you are not the PM reviewer of ' + TASK + ' (see the note at the top).'; }
+    var bug = null;
+    btn.addEventListener('click', function () {
+      btn.disabled = true; note.className = 'small text-secondary'; note.textContent = 'Sending to PM…';
+      post(URL_BASE + '/' + THREAD + '/pm-send', { run_id: rid, bug: bug }).then(function (j) {
+        if (j.ok) sent(j.message); else { btn.disabled = false; note.className = 'small t-fail'; note.textContent = j.message || j.error || 'Not sent.'; }
+      });
+    });
+    if (!passed) {   // shown once the assistant says this failure is an app bug
+      line.hidden = true;
+      var show = function (b) { bug = b; line.hidden = false; note.textContent = 'The assistant found an app bug: ' + b; scrollDown(); };
+      if (bugFor[rid]) show(bugFor[rid]); else bugShow[rid] = show;
+    }
+  }
+
   function runCard(rid, live) {
+    lastRun = rid;
     var card = el('div', 'as-card as-runcard');
     var line = el('div', 'd-flex align-items-center gap-2');
     var badge = el('span', 'badge st-running', 'RUNNING'); var info = el('span', 'small text-secondary', 'Running in a headless browser…');
@@ -262,6 +295,7 @@
           again.addEventListener('click', function () { rerun(j.case_id, again); });
           card.appendChild(again);
         }
+        if (TASK && j.pm && j.pm.via === 'assistant') pmBox(card, rid, st, j.pm);
         scrollDown();
       }).catch(function () { setTimeout(poll, 5000); });
     }
@@ -333,6 +367,10 @@
     }
     if (d.choices && d.choices.length) row.appendChild(choicesCard(d.choices));
     if (d.lesson) row.appendChild(lessonCard(d, m.id));
+    if (d.lesson && d.lesson.kind === 'app_bug' && lastRun) {   // the failed run just explained is an app bug: it may go to PM
+      var b = [d.lesson.title, d.lesson.symptom].filter(Boolean).join(': ');
+      bugFor[lastRun] = b; if (bugShow[lastRun]) bugShow[lastRun](b);
+    }
     if (d.readiness && (d.readiness.screens || []).length) {   // what the test needs, found in the code first
       var rd = el('div', 'as-card as-ready');
       rd.appendChild(el('div', 'as-card-title', 'Ready to run? (checked before the draft)'));
