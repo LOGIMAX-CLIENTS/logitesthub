@@ -36,7 +36,7 @@
   <section class="as-main panel p-0" aria-label="Tester Assistant chat">
     <header class="as-head">
       <div class="min-w-0">
-        <div class="fw-bold">Tester Assistant{% if thread and thread.task_code %} <a class="task-badge" href="{{ url_for('pmtasks.page', code=thread.task_code) }}" title="Test cases saved in this chat are linked to this PM task">📌 {{ thread.task_code }}</a>{% endif %}</div>
+        <div class="fw-bold">Tester Assistant{% if thread and thread.task_code %} <a class="task-badge" href="{{ url_for('pmtasks.page', code=thread.task_code) }}" title="Test cases saved in this chat are linked to this PM task. Opened from your Test Assistant click in PM: each passed run's link goes to PM (failed runs do not)">📌 {{ thread.task_code }}</a>{% endif %}</div>
         <div class="small text-secondary text-truncate">Describe a test in your own words. I show what I understood and a draft test case; you edit, save and run it.</div>
       </div>
       <div class="d-flex gap-2 align-items-center">
@@ -67,9 +67,9 @@
         <div class="fw-semibold mb-1">What should I test in {{ p.name }}?</div>
         <div class="small text-secondary mb-3">Say the screen, what to do and what should happen. Tamil, Tanglish or English are all fine.</div>
         <div class="as-examples">
-          <button type="button" class="as-ex">Category master-la already irukura category name-ai thirumba add panna duplicate error varanum</button>
+          <button type="button" class="as-ex">Category master: adding a category name that already exists must show a duplicate error</button>
           <button type="button" class="as-ex">GRN entry: transferring more pieces than the lot has must be blocked with an error</button>
-          <button type="button" class="as-ex">Lot inward-la purity select pannama save panna validation message varanum</button>
+          <button type="button" class="as-ex">Lot inward: saving without selecting a purity must show a validation message</button>
         </div>
       </div>
     </div>
