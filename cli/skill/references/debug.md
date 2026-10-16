@@ -6,6 +6,10 @@ Never just re-run a failed test hoping it passes, and never "fix" a test by dele
 
 - `report` / `url` from the JSON result: the failing step, its error and its screenshot.
 - `run_dir/events.ndjson`: every step with its status and error, in order.
+- **`server_error` first** (in the failing step's event, and "Server error ..." warnings on earlier steps): an AJAX
+  call / page answered 500, Database Error or PHP Error. Then the app's server failed, not the test: kind `app_bug`
+  (code) or `environment` (e.g. "Table ... doesn't exist in engine" = that database is broken). Tell the user the
+  exact error and the URL; do not change the test.
 - Look at the screenshot of the failing step **and** of the step before it: most failures start one step earlier
   (a save that did not happen, a page that did not load, a popup that was not closed).
 

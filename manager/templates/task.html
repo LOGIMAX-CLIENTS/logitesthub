@@ -17,7 +17,17 @@
   </div>
 </div>
 
-{% if mine %}<div class="alert alert-success py-2 small">🟢 You are testing <b>{{ code }}</b>: every test case you create or run (web, Tester Assistant, Tester CLI) is linked to it. It stops when you click Stop, start another task, or after {{ hours }} hours.</div>{% endif %}
+{% if mine %}<div class="alert alert-success py-2 small">🟢 You are testing <b>{{ code }}</b>: every test case you create or run (web, Tester Assistant, Tester CLI) is linked to it. It stops when you click Stop, start another task, or after {{ hours }} hours.
+  {% if clicked %}Started from your Tester CLI click in PM: each run's link goes to PM as you.{% else %}Started here, not from PM: nothing is sent to PM. To send links, click <b>Tester CLI</b> on this task in PM.{% endif %}</div>{% endif %}
+
+{% if testers %}
+<div class="d-flex flex-wrap gap-2 align-items-center mb-3 small">
+  <span class="text-secondary">Tester:</span>
+  <a class="btn btn-sm {{ 'btn-secondary' if not by else 'btn-outline-secondary' }}" href="{{ url_for('pmtasks.page', code=code) }}">Everyone</a>
+  {% for u in testers %}<a class="btn btn-sm {{ 'btn-secondary' if by == u else 'btn-outline-secondary' }}" href="{{ url_for('pmtasks.page', code=code, by=u) }}">{{ u }}</a>{% endfor %}
+  {% if by %}<span class="text-secondary">· {{ by }}'s test cases and runs only: this is the link PM got from {{ by }}.</span>{% endif %}
+</div>
+{% endif %}
 
 <div class="tiles mb-3">
   <div class="tile"><span class="n">{{ s.cases }}</span><span>Test cases</span></div>
@@ -47,13 +57,42 @@
   </table>
 </div>
 
+<div class="panel p-0 mb-3">
+  <div class="px-3 pt-2 small"><b>Runs sent to PM</b> <span class="text-secondary">· each run of this task's test cases goes to PM as the person who ran it, when it ends</span></div>
+  <table class="table table-sm align-middle mb-0">
+    <thead><tr><th class="ps-3">Run</th><th>Ran by</th><th>PM</th><th>When</th></tr></thead>
+    <tbody>
+      {% for l in run_links %}
+      <tr>
+        <td class="ps-3"><a href="{{ url_for('case', cid=l.case_id, run=l.run_id) }}"><b>TC-{{ l.tc_no }}</b> run #{{ l.run_id }}</a>
+          {% if l.run_status %}<span class="badge st-{{ l.run_status|lower }}">{{ l.run_status }}</span>{% endif %}</td>
+        <td class="small">{{ l.username }}</td>
+        <td class="small">{% if l.status == 'attached' %}<span class="badge st-passed">SENT</span>{% elif l.status == 'pending' %}<span class="badge st-none">PENDING</span>{% else %}<span class="badge st-failed">NOT SENT</span>{% endif %}
+          <span class="text-secondary">{{ l.message }}</span></td>
+        <td class="small text-secondary">{{ l.at|ago }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="text-center text-secondary py-3">No runs yet. Runs made while testing this task appear here.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
 <div class="panel small">
-  <b>PM link:</b>
-  {% if link and link.status == 'attached' %}<span class="badge st-passed">ATTACHED</span> {{ link.message }} <span class="text-secondary">({{ link.attached_by }}, {{ link.at|ago }})</span>
+  <b>Your PM link:</b>
+  {% if link and link.status == 'attached' %}<span class="badge st-passed">ATTACHED</span> {{ link.message }} <span class="text-secondary">({{ link.at|ago }})</span>
   {% elif link %}<span class="badge st-failed">NOT ATTACHED</span> {{ link.message }}
-  {% else %}<span class="badge st-none">NOT YET</span> It is attached when someone starts testing this task or opens its Tester Assistant.{% endif %}
-  {% if pm_key and not (link and link.status == 'attached') %}
+  {% else %}<span class="badge st-none">NOT YET</span> It is attached, as you, when you click <b>Tester CLI</b> on this task in PM.{% endif %}
+  {% if pm_key and clicked and not (link and link.status == 'attached') %}
   <form class="d-inline ms-2" method="post" action="{{ url_for('pmtasks.attach_now', code=code) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn btn-link btn-sm p-0 align-baseline">Attach now</button></form>{% endif %}
-  {% if not pm_key %}<div class="text-secondary mt-1">This server has no PM MCP key yet (LTH_PM_MCP_KEY), so the link cannot be sent to PM. Share this page's address by hand until then.</div>{% endif %}
+  {% for l in links if l.attached_by != me.username %}{% if loop.first %}<div class="mt-2"><b>Other testers:</b></div>{% endif %}
+  <div><a href="{{ url_for('pmtasks.page', code=code, by=l.attached_by) }}">{{ l.attached_by }}</a>
+    {% if l.status == 'attached' %}<span class="badge st-passed">ATTACHED</span>{% else %}<span class="badge st-failed">NOT ATTACHED</span>{% endif %}
+    <span class="text-secondary">{{ l.message }} · {{ l.at|ago }}</span></div>{% endfor %}
+  {% for q in cli_reqs %}{% if loop.first %}<div class="mt-2"><b>Tester CLI clicks in PM:</b></div>{% endif %}
+  <div>{{ q.username or q.member_id }}
+    {% if q.status == 'started' %}<span class="badge st-passed">STARTED</span>{% else %}<span class="badge st-failed">{{ q.status|upper|replace('_', ' ') }}</span>{% endif %}
+    <span class="text-secondary">{{ q.message }} · clicked {{ q.requested_at[:16]|replace('T', ' ') }}</span></div>{% endfor %}
+  {% if not pm_key %}<div class="text-secondary mt-1">No PM key yet (Settings → Integrations), so the link cannot be sent to PM. Share this page's address by hand until then.</div>{% endif %}
 </div>
 {% endblock %}

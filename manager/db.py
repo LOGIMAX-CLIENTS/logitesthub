@@ -285,6 +285,10 @@ def init():
                         "ADD COLUMN pm_member_id VARCHAR(64) NULL AFTER auth_source, "
                         "ADD COLUMN pm_login VARCHAR(254) NULL AFTER pm_member_id, "
                         "ADD UNIQUE KEY uq_users_pm (pm_member_id)")
+        cur.execute("SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() "
+                    "AND TABLE_NAME='users' AND COLUMN_NAME='email'")
+        if not cur.fetchone()['n']:   # who a PM Tester CLI request is from: PM sends the clicker's email
+            cur.execute("ALTER TABLE users ADD COLUMN email VARCHAR(254) NULL AFTER name, ADD UNIQUE KEY uq_users_email (email)")
     finally:
         con.close()
 
@@ -408,8 +412,10 @@ def run_failure(steps):
         next((x for x in steps if x.get('status') == 'needs-ai'), None)
     if not s:
         return None
-    return {'step': s.get('n'), 'text': (s.get('text') or '')[:500],
-            'reason': explain_step_error(s.get('text'), s.get('error') or s.get('ai'), s.get('status'))[:500]}
+    reason = explain_step_error(s.get('text'), s.get('error') or s.get('ai'), s.get('status'))
+    if s.get('server_error'):   # the app's server failed behind the page (500 / Database Error / PHP Error): that is the cause
+        reason = f'The application server failed ({s["server_error"]}). So: {reason}'
+    return {'step': s.get('n'), 'text': (s.get('text') or '')[:500], 'reason': reason[:500]}
 
 
 def record_finished_run(con, run_id, run_dir):
