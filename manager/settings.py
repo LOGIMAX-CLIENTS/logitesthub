@@ -114,7 +114,8 @@ SYSTEM = [   # key, label, help, default
     ('sys.ai_provider', 'AI provider', 'Anthropic API uses the API key on this server and its credits. Claude subscription runs the '
      'Test Assistant and Generate with AI through Claude Code signed in on this PC (for testing; screenshot steps in runs '
      'still use the API).', 'api'),
-    ('sys.ai_model', 'AI model', 'Claude model for AI steps and Generate with AI.', 'claude-opus-5-5'),
+    ('sys.ai_model', 'AI model', 'Claude model for AI steps, Generate with AI and the Test Assistant, with either AI provider.',
+     'claude-opus-5-5'),
     ('sys.audit_days', 'Keep audit log (days)', 'Older audit entries are removed automatically (7 to 365).', '90'),
 ]
 SYS_DEFAULT = {k: d for k, _, _, d in SYSTEM}
@@ -385,21 +386,29 @@ def apply_system(con):
 #   the Claude subscription. A server has no browser to sign in with, so it uses a long-lived token made on any PC
 #   with `claude setup-token` (CLAUDE_CODE_OAUTH_TOKEN).
 SECRETS = {   # setting -> (environment variable, pattern, label, where to get it)
-    'sys.anthropic_key': ('ANTHROPIC_API_KEY', re.compile(r'^sk-ant-api\d\d-[A-Za-z0-9_\-]{20,}$'), 'Anthropic API key',
-                          'console.anthropic.com -> API keys (it starts with sk-ant-api)'),
+    # sk-ant-api03-... (Console API key), sk-ant-usr-... and other sk-ant- kinds; not a subscription token (sk-ant-oat)
+    'sys.anthropic_key': ('ANTHROPIC_API_KEY', re.compile(r'^sk-ant-(?!oat)[a-z]+\d*-[A-Za-z0-9_\-]{20,}$'), 'Anthropic API key',
+                          'console.anthropic.com -> API keys (it starts with sk-ant-, not sk-ant-oat)'),
     'sys.claude_token': ('CLAUDE_CODE_OAUTH_TOKEN', re.compile(r'^sk-ant-oat\d\d-[A-Za-z0-9_\-]{20,}$'), 'Claude subscription token',
                          '`claude setup-token` (it starts with sk-ant-oat)'),
 }
 _SECRETS_STARTED_WITH = {env: os.environ.get(env) for env, _, _, _ in SECRETS.values()}
 
 
+def mask(key):
+    """sk-ant-api03-AbC...9AAA: enough to tell which key it is (match the hint in the Anthropic Console), not to use it."""
+    return f'{key[:14]}...{key[-4:]}' if key and len(key) > 24 else '...'
+
+
 def secret_source(con, name):
-    """Where the key in use comes from, for System information."""
+    """Which key is in use (masked) and where it comes from, for System information."""
     import budget
     env = SECRETS[name][0]
-    if budget.get_setting(con, name):
-        return 'Saved here (Settings -> System)'
-    return f'From the server settings ({env})' if os.environ.get(env) else None
+    key = os.environ.get(env)
+    if not key:
+        return None
+    where = 'saved here (Settings -> System)' if budget.get_setting(con, name) else f'from the server settings ({env})'
+    return f'{mask(key)} · {where}'
 
 
 def anthropic_test(key=None):
@@ -443,8 +452,10 @@ def claude_test(token=None):
     if token:
         env['CLAUDE_CODE_OAUTH_TOKEN'] = token
     try:
+        model = os.environ.get('LTH_CLAUDE_MODEL') or os.environ.get('ETAIL_AI_MODEL')   # as lib/ai.js: the model picked here
         p = subprocess.run([exe, '-p', 'Reply with the single word OK.', '--output-format', 'json', '--tools', '',
-                            '--no-session-persistence', '--setting-sources', ''], capture_output=True, text=True,
+                            '--no-session-persistence', '--setting-sources', ''] + (['--model', model] if model else []),
+                           capture_output=True, text=True,
                            timeout=90, env=env, cwd=db.RUNNER_DIR)
     except subprocess.TimeoutExpired:
         return False, 'Claude Code did not answer in 90 seconds.'
@@ -716,7 +727,8 @@ def register(app, con, admin_required, current_user):
             vals[k] = budget.get_setting(c, k) or ''
         return render_template('settings_system.html', fields=SYSTEM, vals=vals, models=list(pricing.PRICES), providers=AI_PROVIDERS,
                                info=_system_info(c), auto=_auto_paths(c), auto_keys=AUTO_KEYS,
-                               saved={n: bool(budget.get_setting(c, n)) for n in SECRETS})
+                               saved={n: bool(budget.get_setting(c, n)) for n in SECRETS},
+                               in_use={n: secret_source(c, n) for n in SECRETS})
 
     @bp.route('/system', methods=['POST'])
     @super_required
