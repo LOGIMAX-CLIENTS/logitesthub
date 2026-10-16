@@ -822,16 +822,22 @@ def register(app, con, admin_required, current_user):
         picked = next((m for m in (request.form.get('sys.claude_model'), request.form.get('sys.ai_model')) if m in pricing.PRICES), None)
         ok, msg = anthropic_test(v or None) if which == 'anthropic' else claude_test(v or None, picked)
         c = con()
+        mkey = 'sys.ai_model' if which == 'anthropic' else 'sys.claude_model'   # the model picked in this box
+        m = request.form.get(mkey)
+        keep_model = ok and m is not None and (m in pricing.PRICES or (m == '' and mkey == 'sys.claude_model'))
         with c:
             if ok and v:
                 budget.set_setting(c, name, envs.encrypt(v))
+            if keep_model:   # it worked with this model: keep it, so the page shows what was tested
+                budget.set_setting(c, mkey, m)
             if ok or not v:   # a typed key that failed says nothing about the key in use
                 budget.set_setting(c, name + '_check', json.dumps({'ok': ok, 'at': db.now(), 'msg': msg[:300]}))
-        if ok and v:
+        if ok and (v or keep_model):
             apply_system(c)
             write_audit(current_user()['username'], 'system_save', 'settings', None, 'ok', f'{SECRETS[name][2]} tested and saved',
-                        {name: ['', 'replaced']}, request.remote_addr)
-        flash(msg + (' Saved: it is in use now.' if ok and v else ' Not saved.' if v else ''), 'success' if ok else 'danger')
+                        {**({name: ['', 'replaced']} if v else {}), **({mkey: m or 'same as the API model'} if keep_model else {})},
+                        request.remote_addr)
+        flash(msg + (' Saved: it is in use now.' if ok and (v or keep_model) else ' Not saved.' if v else ''), 'success' if ok else 'danger')
         return redirect(url_for('settings.system'))
 
     # ------------------------------------------------------------ Integrations: PM (task links, test report link)
