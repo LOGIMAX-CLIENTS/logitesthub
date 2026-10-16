@@ -274,11 +274,11 @@ def pm_call(tool, args, key=None, url=None):
 
 def _member_id(con, username):
     """The PM member id of a LogiTestHub user: their PM sign-in id, else a unique PM name match."""
-    u = con.execute('SELECT name, pm_member_id FROM users WHERE username=?', (username,)).fetchone()
+    u = con.execute('SELECT name, pm_api_member_id FROM users WHERE username=?', (username,)).fetchone()
     if not u:
         return None
-    if u['pm_member_id']:
-        return u['pm_member_id']
+    if u['pm_api_member_id']:
+        return u['pm_api_member_id']
     # PM matches first / last name separately: "Shreenath" finds nothing, "Shree" finds "Shree Nath". So search with
     # the start of the name and keep the one whose name is the same without spaces / case.
     want = re.sub(r'[^a-z]', '', (u['name'] or username).lower())
@@ -397,13 +397,13 @@ def lth_user(con, email, member_id=None):
     email = str(email or '').strip().lower()
     if not email:
         return None
-    r = con.execute('SELECT username, pm_member_id FROM users WHERE LOWER(email)=?', (email,)).fetchone()
+    r = con.execute('SELECT username, pm_api_member_id FROM users WHERE LOWER(email)=?', (email,)).fetchone()
     if not r:
         return None
-    if member_id and r['pm_member_id'] != member_id and not con.execute(
-            'SELECT 1 FROM users WHERE pm_member_id=?', (member_id,)).fetchone():
+    if member_id and r['pm_api_member_id'] != member_id and not con.execute(
+            'SELECT 1 FROM users WHERE pm_api_member_id=?', (member_id,)).fetchone():
         with con:
-            con.execute('UPDATE users SET pm_member_id=? WHERE username=?', (member_id, r['username']))
+            con.execute('UPDATE users SET pm_api_member_id=? WHERE username=?', (member_id, r['username']))
     return r['username']
 
 

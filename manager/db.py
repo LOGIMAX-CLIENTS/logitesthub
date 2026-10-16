@@ -289,6 +289,14 @@ def init():
                     "AND TABLE_NAME='users' AND COLUMN_NAME='email'")
         if not cur.fetchone()['n']:   # who a PM Tester CLI request is from: PM sends the clicker's email
             cur.execute("ALTER TABLE users ADD COLUMN email VARCHAR(254) NULL AFTER name, ADD UNIQUE KEY uq_users_email (email)")
+        # PM has two member ids: pm_member_id = Unified_DB Members id (sign-in, active check);
+        # pm_api_member_id = PM MCP member UUID (who attached a link). A Tester CLI click used to overwrite the first.
+        cur.execute("SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() "
+                    "AND TABLE_NAME='users' AND COLUMN_NAME='pm_api_member_id'")
+        if not cur.fetchone()['n']:
+            cur.execute("ALTER TABLE users ADD COLUMN pm_api_member_id VARCHAR(64) NULL AFTER pm_login")
+            cur.execute("UPDATE users SET pm_api_member_id=pm_member_id, pm_member_id=NULL "
+                        "WHERE pm_member_id REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'")
     finally:
         con.close()
 
