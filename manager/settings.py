@@ -114,8 +114,9 @@ SYSTEM = [   # key, label, help, default
     ('sys.ai_provider', 'AI provider', 'Anthropic API uses the API key on this server and its credits. Claude subscription runs the '
      'Test Assistant and Generate with AI through Claude Code signed in on this PC (for testing; screenshot steps in runs '
      'still use the API).', 'api'),
-    ('sys.ai_model', 'AI model', 'Claude model for AI steps, Generate with AI and the Test Assistant, with either AI provider.',
-     'claude-opus-5-5'),
+    ('sys.ai_model', 'API model', 'Model for the Anthropic API: AI steps in runs, and the Test Assistant / Generate with AI when '
+     'the provider is the API.', 'claude-opus-5-5'),
+    ('sys.claude_model', 'Claude subscription model', 'Model for Claude Code (provider: Claude subscription). Empty = the API model.', ''),
     ('sys.audit_days', 'Keep audit log (days)', 'Older audit entries are removed automatically (7 to 365).', '90'),
 ]
 SYS_DEFAULT = {k: d for k, _, _, d in SYSTEM}
@@ -369,6 +370,11 @@ def apply_system(con):
     os.environ['LTH_VARS_FILE'] = db.VARS_FILE
     os.environ['LTH_HELPERS_DIR'] = _get(con, 'sys.helpers_dir')
     os.environ['ETAIL_AI_MODEL'] = _get(con, 'sys.ai_model')
+    cm = _get(con, 'sys.claude_model') or _CLAUDE_MODEL_STARTED_WITH   # lib/ai.js: LTH_CLAUDE_MODEL, else ETAIL_AI_MODEL
+    if cm:
+        os.environ['LTH_CLAUDE_MODEL'] = cm
+    else:
+        os.environ.pop('LTH_CLAUDE_MODEL', None)
     os.environ['LTH_AI_PROVIDER'] = _get(con, 'sys.ai_provider')
     import budget   # AI keys saved here; none = what the server was started with (its env file / start script)
     for name, (env, _, _, _) in SECRETS.items():
@@ -393,6 +399,7 @@ SECRETS = {   # setting -> (environment variable, pattern, label, where to get i
                          '`claude setup-token` (it starts with sk-ant-oat)'),
 }
 _SECRETS_STARTED_WITH = {env: os.environ.get(env) for env, _, _, _ in SECRETS.values()}
+_CLAUDE_MODEL_STARTED_WITH = os.environ.get('LTH_CLAUDE_MODEL')
 
 
 def mask(key):
@@ -451,7 +458,7 @@ def claude_cli():
     return shutil.which('claude')
 
 
-def claude_test(token=None):
+def claude_test(token=None, model=None):
     """Asks Claude Code for one word with the token (typed, else the one in use). Returns (ok, message)."""
     exe = claude_cli()
     if not exe:
@@ -461,7 +468,7 @@ def claude_test(token=None):
     if token:
         env['CLAUDE_CODE_OAUTH_TOKEN'] = token
     try:
-        model = os.environ.get('LTH_CLAUDE_MODEL') or os.environ.get('ETAIL_AI_MODEL')   # as lib/ai.js: the model picked here
+        model = model or os.environ.get('LTH_CLAUDE_MODEL') or os.environ.get('ETAIL_AI_MODEL')   # as lib/ai.js
         p = subprocess.run([exe, '-p', 'Reply with the single word OK.', '--output-format', 'json', '--tools', '',
                             '--no-session-persistence', '--setting-sources', ''] + (['--model', model] if model else []),
                            capture_output=True, text=True,
@@ -761,7 +768,9 @@ def register(app, con, admin_required, current_user):
         if new['sys.ai_provider'] not in AI_PROVIDERS:
             errors.append('AI provider: choose one from the list.')
         if new['sys.ai_model'] not in pricing.PRICES:
-            errors.append('AI model: choose one from the list.')
+            errors.append('API model: choose one from the list.')
+        if new['sys.claude_model'] and new['sys.claude_model'] not in pricing.PRICES:
+            errors.append('Claude subscription model: choose one from the list.')
         if not new['sys.audit_days'].isdigit() or not 7 <= int(new['sys.audit_days']) <= 365:
             errors.append('Keep audit log: a whole number of days from 7 to 365.')
         secrets = {n: re.sub(r'\s+', '', f.get(n, '')) for n in SECRETS}   # empty = keep the saved one
@@ -809,7 +818,9 @@ def register(app, con, admin_required, current_user):
         if not v and not os.environ.get(SECRETS[name][0]):
             flash(f'{SECRETS[name][2]}: paste a key in the box first, then Test.', 'warning')
             return redirect(url_for('settings.system'))
-        ok, msg = (anthropic_test if which == 'anthropic' else claude_test)(v or None)
+        import pricing   # the Claude model picked on the page (saved or not), else the API model picked there
+        picked = next((m for m in (request.form.get('sys.claude_model'), request.form.get('sys.ai_model')) if m in pricing.PRICES), None)
+        ok, msg = anthropic_test(v or None) if which == 'anthropic' else claude_test(v or None, picked)
         c = con()
         with c:
             if ok and v:
