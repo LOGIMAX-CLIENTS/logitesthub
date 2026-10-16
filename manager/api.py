@@ -333,6 +333,67 @@ def lessons_add(pid):
     return jsonify({'ok': True, 'id': lid, 'created': created})
 
 
+# ---------------------------------------------------------------- live settings (tester settings)
+
+@bp.get('/projects/<int:pid>/settings')
+@api_auth
+def live_settings(pid):
+    """The settings / permissions lth_brain/<project>/settings.json lists, read now on --env (read-only)."""
+    import knowledge
+    p = _project(pid)
+    if not p:
+        return _error(404, 'Project not found.')
+    env, err = _env_from(request.args.get('env'))
+    if err:
+        return err
+    text = knowledge.settings_text(p['name'], env)
+    return jsonify({'ok': True, 'env': env['name'], 'text': text or 'No settings.json for this project, or no database on this environment.'})
+
+
+# ---------------------------------------------------------------- precondition check (tester check)
+
+@bp.post('/check')
+@api_auth
+def precondition_check():
+    """Precondition check + test data validation before a run (fail fast): the case's leading Remember SQL / Assert SQL
+    steps - settings, permissions, the data it picks - run read-only on the environment's database, in order, up to the
+    first screen step. Body: {"content": "<_test.md>"} or {"case_id": N}, plus {"env": "<name or id>"}."""
+    import assistant
+    import envs
+    body = request.get_json(silent=True) or {}
+    content = body.get('content')
+    if body.get('case_id'):
+        r = g.api_con.execute('SELECT content FROM cases WHERE id=?', (body.get('case_id'),)).fetchone()
+        if not r:
+            return _error(404, 'Test case not found.')
+        content = r['content']
+    if not content:
+        return _error(400, 'Send the test case: content (the _test.md) or case_id.')
+    env, err = _env_from(body.get('env'))
+    if err:
+        return err
+    if not envs.db_configured(env):
+        return jsonify({'ok': True, 'env': env['name'], 'status': 'no_database', 'checks': [],
+                        'message': f'"{env["name"]}" has no database, so nothing could be checked (database steps would fail there).'})
+    steps = assistant.steps_of(content)
+    checks = assistant.preflight({'title': '', 'steps': steps}, env)
+    import coderepo
+    import elementcheck
+    elems = elementcheck.check({'steps': steps}, coderepo.code_dir(env))   # every (#id) / (.class) looked up in the code
+    missing = [e for e in elems if not e['ok']]
+    bad = next((c for c in checks if not c['ok']), None)
+    if missing and not bad:
+        bad = {'n': missing[0]['n'], 'problem': missing[0].get('problem') or
+               'uses ' + ', '.join(missing[0]['missing']) + ' which is not in the code'}
+    sql_total = sum(1 for s in steps if assistant.SQL_STEP.match(s['text']))
+    return jsonify({'ok': True, 'env': env['name'], 'status': 'failed' if bad else 'passed', 'checks': checks,
+                    'elements': {'checked': len(elems), 'missing': missing},
+                    'checked': len(checks), 'sql_steps': sql_total,
+                    'message': (f'Step {bad["n"]} {bad["problem"]}: do not run yet - fix the data / setting or the step.' if bad else
+                                f'{len(checks)} database step(s) checked on {env["name"]}: settings and test data are there.'
+                                if checks else 'No database steps before the first screen step: nothing to check.')})
+
+
 # ---------------------------------------------------------------- data a passed run kept (tester run --clean / --keep)
 
 @bp.get('/cases/<int:cid>/kept-data')
@@ -365,7 +426,7 @@ def task_start(code):
     old = pmtasks.start(g.api_con, g.api_user['username'], c)
     pmtasks.attach_later(c, g.api_user['username'])
     return jsonify({'ok': True, 'task': c, 'stopped': old, 'hours': pmtasks.ACTIVE_HOURS,
-                    'url': f"{pmtasks.public_base()}/tasks/{c}"})
+                    'url': pmtasks.task_url(pmtasks.public_base(), c, g.api_user['username'])})
 
 
 @bp.post('/task/stop')
@@ -385,10 +446,11 @@ def task_get(code):
     c = pmtasks.norm(code)
     if not c:
         return _error(400, 'Task code like PM-LMX-1741.')
+    me = g.api_user['username']
     rows = pmtasks.task_cases(g.api_con, c)
-    link = g.api_con.execute('SELECT status, message FROM pm_task_links WHERE task_code=?', (c,)).fetchone()
+    link = g.api_con.execute('SELECT status, message FROM pm_task_links WHERE task_code=? AND attached_by=?', (c, me)).fetchone()
     base = pmtasks.public_base()
-    return jsonify({'ok': True, 'task': c, 'url': f'{base}/tasks/{c}', **pmtasks.summary(rows),
+    return jsonify({'ok': True, 'task': c, 'url': pmtasks.task_url(base, c, me), **pmtasks.summary(rows),
                     'pm_link': dict(link) if link else None,
                     'tests': [{'id': r['id'], 'tc': f"TC-{r['tc_no']}", 'title': r['title'], 'status': r['run_status'] or 'NOT RUN',
                                'fail_step': r['fail_step'], 'fail_reason': r['fail_reason'],
@@ -627,9 +689,12 @@ def run_upload():
             db.record_finished_run(con, run_id, run_dir)
             import pmtasks
             task = pmtasks.tag(con, case_id, user, 'cli', f.get('task'))
+            pmtasks.run_started(con, run_id, case_id, user, task)
     except Exception as e:   # nothing half-saved: remove the folder
         shutil.rmtree(run_dir, ignore_errors=True)
         return _error(400, f'Upload failed: {e}')
+    if task:
+        pmtasks.run_finished(run_id)   # the run's link goes to the PM task, as the user who ran it
     base = request.host_url.rstrip('/')
     return jsonify({'ok': True, 'run_id': run_id, 'case_id': case_id, 'status': summary.get('status'),
                     'url': f'{base}/cases/{case_id}?run={run_id}', 'task': task,

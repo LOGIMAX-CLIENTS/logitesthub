@@ -12,6 +12,7 @@ import functools
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -52,6 +53,15 @@ def is_super(role):
 
 # Departments a user can belong to (Users page, User Report, Test Assistant activity). Add a name here to offer it.
 DEPARTMENTS = ['Developer', 'Implementation', 'Support']
+EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+
+
+def email_problem(con, email, uid=None):
+    """Why an account email cannot be used (None when it can). Emails are unique: a PM click must find one account."""
+    if len(email) > 254 or not EMAIL_RE.match(email):
+        return 'Email: a valid address, e.g. name@logimaxindia.com.'
+    r = con.execute('SELECT username FROM users WHERE LOWER(email)=? AND id<>?', (email.lower(), uid or 0)).fetchone()
+    return f'Email {email} is already used by @{r["username"]}.' if r else None
 # Accent colours a user can pick in Profile -> Appearance (the background is always white). key -> label, main, gradient end
 ACCENTS = [('green', 'Green', '#07a190', '#32bf6d'), ('blue', 'Blue', '#2563eb', '#3b9bf6'), ('purple', 'Purple', '#6d3df5', '#a855f7'),
            ('orange', 'Orange', '#e8650f', '#f59e0b')]
@@ -527,6 +537,24 @@ def register(app, con, admin_required, current_user):
         return redirect(back)
 
     # ---- pages
+    @bp.route('/users/<int:uid>/email', methods=['POST'])
+    @admin_required
+    def user_email(uid):
+        """The email PM knows this person by: a PM "Tester CLI" click from that email starts the task for this account."""
+        u = con().execute('SELECT id, username, email FROM users WHERE id=?', (uid,)).fetchone()
+        if not u:
+            abort(404)
+        email = request.form.get('email', '').strip().lower() or None
+        problem = email and email_problem(con(), email, uid)
+        if problem:
+            flash(problem, 'danger')
+        elif email != u['email']:
+            c = con()
+            with c:
+                c.execute('UPDATE users SET email=? WHERE id=?', (email, uid))
+            flash(f'@{u["username"]}: email {"set to " + email if email else "cleared"}.', 'success')
+        return redirect(url_for('users', dept=request.form.get('back_dept') or None))
+
     @bp.route('/users/<int:uid>/department', methods=['POST'])
     @admin_required
     def user_department(uid):
@@ -635,6 +663,91 @@ def register(app, con, admin_required, current_user):
                     {'changed': changed} if changed else None, request.remote_addr)
         flash('System settings saved. New runs use them straight away.' if changed else 'Nothing changed.', 'success')
         return redirect(url_for('settings.system'))
+
+    # ------------------------------------------------------------ Integrations: PM (task links, test report link)
+    def _pm_vals(c):
+        import budget
+        import pmtasks
+        return {'url': budget.get_setting(c, 'pm.mcp_url') or '', 'public': budget.get_setting(c, 'pm.public_url') or '',
+                'has_key': bool(budget.get_setting(c, 'pm.mcp_key')),
+                'env_key': bool(pmtasks._STARTED_WITH['LTH_PM_MCP_KEY']), 'in_use_url': pmtasks.pm_url(),
+                'in_use_public': os.environ.get('LTH_PUBLIC_URL') or '', 'default_url': pmtasks.PM_URL_DEFAULT,
+                'key_set_at': budget.get_setting(c, 'pm.mcp_key_at') or '',
+                'cli_poll': budget.get_setting(c, 'pm.cli_poll') == '1', 'cli_since': budget.get_setting(c, 'pm.cli_since') or ''}
+
+    def _http_url(v):
+        return v.startswith(('http://', 'https://')) and ' ' not in v
+
+    @bp.route('/integrations', methods=['GET'])
+    @admin_required
+    def integrations():
+        import pmtasks
+        return render_template('settings_integrations.html', pm=_pm_vals(con()), need=pmtasks.NEEDED_TOOLS)
+
+    @bp.route('/integrations', methods=['POST'])
+    @super_required
+    def integrations_save():
+        import budget
+        import envs
+        import pmtasks
+        c = con()
+        f = request.form
+        url, public, key = f.get('pm_url', '').strip(), f.get('public_url', '').strip().rstrip('/'), f.get('pm_token', '').strip()
+        errors = [m for bad, m in [
+            (url and not _http_url(url), 'PM MCP URL: an http:// or https:// address.'),
+            (public and not _http_url(public), 'LogiTestHub address: an http:// or https:// address.'),
+            (key and (' ' in key or len(key) < 10), 'PM key: paste the whole key PM gave you (it starts with pmk_).'),
+        ] if bad]
+        if errors:
+            for e in errors:
+                flash(e, 'danger')
+            return redirect(url_for('settings.integrations'))
+        before = _pm_vals(c)
+        with c:
+            budget.set_setting(c, 'pm.mcp_url', url)
+            budget.set_setting(c, 'pm.public_url', public)
+            budget.set_setting(c, 'pm.cli_poll', '1' if f.get('cli_poll') else '')
+            if key:
+                budget.set_setting(c, 'pm.mcp_key', envs.encrypt(key))
+                budget.set_setting(c, 'pm.mcp_key_at', db.now())
+            elif f.get('remove_key'):
+                budget.set_setting(c, 'pm.mcp_key', '')
+                budget.set_setting(c, 'pm.mcp_key_at', '')
+        pmtasks.apply_settings(c)
+        changed = {k: [o, n] for k, o, n in [('pm.mcp_url', before['url'], url), ('pm.public_url', before['public'], public),
+                                             ('pm.cli_poll', before['cli_poll'], bool(f.get('cli_poll')))] if o != n}
+        if key or f.get('remove_key'):
+            changed['pm.mcp_key'] = ['••••' if before['has_key'] else '', '••••' if key else '']
+        me = current_user()
+        write_audit(me['username'], 'integrations_save', 'settings', None, 'ok',
+                    'PM integration saved' if changed else 'PM integration saved (no change)',
+                    {'changed': changed} if changed else None, request.remote_addr)
+        flash('PM integration saved. It is used straight away.' if changed else 'Nothing changed.', 'success')
+        return redirect(url_for('settings.integrations'))
+
+    @bp.route('/integrations/test', methods=['POST'])
+    @admin_required
+    def integrations_test():
+        """Connects with what is in the boxes (a typed key, else the saved one) without saving: lists the key's tools."""
+        import pmtasks
+        f = request.form
+        url = f.get('pm_url', '').strip() or pmtasks.pm_url()
+        key = f.get('pm_token', '').strip() or os.environ.get('LTH_PM_MCP_KEY')
+        if not _http_url(url):
+            flash('PM MCP URL: an http:// or https:// address.', 'danger')
+            return redirect(url_for('settings.integrations'))
+        try:
+            tools = pmtasks.pm_tools(key, url)
+        except pmtasks.PmError as e:
+            flash(f'Could not connect to {url}: {e}', 'danger')
+            return redirect(url_for('settings.integrations'))
+        missing = [t for t in pmtasks.NEEDED_TOOLS if t not in tools]
+        if missing:
+            flash(f'Connected, but this key cannot call {", ".join(missing)}. Ask PM for a key with these tools. '
+                  f'Allowed: {", ".join(tools) or "none"}.', 'warning')
+        else:
+            flash(f'Connected to PM. This key can call: {", ".join(tools)}.' + ('' if f.get('pm_token', '').strip() == '' else ' Save to keep this key.'), 'success')
+        return redirect(url_for('settings.integrations'))
 
     @bp.route('/audit')
     @admin_required
