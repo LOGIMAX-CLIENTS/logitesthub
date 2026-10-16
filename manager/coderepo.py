@@ -6,7 +6,8 @@ Live = PRODUCTION - so the steps follow the code that the test will actually run
 environment's own form (Settings -> Environments); the Test Assistant reads the copy of the environment picked in
 its "Run on" box.
 
-- LogiTestHub keeps its OWN copy in data/repos/e<environment id>: latest commit only (--depth 1), and only the folders
+- LogiTestHub keeps its OWN copy in data/repos/e<environment id>: the last HISTORY commits (file contents fetched only
+  when read: --filter=blob:none; auto-heal reads who changed a field from them), and only the folders
   listed in "Paths" (sparse checkout) - never the developer's working folder.
 - Sign-in to GitHub: the git credentials of this server (git credential manager / gh), or a read-only token stored
   encrypted (sent per command as a header, never written into the copy's git config).
@@ -31,6 +32,7 @@ BRANCH_RE = re.compile(r'^[\w./-]{1,100}$')
 LOCAL_RE = re.compile(r'^([A-Za-z]:[\\/]|/)')   # a folder on this server, e.g. C:\xampp\htdocs\wt-prod (Local environment)
 LOCAL = 'local'                               # repo_branch / repo_commit of a local folder: read in place, never copied
 PATH_RE = re.compile(r'^[\w./ -]{1,200}$')
+HISTORY = '100'
 _LOCK = threading.Lock()
 _RUNNING = set()
 
@@ -142,14 +144,14 @@ def sync(eid):
                 shutil.rmtree(d, ignore_errors=True)
                 fresh = True
         if fresh:
-            _git(['clone', '--depth', '1', '--single-branch', '--branch', branch, '--filter=blob:none', '--no-checkout',
+            _git(['clone', '--depth', HISTORY, '--single-branch', '--branch', branch, '--filter=blob:none', '--no-checkout',
                   e['repo_url'], d], token=token)
         if paths:
             _git(['sparse-checkout', 'set', '--no-cone', *[f'/{x}/' if '.' not in os.path.basename(x) else f'/{x}' for x in paths]],
                  cwd=d, token=token)
         else:
             _git(['sparse-checkout', 'disable'], cwd=d, token=token)
-        _git(['fetch', '--depth', '1', 'origin', branch], cwd=d, token=token)
+        _git(['fetch', '--depth', HISTORY, 'origin', branch], cwd=d, token=token)
         _git(['checkout', '-f', '-B', branch, 'FETCH_HEAD'], cwd=d, token=token)
         commit = _git(['rev-parse', 'HEAD'], cwd=d)
         _set_status(eid, repo_commit=commit, repo_synced_at=db.now(), repo_status='ok', repo_error=None)

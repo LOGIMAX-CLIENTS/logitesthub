@@ -349,6 +349,11 @@ main.tm-main { padding: 0 !important; }
 .sr-main { flex: 1; min-width: 0; }
 .sr-text { font-weight: 600; font-size: 14px; color: var(--ink); word-break: break-word; }
 .sr-note { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+.sql-btn { margin-left: 8px; padding: 0 8px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--surface-2);
+  color: var(--ink-2); font-size: 11px; font-weight: 700; line-height: 20px; vertical-align: 1px; cursor: pointer; }
+.sql-btn:hover { background: var(--surface-3); }
+.sql-q { margin: 6px 0 0; padding: 8px 10px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--line);
+  font-size: 12px; color: var(--ink-2); white-space: pre-wrap; word-break: break-word; cursor: text; }
 .sr-time { flex: none; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .sr-thumb { width: 72px; height: 42px; flex: none; }
 @media (max-width: 600px) { .sr { flex-wrap: wrap; } .sr-thumb { width: 100%; height: auto; } }
@@ -1024,6 +1029,7 @@ button.set-cell:focus-visible { outline: 2px solid var(--gold); outline-offset: 
 .as-card { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--card); }
 .as-card-title { font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 8px; }
 .as-understood { border-left: 4px solid var(--brand); }
+.as-ready { border-left: 4px solid var(--pass); }
 .as-questions { border-left: 4px solid var(--gold); }
 .as-lesson { border-left: 4px solid #8b5cf6; }
 .as-choice { margin-bottom: 10px; }

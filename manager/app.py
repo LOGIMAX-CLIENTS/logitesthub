@@ -14,7 +14,7 @@ import tempfile
 import threading
 import time
 
-from flask import (Flask, abort, flash, g, redirect, render_template, request,
+from flask import (Flask, abort, flash, g, jsonify, redirect, render_template, request,
                    send_from_directory, session, url_for)
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -220,22 +220,25 @@ def _pm_user(m):
     c = con()
     with c:
         u = c.execute('SELECT * FROM users WHERE pm_member_id=?', (m['pm_id'],)).fetchone()
+        mail = m['login'].strip().lower()[:254] if '@' in m['login'] else None
+        if mail and c.execute('SELECT 1 FROM users WHERE LOWER(email)=? AND pm_member_id<=>?', (mail, None)).fetchone():
+            mail = None   # a local account already has this email: leave it to an admin
         if u:
-            c.execute('UPDATE users SET pm_login=? WHERE id=?', (m['login'][:254], u['id']))
+            c.execute('UPDATE users SET pm_login=?, email=COALESCE(email, ?) WHERE id=?', (m['login'][:254], mail, u['id']))
             return u
         base = re.sub(r'[^A-Za-z0-9._-]', '', m['username'].split('@')[0])[:50] or 'pm-user'
         same = c.execute('SELECT * FROM users WHERE username=?', (base,)).fetchone()
         if same and same['auth_source'] == 'local' and same['pm_member_id'] is None and not settings.is_admin(same['role']):
             # an existing LogiTestHub member with the same username: link it (keeps role, runs, cases, key)
-            c.execute("UPDATE users SET auth_source='pm', pm_member_id=?, pm_login=?, pw_hash='!' WHERE id=?",
-                      (m['pm_id'], m['login'][:254], same['id']))
+            c.execute("UPDATE users SET auth_source='pm', pm_member_id=?, pm_login=?, email=COALESCE(email, ?), pw_hash='!' WHERE id=?",
+                      (m['pm_id'], m['login'][:254], mail, same['id']))
             return c.execute('SELECT * FROM users WHERE id=?', (same['id'],)).fetchone()
         username, n = base, 1
         while c.execute('SELECT 1 FROM users WHERE username=?', (username,)).fetchone():   # local admin keeps its name
             n += 1
             username = f'{base}{n}'
-        c.execute("INSERT INTO users(username, name, pw_hash, role, auth_source, pm_member_id, pm_login, created_at) "
-                  "VALUES (?,?,'!','member','pm',?,?,?)", (username, m['name'], m['pm_id'], m['login'][:254], db.now()))
+        c.execute("INSERT INTO users(username, name, email, pw_hash, role, auth_source, pm_member_id, pm_login, created_at) "
+                  "VALUES (?,?,?,'!','member','pm',?,?,?)", (username, m['name'], mail, m['pm_id'], m['login'][:254], db.now()))
         return c.execute('SELECT * FROM users WHERE pm_member_id=?', (m['pm_id'],)).fetchone()
 
 
@@ -370,7 +373,7 @@ def profile():
 @admin_required
 def users():
     import budget
-    rows = con().execute('SELECT id, username, name, role, department, auth_source, pm_login, created_at FROM users ORDER BY username').fetchall()
+    rows = con().execute('SELECT id, username, name, email, role, department, auth_source, pm_login, created_at FROM users ORDER BY username').fetchall()
     ai = {r['id']: budget.status(con(), r) for r in rows}
     return render_template('users.html', users=rows, min_pw=MIN_PW, ai=ai,
                            default_limit=budget.get_setting(con(), budget.S_USER_DEFAULT), plan=budget.plan(con()))
@@ -467,18 +470,21 @@ def user_new():
         flash('Only a Super Admin can create another Super Admin.', 'danger')
         return redirect(url_for('users'))
     dept = f.get('department') if f.get('department') in settings.DEPARTMENTS else None
+    email = f.get('email', '').strip().lower() or None
     problem = (None if USERNAME_RE.match(username) else
                'Username: 3-30 letters, numbers, dot, dash or underscore.') or \
               (None if name else 'Full name is required.') or \
               _password_problem(f.get('password', ''), f.get('confirm', ''))
     if not problem and con().execute('SELECT 1 FROM users WHERE username=?', (username,)).fetchone():
         problem = f'Username "{username}" is already taken.'
+    if not problem and email:
+        problem = settings.email_problem(con(), email)
     if problem:
         flash(problem, 'danger')
     else:
         with con():
-            con().execute('INSERT INTO users(username, name, pw_hash, role, department, created_at) VALUES (?,?,?,?,?,?)',
-                          (username, name, generate_password_hash(f['password']), role, dept, db.now()))
+            con().execute('INSERT INTO users(username, name, email, pw_hash, role, department, created_at) VALUES (?,?,?,?,?,?,?)',
+                          (username, name, email, generate_password_hash(f['password']), role, dept, db.now()))
         flash(f'Account "{username}" created. Share the password with them privately.', 'success')
     return redirect(url_for('users'))
 
@@ -1165,6 +1171,7 @@ def case(cid):
     ask_env = envs.get(con(), ask, current_user()) if ask is not None else None
     kept = cleanup.pending(con(), c['id'], ask_env['id'] if ask_env else None) if ask is not None else []
     return render_template('case.html', c=c, runs=runs, run=run, steps=steps, has_video=has_video, task_codes=pmtasks.codes_of(con(), c['id']),
+                           healed=heal.of_run(con(), run['id'] if run else None),
                            ask_cleanup=({'env': ask_env, 'rows': cleanup.describe(kept)} if kept else None),
                            history=run_history(runs), fail=run_fail(run, steps),
                            tab=tab, any_running=any_running, public=False, gen=gen, gen_error=gen_error,
@@ -1320,10 +1327,12 @@ def _run_case(run_id, content, no_ai=False, base_dir=None, env_id=None, project_
             vars_path = envs.vars_file(env) if env else None
             import api as _api
             with db.connect() as c:
-                who = c.execute('SELECT run_by FROM runs WHERE id=?', (run_id,)).fetchone()
+                who = c.execute('SELECT run_by, exec_id FROM runs WHERE id=?', (run_id,)).fetchone()
             run_token = _api.issue_run_token(who['run_by'] if who and who['run_by'] else 'admin')
             run_env = {**os.environ, 'LTH_SERVER': f"http://127.0.0.1:{app.config.get('LTH_PORT', 5050)}",
-                       'LTH_RUN_TOKEN': run_token, 'LTH_ENV': str(env['id']) if env else ''}
+                       'LTH_RUN_TOKEN': run_token, 'LTH_ENV': str(env['id']) if env else '',
+                       # Test Runs / schedules (e.g. the test domain): a changed screen is healed, the case updated
+                       'LTH_HEAL': '1' if who and who['exec_id'] else ''}
             for k in ('LTH_USER', 'LTH_KEY'):   # server runs use the run token, not a CLI key
                 run_env.pop(k, None)
             cmd = (['node', os.path.join(db.RUNNER_DIR, 'run.js'), path] + (['--no-ai'] if no_ai else [])
@@ -1353,6 +1362,13 @@ def _run_case(run_id, content, no_ai=False, base_dir=None, env_id=None, project_
                 db.record_finished_run(c, run_id, run_dir)
             else:
                 c.execute("UPDATE runs SET status='ERROR', error=? WHERE id=?", (err, run_id))
+        if run_dir:
+            try:
+                heal.after_run(run_id, run_dir)   # a healed screen change: kept in the case, with who changed it
+            except Exception as ex:
+                print(f' * auto-heal of run {run_id}: {ex}')
+        import pmtasks
+        pmtasks.run_finished(run_id)   # the run's PM task (if it had one) gets this run's link
 
 
 def start_case_run(c, env_id=None, cleanup_choice=None):
@@ -1367,7 +1383,8 @@ def start_case_run(c, env_id=None, cleanup_choice=None):
         run_id = con().execute('INSERT INTO runs(case_id, status, started_at, run_by, env_name, env_id) VALUES (?,?,?,?,?,?)',
                                (c['id'], 'running', db.now(), current_user()['username'], env['name'] if env else None,
                                 env['id'] if env else None)).lastrowid
-        pmtasks.tag(con(), c['id'], current_user()['username'], 'run')
+        task = pmtasks.tag(con(), c['id'], current_user()['username'], 'run')
+        pmtasks.run_started(con(), run_id, c['id'], current_user()['username'], task)   # sent to PM when it ends
     content = c['content']
     if cleanup_choice == 'delete':
         import cleanup
@@ -1390,6 +1407,15 @@ def case_run(cid):
     if choice not in ('delete', 'keep') and cleanup.pending(con(), cid, env['id'] if env else None):
         # a passed run kept its test data on this environment: ask first (the case page shows the question)
         return redirect(url_for('case', cid=cid, ask_cleanup=env['id'] if env else 0))
+    if env and request.form.get('skip_schema') != '1':
+        # every SQL step's tables / columns, read-only with LIMIT 0: a wrong name must stop the run BEFORE the test
+        # saves real data that its checks / Clean up then cannot find (TC-78: ret_grn_item, GRN 1522 left behind)
+        import assistant
+        bad = assistant.schema_check({'steps': assistant.steps_of(c['content'])}, env)
+        if bad:
+            flash('Not run: ' + '; '.join(f'step {x["n"]} {x["problem"]}' for x in bad[:4]) +
+                  '. Fix the table / column name in the test (from the model code), then run again.', 'danger')
+            return redirect(url_for('case', cid=cid))
     run_id, b = start_case_run(c, env['id'] if env else None, choice)
     if not b['ok']:
         flash(b['message'] + ' This run skips AI steps; the other steps still run.', 'warning')
@@ -1643,7 +1669,6 @@ def environment_update(eid):
 @login_required
 def environment_db_test(eid):
     """Connects with the saved read-only user and proves it cannot write."""
-    from flask import jsonify
     e = con().execute('SELECT * FROM environments WHERE id=?', (eid,)).fetchone() or abort(404)
     if not _env_editable(e, current_user()):
         abort(404)
@@ -1992,10 +2017,37 @@ import cleanup   # noqa: E402  (test data a passed run kept: asked about before 
 with db.connect() as _c:
     cleanup.init(_c)
 
+import heal   # noqa: E402  (Test Runs: a changed screen is healed during the run and kept in the case)
+with db.connect() as _c:
+    heal.init(_c)
+
+import sqlexplain   # noqa: E402  (plain English for SQL steps on the case page; the query behind a button)
+with db.connect() as _c:
+    sqlexplain.init(_c)
+app.jinja_env.globals.update(sql_simple=sqlexplain.simple, is_sql=sqlexplain.is_sql)
+
+
+@app.post('/cases/<int:cid>/sql-explain')
+@login_required
+def case_sql_explain(cid):
+    """Form csrf + steps (JSON list of step texts) -> {"english": {text: sentence}} (AI once per step, then cached)."""
+    c = case_or_404(cid)
+    try:
+        texts = [str(t) for t in json.loads(request.form.get('steps') or '[]')][:200]
+    except ValueError:
+        texts = []
+    import assistant
+    secs = list(dict.fromkeys(s['section'] for s in assistant.steps_of(c['content']) if s['section']))
+    context = f"Test: {c['title']}\nSections: " + ' | '.join(secs)   # what the values mean (e.g. a status after cancel)
+    out = sqlexplain.explain(con(), texts, username=current_user()['username'], project_id=c['project_id'], case_id=cid,
+                             context=context)
+    return jsonify({'ok': True, 'english': {t: v['english'] for t, v in out.items()}})
+
 
 if __name__ == '__main__':
     recover_interrupted_runs()      # before the scheduler, so it never sees stale 'running' rows
     testruns_bp.start_scheduler()   # checks due schedules every 30 s while this server runs
+    pmtasks.start_cli_poller()      # PM's Tester CLI button: requests queued in PM, picked up here (when switched on)
     port = int(os.environ.get('PORT', '5050'))
     host = os.environ.get('HOST', '0.0.0.0')   # 127.0.0.1 behind nginx: only the proxy can reach the app
     if os.environ.get('LTH_BEHIND_PROXY') == '1':   # nginx / load balancer: trust X-Forwarded-* so links use https + the domain

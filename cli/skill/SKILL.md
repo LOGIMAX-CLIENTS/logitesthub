@@ -106,7 +106,20 @@ of every test case of that project — web runs, Test Runs / schedules and `test
 - If `tester` prints that the project has no login helper, tell the user to add one there (do not inline login steps instead).
 - `--no-login` skips the helper for one run.
 
-## 3. Run a test
+## 3. Preflight check, then run
+
+**Before every run of a case that has database steps**, run the preflight check (precondition check + test data
+validation, fail fast). It runs the case's leading `Remember SQL` / `Assert SQL` steps - settings, permissions and the
+data it picks - read-only on the environment, in seconds, no browser:
+```
+tester check --case <id> --env <name> --json        # or --file x_test.md
+```
+- `passed` -> run it. `failed` (exit 1) -> **do not run**: a 5-minute run would stop at the same step. Fix it first:
+  data missing -> make the data in the test (or pick it differently); a setting / permission blocks it -> tell the user
+  in one line where to change it (screen > field) and the no-change alternative. Then check again.
+- `no_database` (exit 2) -> that environment cannot run database steps: use one that has a database.
+- Dry runs of the whole case are not possible (Save buttons write data); this check is the safe part.
+
 
 Plain English, one step per sentence (these shapes run without AI — prefer them):
 - `Navigate to <url>.`  ·  `Navigate to {{base_url}}index.php/<controller>/<method>.`
@@ -198,14 +211,15 @@ Assert SQL "SELECT 1 FROM ret_taging WHERE tag_lot_id = {{last_lot}}" returns a 
 
 When the user names a PM task, or `tester task --json` shows an active one, the tests belong to that task:
 ```
-tester task --json                          # active task? (set by "Start testing" on the PM task page, or:)
+tester task --json                          # active task? (set by the user's Tester CLI click in PM, or:)
 tester task start PM-LMX-1741 --json        # everything you create / run from now on is linked to it
 tester run ... --task PM-LMX-1741 --json    # or link just this run's case
 tester task PM-LMX-1741 --json              # its test cases + latest results + the page PM shows at Review
 tester task stop --json                     # when the work on the task is done
 ```
-- The task page link goes to the PM task by itself (PM prefills it as the test report link at Review). Do not
-  attach links to PM yourself.
+- Links reach PM only when the user started the task with the **Tester CLI** button in PM: then each run's link
+  goes to the PM task as them, by itself. `tester task start` / `--task` only link test cases here; nothing is sent
+  to PM. Never attach links to PM yourself; if the user wants PM to get them, ask them to click Tester CLI in PM.
 - Finish by giving the user the task page `url` and the passed / failed count.
 
 ## 5. Generate test cases for a change

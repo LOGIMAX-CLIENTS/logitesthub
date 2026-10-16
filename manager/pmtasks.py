@@ -13,36 +13,71 @@ PM MCP: LTH_PM_MCP_URL (default https://pm.logimaxindia.com/api/mcp/rpc/) and a 
 (a service key for LogiTestHub; the person who tested is sent as submitted_by_member_id). No key: nothing is sent and
 the task page shows that the link is not attached yet.
 
-Registered from app.py with register(app, con, login_required, current_user).
+Registered from app.py with register(app, con, login_required, current_user); start_cli_poller() reads
+PM's Tester CLI queue (see below).
 """
 import json
 import os
 import re
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
 
-from flask import Blueprint, abort, flash, redirect, render_template, request, url_for
+from flask import Blueprint, abort, flash, has_request_context, redirect, render_template, request, url_for
 
 import db
 
-CODE_RE = re.compile(r'^[A-Z][A-Z0-9]{0,9}(-[A-Z0-9]{1,12}){1,4}$')   # PM-LMX-1741, PM-LMX-1322-7769
+CODE_RE = re.compile(r'^[A-Z][A-Z0-9]{0,9}(-[A-Z0-9]{1,12}(\.[0-9]{1,4})*){1,4}$')   # PM-LMX-1741, PM-LMX-1322-7769, sub-task PM-S-LMX-1799.1
 ACTIVE_HOURS = 12
-PM_URL = os.environ.get('LTH_PM_MCP_URL', 'https://pm.logimaxindia.com/api/mcp/rpc/')
+PM_URL_DEFAULT = 'https://pm.logimaxindia.com/api/mcp/rpc/'
+# the PM MCP tools LogiTestHub's key must be allowed to call (Settings -> Integrations -> Test connection checks them)
+NEEDED_TOOLS = ('pm_lth_cli_requests', 'pm_task_test_report_attach', 'pm_members_search')
+# Settings -> Integrations (pm.* settings) override these; an empty box there leaves what the server was started with
+ENV_KEYS = {'pm.mcp_url': 'LTH_PM_MCP_URL', 'pm.mcp_key': 'LTH_PM_MCP_KEY', 'pm.public_url': 'LTH_PUBLIC_URL'}
+_STARTED_WITH = {e: os.environ.get(e) for e in ENV_KEYS.values()}
+
+
+def pm_url():
+    return os.environ.get('LTH_PM_MCP_URL') or PM_URL_DEFAULT
+
+
+def apply_settings(con):
+    """Pushes the PM integration settings into the environment (read on every PM call, so no restart)."""
+    import budget
+    import envs
+    for name, env in ENV_KEYS.items():
+        v = budget.get_setting(con, name) or ''
+        if name == 'pm.mcp_key':
+            v = envs.decrypt(v)
+        v = v or _STARTED_WITH[env]
+        if v:
+            os.environ[env] = v
+        else:
+            os.environ.pop(env, None)
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS pm_run_links (
+  run_id INT PRIMARY KEY, task_code VARCHAR(40) NOT NULL, username VARCHAR(64), url VARCHAR(500),
+  status VARCHAR(16) NOT NULL, message VARCHAR(500), at VARCHAR(32) NOT NULL, KEY ix_pm_run_links_task (task_code, run_id)
+) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS case_tasks (
   case_id INT NOT NULL, task_code VARCHAR(40) NOT NULL, added_by VARCHAR(64), added_at VARCHAR(32) NOT NULL,
   source VARCHAR(16), PRIMARY KEY (case_id, task_code), KEY ix_case_tasks_code (task_code)
 ) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS user_tasks (
   username VARCHAR(64) PRIMARY KEY, task_code VARCHAR(40) NOT NULL, started_at VARCHAR(32) NOT NULL,
-  expires_at VARCHAR(32) NOT NULL
+  expires_at VARCHAR(32) NOT NULL, source VARCHAR(16) NULL
 ) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS pm_task_links (
-  task_code VARCHAR(40) PRIMARY KEY, url VARCHAR(500), status VARCHAR(16), message VARCHAR(500),
-  attached_by VARCHAR(64), at VARCHAR(32)
+  task_code VARCHAR(40) NOT NULL, url VARCHAR(500), status VARCHAR(16), message VARCHAR(500),
+  attached_by VARCHAR(64) NOT NULL, at VARCHAR(32), PRIMARY KEY (task_code, attached_by)
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS pm_cli_requests (
+  request_id VARCHAR(64) PRIMARY KEY, task_code VARCHAR(40) NOT NULL, member_id VARCHAR(64), email VARCHAR(254), requested_at VARCHAR(40),
+  username VARCHAR(64), status VARCHAR(16) NOT NULL, message VARCHAR(500), at VARCHAR(32) NOT NULL,
+  KEY ix_pm_cli_requests_task (task_code)
 ) ENGINE=InnoDB
 """
 
@@ -55,6 +90,19 @@ def init(con):
                     "AND TABLE_NAME='chat_threads' AND COLUMN_NAME='task_code'").fetchone()['n']
     if not n:   # a Tester Assistant chat opened from a PM task
         con.execute('ALTER TABLE chat_threads ADD COLUMN task_code VARCHAR(40) NULL')
+    pk = [r['COLUMN_NAME'] for r in con.execute(
+        "SELECT COLUMN_NAME FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA=DATABASE() "
+        "AND TABLE_NAME='pm_task_links' AND CONSTRAINT_NAME='PRIMARY'")]
+    if not con.execute("SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() "
+                       "AND TABLE_NAME='pm_cli_requests' AND COLUMN_NAME='email'").fetchone()['n']:
+        con.execute('ALTER TABLE pm_cli_requests ADD COLUMN email VARCHAR(254) NULL AFTER member_id')
+    if not con.execute("SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() "
+                       "AND TABLE_NAME='user_tasks' AND COLUMN_NAME='source'").fetchone()['n']:
+        con.execute('ALTER TABLE user_tasks ADD COLUMN source VARCHAR(16) NULL')   # 'pm_click' = started by PM's Tester CLI button
+    if pk == ['task_code']:   # one link per task before; now one per tester, so each one's work reaches PM as theirs
+        con.execute("DELETE FROM pm_task_links WHERE attached_by IS NULL")
+        con.execute('ALTER TABLE pm_task_links MODIFY attached_by VARCHAR(64) NOT NULL, '
+                    'DROP PRIMARY KEY, ADD PRIMARY KEY (task_code, attached_by)')
 
 
 def norm(code):
@@ -78,14 +126,27 @@ def active_task(con, username):
     return r['task_code']
 
 
-def start(con, username, code):
-    """Makes code the user's active task (a task started before is replaced). Returns the task it replaced."""
+def start(con, username, code, source='local'):
+    """Makes code the user's active task (a task started before is replaced). Returns the task it replaced.
+    source 'pm_click' = PM's Tester CLI button: only such a task sends links to PM. Starting the same task again
+    locally (web, `tester task start`) keeps it a PM click."""
     old = active_task(con, username)
+    if old == code and pm_clicked(con, username, code):
+        source = 'pm_click'
     exp = (datetime.now() + timedelta(hours=ACTIVE_HOURS)).strftime('%Y-%m-%d %H:%M:%S')
     with con:
-        con.execute('REPLACE INTO user_tasks(username, task_code, started_at, expires_at) VALUES (?,?,?,?)',
-                    (username, code, db.now(), exp))
+        con.execute('REPLACE INTO user_tasks(username, task_code, started_at, expires_at, source) VALUES (?,?,?,?,?)',
+                    (username, code, db.now(), exp, source))
     return old if old != code else None
+
+
+def pm_clicked(con, username, code):
+    """True when code is the user's active task and it was started by their own Tester CLI click in PM.
+    The rule: links go to PM only then, so with no click nothing is sent, whatever is tested."""
+    if not (username and code) or active_task(con, username) != code:
+        return False
+    r = con.execute('SELECT source FROM user_tasks WHERE username=?', (username,)).fetchone()
+    return bool(r) and r['source'] == 'pm_click'
 
 
 def stop(con, username, code=None):
@@ -113,14 +174,24 @@ def codes_of(con, case_id):
                                                 (case_id,))]
 
 
-def task_cases(con, code):
-    """The task's test cases, each with its latest run."""
+def task_cases(con, code, by=None):
+    """The task's test cases, each with its latest run. by: only one tester's - the cases they linked or ran for
+    this task, with their own latest run."""
+    sel = ('SELECT c.id, c.tc_no, c.title, c.project_id, p.name AS project, t.added_by, t.added_at, t.source, '
+           'r.id AS run_id, r.status AS run_status, r.started_at AS run_at, r.run_by, r.passed, r.total, r.fail_step, r.fail_reason '
+           'FROM case_tasks t JOIN cases c ON c.id=t.case_id JOIN projects p ON p.id=c.project_id ')
+    if not by:
+        return con.execute(sel + 'LEFT JOIN runs r ON r.id=(SELECT MAX(id) FROM runs WHERE case_id=c.id) '
+                           'WHERE t.task_code=? ORDER BY t.added_at', (code,)).fetchall()
     return con.execute(
-        'SELECT c.id, c.tc_no, c.title, c.project_id, p.name AS project, t.added_by, t.added_at, t.source, '
-        'r.id AS run_id, r.status AS run_status, r.started_at AS run_at, r.run_by, r.passed, r.total, r.fail_step, r.fail_reason '
-        'FROM case_tasks t JOIN cases c ON c.id=t.case_id JOIN projects p ON p.id=c.project_id '
-        'LEFT JOIN runs r ON r.id=(SELECT MAX(id) FROM runs WHERE case_id=c.id) '
-        'WHERE t.task_code=? ORDER BY t.added_at', (code,)).fetchall()
+        sel + 'LEFT JOIN runs r ON r.id=(SELECT MAX(l.run_id) FROM pm_run_links l JOIN runs r2 ON r2.id=l.run_id '
+              '                    WHERE l.task_code=t.task_code AND l.username=? AND r2.case_id=c.id) '
+              'WHERE t.task_code=? AND (t.added_by=? OR r.id IS NOT NULL) ORDER BY t.added_at', (by, code, by)).fetchall()
+
+
+def task_url(base, code, username):
+    """The tester's own page for the task: the link sent to PM as theirs."""
+    return f'{base}/tasks/{code}?by={urllib.parse.quote(username)}'
 
 
 def summary(rows):
@@ -130,7 +201,9 @@ def summary(rows):
 
 
 def public_base():
-    return (os.environ.get('LTH_PUBLIC_URL') or request.host_url).rstrip('/')
+    """The LogiTestHub address sent to PM: Settings -> Integrations, else the address the browser used (None outside a request)."""
+    base = os.environ.get('LTH_PUBLIC_URL') or (request.host_url if has_request_context() else '')
+    return base.rstrip('/') or None
 
 
 # ---------------------------------------------------------------- PM MCP client (JSON-RPC over HTTP)
@@ -139,8 +212,8 @@ class PmError(Exception):
     pass
 
 
-def _post(body, key, session_id=None):
-    req = urllib.request.Request(PM_URL, data=json.dumps(body).encode(), method='POST', headers={
+def _post(body, key, session_id=None, url=None):
+    req = urllib.request.Request(url or pm_url(), data=json.dumps(body).encode(), method='POST', headers={
         'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream',
         'Authorization': f'Bearer {key}', **({'Mcp-Session-Id': session_id} if session_id else {})})
     try:
@@ -158,25 +231,43 @@ def _post(body, key, session_id=None):
     return json.loads(raw), sid
 
 
-def pm_call(tool, args, key=None):
-    """Calls one PM MCP tool and returns its result as a dict (the tool's JSON text)."""
+def _session(key, url=None):
     key = key or os.environ.get('LTH_PM_MCP_KEY')
     if not key:
-        raise PmError('No PM MCP key on this server (LTH_PM_MCP_KEY).')
+        raise PmError('No PM MCP key on this server (Settings -> Integrations).')
     init, sid = _post({'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {
-        'protocolVersion': '2025-03-26', 'capabilities': {}, 'clientInfo': {'name': 'LogiTestHub', 'version': '1'}}}, key)
+        'protocolVersion': '2025-03-26', 'capabilities': {}, 'clientInfo': {'name': 'LogiTestHub', 'version': '1'}}}, key, url=url)
     if init and init.get('error'):
         raise PmError(f'PM MCP: {init["error"].get("message")}')
-    _post({'jsonrpc': '2.0', 'method': 'notifications/initialized'}, key, sid)
-    out, _ = _post({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call', 'params': {'name': tool, 'arguments': args}}, key, sid)
+    _post({'jsonrpc': '2.0', 'method': 'notifications/initialized'}, key, sid, url)
+    return key, sid
+
+
+def pm_tools(key=None, url=None):
+    """The PM MCP tools this key may call (Settings -> Integrations -> Test connection)."""
+    key, sid = _session(key, url)
+    out, _ = _post({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list', 'params': {}}, key, sid, url)
+    if not out or out.get('error'):
+        raise PmError(f'PM MCP: {(out or {}).get("error", {}).get("message", "no answer")}')
+    return sorted(t.get('name', '') for t in (out.get('result') or {}).get('tools') or [])
+
+
+def pm_call(tool, args, key=None, url=None):
+    """Calls one PM MCP tool and returns its result as a dict (the tool's JSON text)."""
+    key, sid = _session(key, url)
+    out, _ = _post({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call', 'params': {'name': tool, 'arguments': args}}, key, sid, url)
     if not out or out.get('error'):
         raise PmError(f'PM MCP: {(out or {}).get("error", {}).get("message", "no answer")}')
     res = out.get('result') or {}
     text = ' '.join(c.get('text', '') for c in res.get('content') or [] if c.get('type') == 'text')
     if res.get('isError'):
         raise PmError(f'PM: {text[:300]}')
+    if res.get('structuredContent'):
+        return res['structuredContent']
+    # some PM servers put a summary line before the JSON ("5 member(s).\n\n[truncated: ...] {...}")
+    i = text.find('{')
     try:
-        return res.get('structuredContent') or json.loads(text)
+        return json.JSONDecoder().raw_decode(text, i)[0] if i >= 0 else {'text': text}
     except ValueError:
         return {'text': text}
 
@@ -201,11 +292,15 @@ def _member_id(con, username):
 
 
 def attach(code, username, base):
-    """Attaches the task page link to the PM task (PM prefills it at Review). Records the outcome; never raises."""
+    """Attaches the task page link to the PM task (PM prefills it at Review). Records the outcome; never raises.
+    Only for a task the user started with their own Tester CLI click in PM: otherwise nothing is sent (False)."""
     con = db.connect()
-    url = f'{base}/tasks/{code}'
+    if not pm_clicked(con, username, code):
+        con.close()
+        return False
+    url = task_url(base, code, username)   # per tester: PM ignores the same URL sent again for a task
     try:
-        s = summary(task_cases(con, code))
+        s = summary(task_cases(con, code, username))
         member = _member_id(con, username)
         if not member:
             raise PmError(f'Could not find "{username}" among PM members: link not attached.')
@@ -223,6 +318,62 @@ def attach(code, username, base):
                         (code, url, status, msg[:500], username, db.now()))
     finally:
         con.close()
+    return True
+
+
+# ---------------------------------------------------------------- every run of a task -> PM, as the user who ran it
+
+def run_started(con, run_id, case_id, username, code):
+    """A run of a test case linked to the user's PM task: noted now (task, user, link), sent to PM when it ends.
+    Taken at the start, so a run still goes to the right task and person if they stop or switch task meanwhile.
+    Only when the user started this task with their own Tester CLI click in PM: with no click, nothing goes to PM."""
+    if not (code and run_id) or not pm_clicked(con, username, code):
+        return
+    base = public_base()
+    con.execute('REPLACE INTO pm_run_links(run_id, task_code, username, url, status, message, at) VALUES (?,?,?,?,?,?,?)',
+                (run_id, code, username, f'{base}/cases/{case_id}?run={run_id}' if base else None, 'pending',
+                 'Sent to PM when the run ends.', db.now()))
+
+
+def send_run(run_id):
+    """Attaches one finished run's link to its PM task, submitted by the PM member who ran it. Never raises."""
+    con = db.connect()
+    try:
+        r = con.execute('SELECT l.task_code, l.username, l.url, r.status, r.passed, r.total, c.tc_no, c.title '
+                        'FROM pm_run_links l JOIN runs r ON r.id=l.run_id JOIN cases c ON c.id=r.case_id WHERE l.run_id=?',
+                        (run_id,)).fetchone()
+        if not r:
+            return
+        try:
+            if not r['url']:
+                raise PmError('No LogiTestHub address for PM users (Settings -> Integrations): link not sent.')
+            member = _member_id(con, r['username'])
+            if not member:
+                raise PmError(f'Could not find "{r["username"]}" among PM members: link not sent.')
+            healed = con.execute('SELECT message FROM case_heals WHERE run_id=? ORDER BY id DESC LIMIT 1', (run_id,)).fetchone()
+            note = (f'[TC-{r["tc_no"]}] {r["title"]}: {r["status"]} {r["passed"] or 0}/{r["total"] or 0}'
+                    + (f' - {healed["message"]}' if healed else ''))[:2000]
+            res = pm_call('pm_task_test_report_attach', {'task': r['task_code'], 'url': r['url'], 'provider': 'LogiTestHub',
+                                                         'submitted_by_member_id': member, 'note': note})
+            status, msg = 'attached', ('Already attached.' if res.get('already_attached') else 'Attached to the PM task.')
+        except PmError as e:
+            status, msg = ('no_key' if 'No PM MCP key' in str(e) else 'error'), str(e)
+        except Exception as e:   # never break a run over PM
+            status, msg = 'error', f'PM attach failed: {e}'[:400]
+        with con:
+            con.execute('UPDATE pm_run_links SET status=?, message=?, at=? WHERE run_id=?', (status, msg[:500], db.now(), run_id))
+    finally:
+        con.close()
+
+
+def run_finished(run_id):
+    threading.Thread(target=send_run, args=(run_id,), daemon=True).start()
+
+
+def run_links(con, code, by=None):
+    return con.execute('SELECT l.*, r.status AS run_status, r.case_id, c.tc_no FROM pm_run_links l JOIN runs r ON r.id=l.run_id '
+                       'JOIN cases c ON c.id=r.case_id WHERE l.task_code=?' + (' AND l.username=?' if by else '') +
+                       ' ORDER BY l.run_id DESC LIMIT 200', (code, by) if by else (code,)).fetchall()
 
 
 def attach_later(code, username):
@@ -230,11 +381,106 @@ def attach_later(code, username):
     threading.Thread(target=attach, args=(code, username, base), daemon=True).start()
 
 
+# ---------------------------------------------------------------- PM's "Tester CLI" button -> queue -> here
+# PM does not call LogiTestHub: the button puts a request in PM's queue (task + who clicked: member id and email) and
+# this server reads it with pm_lth_cli_requests. The clicker is found by email only (Settings -> Users). Each request
+# starts the task for that LogiTestHub account and
+# attaches their link, so the work reaches PM as the person who clicked, whoever is signed in to the browser.
+# Only one LogiTestHub server should read the queue: Settings -> Integrations -> "Pick up Tester CLI clicks".
+
+POLL_SECONDS = 10
+
+
+def lth_user(con, email, member_id=None):
+    """The LogiTestHub username whose email (Settings -> Users) is the PM clicker's email; None when there is none.
+    The PM member id is kept on that account, as PM needs it to show who attached a link."""
+    email = str(email or '').strip().lower()
+    if not email:
+        return None
+    r = con.execute('SELECT username, pm_member_id FROM users WHERE LOWER(email)=?', (email,)).fetchone()
+    if not r:
+        return None
+    if member_id and r['pm_member_id'] != member_id and not con.execute(
+            'SELECT 1 FROM users WHERE pm_member_id=?', (member_id,)).fetchone():
+        with con:
+            con.execute('UPDATE users SET pm_member_id=? WHERE username=?', (member_id, r['username']))
+    return r['username']
+
+
+def take_cli_request(con, q, base):
+    """One queued request -> start the task for its sender and attach their link. Records the outcome."""
+    code, member, email = norm(q.get('task_code')), q.get('requested_by_member_id'), q.get('requested_by_email')
+    user, status = None, 'error'
+    try:
+        when = datetime.fromisoformat(str(q.get('requested_at'))[:26])
+        if not code:
+            msg = f'Not a task code: {q.get("task_code")}'
+        elif datetime.now() - when > timedelta(hours=ACTIVE_HOURS):
+            status, msg = 'expired', f'Older than {ACTIVE_HOURS} hours: not started.'
+        else:
+            user = lth_user(con, email, member)
+            if not email:
+                status, msg = 'no_email', 'PM sent no email for who clicked (requested_by_email): not started.'
+            elif not user:
+                status, msg = 'no_account', f'No LogiTestHub account with the email {email} (Settings -> Users).'
+            else:
+                old = start(con, user, code, 'pm_click')
+                attach(code, user, base)
+                status, msg = 'started', f'Started for {user}.' + (f' {old} was stopped.' if old else '')
+    except Exception as e:   # one bad request must not stop the queue
+        msg = f'Could not take the request: {e}'[:400]
+    with con:
+        con.execute('REPLACE INTO pm_cli_requests(request_id, task_code, member_id, email, requested_at, username, status, message, at) '
+                    'VALUES (?,?,?,?,?,?,?,?,?)', (q.get('request_id'), code or str(q.get('task_code'))[:40], member, email,
+                                                 q.get('requested_at'), user, status, msg[:500], db.now()))
+
+
+def poll_cli_requests():
+    """Reads PM's queue once (when this server picks it up) and takes each new request. Returns how many."""
+    import budget
+    con = db.connect()
+    try:
+        if budget.get_setting(con, 'pm.cli_poll') != '1' or not os.environ.get('LTH_PM_MCP_KEY'):
+            return 0
+        base = public_base()
+        if not base:
+            return 0   # links PM users can open need Settings -> Integrations -> LogiTestHub address
+        since = budget.get_setting(con, 'pm.cli_since') or ''
+        res = pm_call('pm_lth_cli_requests', {'since': since, 'limit': 50})
+        n = 0
+        for q in res.get('requests') or []:
+            if not con.execute('SELECT 1 FROM pm_cli_requests WHERE request_id=?', (q.get('request_id'),)).fetchone():
+                take_cli_request(con, q, base)
+                n += 1
+            since = max(since, str(q.get('requested_at') or ''))
+        with con:
+            budget.set_setting(con, 'pm.cli_since', since)
+        return n
+    finally:
+        con.close()
+
+
+def _poll_loop():
+    import time
+    while True:
+        try:
+            poll_cli_requests()
+        except Exception as e:   # PM down / key expired: try again next time
+            print(f' * PM Tester CLI queue: {e}')
+            time.sleep(60)
+        time.sleep(POLL_SECONDS)
+
+
+def start_cli_poller():
+    threading.Thread(target=_poll_loop, name='pm-cli-requests', daemon=True).start()
+
+
 # ---------------------------------------------------------------- pages
 
 def register(app, con, login_required, current_user):
     with db.connect() as c0:
         init(c0)
+        apply_settings(c0)
     bp = Blueprint('pmtasks', __name__)
 
     def code_or_404(code):
@@ -250,10 +496,19 @@ def register(app, con, login_required, current_user):
     def page(code):
         code = code_or_404(code)
         me = current_user()
-        rows = task_cases(con(), code)
-        link = con().execute('SELECT * FROM pm_task_links WHERE task_code=?', (code,)).fetchone()
-        return render_template('task.html', code=code, rows=rows, s=summary(rows), link=link,
+        by = (request.args.get('by') or '').strip() or None   # one tester's page: the link PM got from them
+        rows = task_cases(con(), code, by)
+        link = con().execute('SELECT * FROM pm_task_links WHERE task_code=? AND attached_by=?', (code, me['username'])).fetchone()
+        links = con().execute('SELECT * FROM pm_task_links WHERE task_code=? ORDER BY at', (code,)).fetchall()
+        testers = [r['u'] for r in con().execute(
+            'SELECT added_by AS u FROM case_tasks WHERE task_code=? UNION SELECT username FROM pm_run_links WHERE task_code=? '
+            'UNION SELECT attached_by FROM pm_task_links WHERE task_code=?', (code, code, code)) if r['u']]
+        cli_reqs = con().execute('SELECT * FROM pm_cli_requests WHERE task_code=? ORDER BY requested_at DESC LIMIT 20',
+                                 (code,)).fetchall()
+        return render_template('task.html', code=code, rows=rows, s=summary(rows), link=link, links=links, by=by, cli_reqs=cli_reqs,
+                               testers=sorted(set(testers)), run_links=run_links(con(), code, by),
                                mine=active_task(con(), me['username']) == code, hours=ACTIVE_HOURS,
+                               clicked=pm_clicked(con(), me['username'], code),
                                pm_key=bool(os.environ.get('LTH_PM_MCP_KEY')))
 
     @bp.route('/tasks/<code>/start')
@@ -263,8 +518,9 @@ def register(app, con, login_required, current_user):
         me = current_user()
         old = start(con(), me['username'], code)
         flash(f'Testing {code}: every test case you create or run is linked to it until you stop (or {ACTIVE_HOURS} hours).'
-              + (f' {old} was stopped.' if old else ''), 'success')
-        attach_later(code, me['username'])
+              + (f' {old} was stopped.' if old else '')
+              + ('' if pm_clicked(con(), me['username'], code) else
+                 ' Links go to PM only when you start the task with the Tester CLI button in PM.'), 'success')
         return redirect(url_for('pmtasks.page', code=code))
 
     @bp.route('/tasks/<code>/stop')
@@ -280,8 +536,11 @@ def register(app, con, login_required, current_user):
     @login_required
     def attach_now(code):
         code = code_or_404(code)
-        attach(code, current_user()['username'], public_base())
-        r = con().execute('SELECT status, message FROM pm_task_links WHERE task_code=?', (code,)).fetchone()
+        me = current_user()['username']
+        if not attach(code, me, public_base()):
+            flash('Not sent: links go to PM only for a task you started with the Tester CLI button in PM.', 'warning')
+            return redirect(url_for('pmtasks.page', code=code))
+        r = con().execute('SELECT status, message FROM pm_task_links WHERE task_code=? AND attached_by=?', (code, me)).fetchone()
         flash(r['message'] if r else 'Done.', 'success' if r and r['status'] == 'attached' else 'warning')
         return redirect(url_for('pmtasks.page', code=code))
 
@@ -308,7 +567,6 @@ def register(app, con, login_required, current_user):
             with c:
                 tid = c.execute('INSERT INTO chat_threads(project_id, title, created_by, created_at, updated_at, task_code) '
                                 'VALUES (?,?,?,?,?,?)', (pid, f'{code}: test cases', me['username'], db.now(), db.now(), code)).lastrowid
-        attach_later(code, me['username'])
         return redirect(url_for('assistant.page', pid=pid, t=tid))
 
     app.register_blueprint(bp)

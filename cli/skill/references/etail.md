@@ -25,6 +25,16 @@ Read when the project is **Retail** (eTail, PHP CodeIgniter 2, MySQL). Also read
 - Screens with a `form_secret` (Branch Transfer add / approval) answer `Form Already Submitted` when the first
   Navigate was slow: `Navigate`, `Wait 3 seconds.`, `Navigate` again, then enter data.
 - The header has no 'Logout' text: the user menu (Profile / Sign out) is hidden until clicked; do not assert it.
+- **List / report screens filter by date** and default to the CALENDAR date (bill list: today = 15-10-2026 even when the
+  day-close date is 26-08-2026). For a record picked from the database: Remember its date, then
+  `Set the date range (#rpt_date_picker) from '{{d}}' to '{{d}}'.` and `Click the Search button (#bill_search).`
+  (checked on billing/list: 0 rows -> 7 rows). Presets ('Last 30 Days') cannot be clicked; use this step.
+- **Bill numbers repeat per branch / year** (00010 in KANNUR and HEAD OFFICE). The list shows them as
+  `CONCAT(br.short_name,'-',b.fin_year_code,'-SA-',sales_ref_no)` (sales; checked: 3036 = ATM-25-SA-00010). On billing/list:
+  Select the branch (#branch_select), Set the date range (#rpt_date_picker), Search (#bill_search), type the FULL number.
+- **Bill cancel** (billing/list X button) shows only when the bill date = the branch's day-close date
+  (ret_billing_model.php:609 allow_cancel), unless the profile allows previous-bill cancel. To test a cancel, make
+  the bill in the test first (it then gets the day-close date), then cancel it - an old bill has no X button.
 - **Every autocomplete / suggestion field** (customer, karigar, product, account, employee search ...). Two kinds:
   - List made at page load (e.g. payment/add customer): it opens by itself after typing.
   - List made inside the AJAX search reply (e.g. account/add customer, scheme_account.js:259-300): it opens only on

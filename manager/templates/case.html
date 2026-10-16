@@ -241,6 +241,16 @@
 </div>
 {% endif %}
 
+{% if healed %}
+<div class="why-fail why-partial">
+  <div class="wf-icon">✚</div>
+  <div class="wf-main">
+    <div class="wf-title">Auto-healed{{ ' · test case updated' if healed.case_updated }}</div>
+    <div class="wf-reason">{{ healed.message }}</div>
+  </div>
+</div>
+{% endif %}
+
 {% if fail %}
 <div class="why-fail {{ 'why-partial' if run.status == 'PARTIAL' }}">
   <div class="wf-icon">{{ '!' if run.status != 'PARTIAL' else 'AI' }}</div>
@@ -283,7 +293,13 @@
             <div class="sr st-{{ s.status }}" data-at="{{ s.at if s.at is defined and s.at is not none else '' }}" role="button" tabindex="0">
               <span class="si si-{{ s.status }}">{{ sicon.get(s.status, '')|safe }}</span>
               <div class="sr-main">
+                {% if is_sql is defined and is_sql(s.text) %}
+                <div class="sr-text"><span class="sql-en" data-sql="{{ s.text }}">{{ sql_simple(s.text) }}</span>
+                  <button type="button" class="sql-btn" aria-expanded="false" title="Show the database query">SQL</button></div>
+                <pre class="sql-q" hidden>{{ s.text }}</pre>
+                {% else %}
                 <div class="sr-text">{{ s.text }}</div>
+                {% endif %}
                 {% if s.error %}<div class="sr-note t-fail">{{ s.error }}</div>{% endif %}
                 {% for w in s.warnings or [] %}<div class="sr-note t-warn">{{ w }}</div>{% endfor %}
                 {% if s.status == 'needs-ai' %}<div class="sr-note">Free-text step, not run{% if s.ai %}: {{ s.ai }}{% endif %}.</div>
@@ -448,6 +464,29 @@ document.getElementById('copyCode').addEventListener('click', function () {
     });
   });
   lb.addEventListener('click', function () { lb.style.display = 'none'; });
+})();
+// SQL steps: plain English first, the query behind the "SQL" button (sentences written once by AI, then cached)
+(function () {
+  document.querySelectorAll('.sql-btn').forEach(function (b) {
+    b.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var q = b.closest('.sr-main').querySelector('.sql-q'), open = q.hidden;
+      q.hidden = !open; b.setAttribute('aria-expanded', open); b.textContent = open ? 'Hide SQL' : 'SQL';
+    });
+  });
+  document.querySelectorAll('.sql-q').forEach(function (q) { q.addEventListener('click', function (e) { e.stopPropagation(); }); });
+  var spans = document.querySelectorAll('.sql-en');
+  if (!spans.length) return;
+  var texts = [];
+  spans.forEach(function (sp) { if (texts.indexOf(sp.dataset.sql) < 0) texts.push(sp.dataset.sql); });
+  var fd = new FormData();
+  fd.append('csrf', '{{ csrf }}'); fd.append('steps', JSON.stringify(texts));
+  fetch('{{ url_for('case_sql_explain', cid=c.id) }}', { method: 'POST', body: fd })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (d) {
+      if (!d || !d.english) return;
+      spans.forEach(function (sp) { var t = d.english[sp.dataset.sql]; if (t) sp.textContent = t; });
+    }).catch(function () {});
 })();
 </script>
 <script>

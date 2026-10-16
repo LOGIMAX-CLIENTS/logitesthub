@@ -52,7 +52,7 @@
         {% elif is_admin %}<a class="as-code" href="{{ url_for('environments') }}" title="Set an environment's code repository in Settings → Environments">Connect code</a>{% endif %}
         <label class="small text-secondary" for="asEnv">Run on</label>
         <select class="form-select form-select-sm w-auto" id="asEnv">
-          {% for e in envs %}<option value="{{ e.id }}" {{ 'selected' if e.is_default }}>{{ e.name }}</option>{% endfor %}
+          {% for e in envs %}<option value="{{ e.id }}" data-db="{{ 1 if e.db_host else 0 }}" {{ 'selected' if e.is_default }}>{{ e.name }}</option>{% endfor %}
         </select>
         {% if thread %}<form method="post" action="{{ url_for('assistant.delete', pid=p.id, tid=thread.id) }}" onsubmit="return confirm('Delete this conversation? A saved test case stays.')">
           <input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn btn-sm btn-outline-secondary" title="Delete conversation">Delete</button></form>{% endif %}
@@ -94,13 +94,19 @@
 })();
 (function () {   // Run on picks its own code when it has one; otherwise the Code choice stays (e.g. read Dev's code, run on Local)
   var run = document.getElementById('asEnv'), code = document.getElementById('asCodeSel');
-  if (!run || !code) return;
+  if (!run) return;
   function has(sel, v) { for (var i = 0; i < sel.options.length; i++) if (sel.options[i].value === v) return true; return false; }
-  run.addEventListener('change', function () { if (has(code, run.value)) code.value = run.value; });
-  if (has(code, run.value)) code.value = run.value;
+  var KEY = 'lth.assistant.runOn.{{ p.id }}';   // the last "Run on" this user picked here comes back on the next visit
+  try { var saved = localStorage.getItem(KEY); if (saved && has(run, saved)) run.value = saved; } catch (e) {}
+  run.addEventListener('change', function () {
+    try { localStorage.setItem(KEY, run.value); } catch (e) {}
+    if (code && has(code, run.value)) code.value = run.value;
+  });
+  if (code && has(code, run.value)) code.value = run.value;
 })();
 (function () {
   var CSRF = {{ csrf|tojson }}, PID = {{ p.id }}, THREAD = {{ (thread.id if thread else none)|tojson }}, READONLY = {{ readonly|tojson }};
+  var CASE_TC = {{ (thread_case.tc_no if thread_case else none)|tojson }};   // the test case this chat saved: Save updates it
   var URL_SEND = {{ url_for('assistant.send', pid=p.id)|tojson }}, URL_BASE = {{ url_for('assistant.page', pid=p.id)|tojson }};
   var URL_LESSONS = {{ url_for('lessons.page', pid=p.id)|tojson }};
   var MSGS = {{ msgs|tojson }};
@@ -146,32 +152,73 @@
     steps.value = d.draft_text || ''; steps.spellcheck = false; steps.setAttribute('aria-label', 'Steps, one per line; ## starts a section');
     var hint = el('div', 'form-text', 'Edit freely. One step per line, "## " starts a section. To change it with the assistant, just say what to change below.');
     var acts = el('div', 'd-flex flex-wrap gap-2 align-items-center mt-2');
-    var bSave = el('button', 'btn btn-outline-secondary btn-sm', 'Save test case'); bSave.type = 'button';
-    var bRun = el('button', 'btn btn-primary btn-sm', 'Save & Run'); bRun.type = 'button';
+    var bSave = el('button', 'btn btn-outline-secondary btn-sm', CASE_TC ? 'Update TC-' + CASE_TC : 'Save test case'); bSave.type = 'button';
+    var bRun = el('button', 'btn btn-primary btn-sm', CASE_TC ? 'Update & Run' : 'Save & Run'); bRun.type = 'button';
+    var bNew = el('button', 'btn btn-link btn-sm', 'Save as new test case'); bNew.type = 'button'; bNew.hidden = !CASE_TC;
     var note = el('span', 'small');
-    acts.appendChild(bSave); acts.appendChild(bRun); acts.appendChild(note);
+    acts.appendChild(bSave); acts.appendChild(bRun); acts.appendChild(bNew); acts.appendChild(note);
     if (READONLY) { acts.hidden = true; hint.hidden = true; title.readOnly = true; steps.readOnly = true; folder.disabled = true; }
     var lbl = el('label', 'form-label small text-secondary mb-1', 'Module / sub-module');
     [title, lbl, folder, steps, hint, acts].forEach(function (x) { card.appendChild(x); });
-    function save(run) {
+    function save(run, asNew) {
       if (!THREAD) return;
-      bSave.disabled = bRun.disabled = true; note.className = 'small text-secondary'; note.textContent = run ? 'Saving and starting the run…' : 'Saving…';
+      var envSel = document.getElementById('asEnv');
+      if (run && envSel && /(^|\n)\s*(remember|assert|set up|setup) sql\b/i.test(steps.value)) {
+        var opt = envSel.options[envSel.selectedIndex];
+        if (opt && opt.getAttribute('data-db') !== '1') {   // database steps cannot run there: stop before the run
+          var withDb = [].filter.call(envSel.options, function (o) { return o.getAttribute('data-db') === '1'; });
+          if (withDb.length && confirm('This test has database steps, but "' + opt.text + '" has no database, so it would fail at the first one.\n\nRun it on "' + withDb[0].text + '" instead?')) {
+            envSel.value = withDb[0].value; envSel.dispatchEvent(new Event('change'));
+          } else if (!withDb.length) { note.className = 'small t-fail'; note.textContent = 'No environment has a database: database steps cannot run.'; return; }
+          else return;
+        }
+      }
+      bSave.disabled = bRun.disabled = bNew.disabled = true; note.className = 'small text-secondary'; note.textContent = run ? 'Saving and starting the run…' : 'Saving…';
       post(URL_BASE + '/' + THREAD + '/save', { title: title.value, steps_text: steps.value, folder_id: folder.value || null, run: run,
-                                                env_id: document.getElementById('asEnv') ? document.getElementById('asEnv').value : null })
+                                                as_new: !!asNew, env_id: envSel ? envSel.value : null })
         .then(function (j) {
-          if (!j.ok) { note.className = 'small t-fail'; note.textContent = j.error || 'Not saved.'; bSave.disabled = bRun.disabled = false; return; }
-          note.className = 'small t-pass'; note.textContent = 'Saved as TC-' + j.tc_no + '.' + (j.note || '');
+          if (!j.ok) { note.className = 'small t-fail'; note.textContent = j.error || 'Not saved.'; bSave.disabled = bRun.disabled = bNew.disabled = false; return; }
+          CASE_TC = j.tc_no; bSave.textContent = 'Update TC-' + j.tc_no; bRun.textContent = 'Update & Run'; bNew.hidden = false;
+          note.className = 'small t-pass'; note.textContent = (j.updated ? 'Updated TC-' : 'Saved as TC-') + j.tc_no + '.' + (j.note || '');
           var a = el('a', 'small ms-1', 'Open'); a.href = j.case_url; note.appendChild(a);
-          if (j.run_id) runCard(j.run_id);
+          if (j.run_id) runCard(j.run_id, true);
         });
     }
     bSave.onclick = function () { save(false); };
     bRun.onclick = function () { save(true); };
+    bNew.onclick = function () { save(false, true); };
     lastDraft = { title: title, steps: steps };
     return card;
   }
 
-  function runCard(rid) {
+  function rerun(caseId, btn) {
+    var envSel = document.getElementById('asEnv');
+    var opt = envSel ? envSel.options[envSel.selectedIndex] : null;
+    var envId = envSel ? envSel.value : null;
+    btn.disabled = true;
+    post(URL_BASE + '/' + THREAD + '/rerun', { case_id: caseId, env_id: envId }).then(function (j) {
+      if (j.need_db) {   // database steps but no database there: offer the environment that has one
+        var withDb = envSel ? [].filter.call(envSel.options, function (o) { return o.getAttribute('data-db') === '1'; }) : [];
+        if (withDb.length && confirm('This test has database steps, but "' + (opt ? opt.text : '') + '" has no database.\n\nRun it on "' + withDb[0].text + '" instead?')) {
+          envSel.value = withDb[0].value; envSel.dispatchEvent(new Event('change')); btn.disabled = false; rerun(caseId, btn);
+        } else btn.disabled = false;
+        return;
+      }
+      if (j.kept) {   // a passed run kept its test data on this environment
+        var del = confirm('A passed run of this test kept its test data on ' + (opt ? opt.text : 'this environment') + ':\n' + j.kept.join('\n') +
+                          '\n\nOK = delete it first and run.   Cancel = keep it and run.');
+        post(URL_BASE + '/' + THREAD + '/rerun', { case_id: caseId, env_id: envId, cleanup: del ? 'delete' : 'keep' }).then(started);
+        return;
+      }
+      started(j);
+    });
+    function started(j) {
+      if (!j.ok) { btn.disabled = false; systemMessage({ text: j.error || 'Could not start the run.' }); return; }
+      runCard(j.run_id, true);
+    }
+  }
+
+  function runCard(rid, live) {
     var card = el('div', 'as-card as-runcard');
     var line = el('div', 'd-flex align-items-center gap-2');
     var badge = el('span', 'badge st-running', 'RUNNING'); var info = el('span', 'small text-secondary', 'Running in a headless browser…');
@@ -200,13 +247,20 @@
           card.insertBefore(why, link);
           if (!READONLY) {
             var fix = el('button', 'btn btn-sm btn-outline-primary align-self-start', 'Fix this with the assistant'); fix.type = 'button';
-            fix.addEventListener('click', function () {
+            var ask = function () {
               fix.disabled = true;
               send('Run #' + rid + ' ' + st + (j.fail_step ? ' at step ' + j.fail_step + ': ' + (j.fail_text || '') : '') +
                    '\nReason: ' + reason + '\nFind the cause in the code and give me the corrected draft.');
-            });
+            };
+            fix.addEventListener('click', ask);
             card.appendChild(fix);
+            if (live && !busy) { fix.textContent = 'Asking the assistant to fix it…'; ask(); }   // ran from this page: fix it by itself
           }
+        }
+        if (!READONLY && j.case_id) {   // run the same test case again on the environment picked in "Run on"
+          var again = el('button', 'btn btn-sm btn-success align-self-start', '▶ Run again'); again.type = 'button';
+          again.addEventListener('click', function () { rerun(j.case_id, again); });
+          card.appendChild(again);
         }
         scrollDown();
       }).catch(function () { setTimeout(poll, 5000); });
@@ -279,6 +333,31 @@
     }
     if (d.choices && d.choices.length) row.appendChild(choicesCard(d.choices));
     if (d.lesson) row.appendChild(lessonCard(d, m.id));
+    if (d.readiness && (d.readiness.screens || []).length) {   // what the test needs, found in the code first
+      var rd = el('div', 'as-card as-ready');
+      rd.appendChild(el('div', 'as-card-title', 'Ready to run? (checked before the draft)'));
+      var dl = el('dl', 'as-dl');
+      [['Screens', d.readiness.screens], ['Flow doc', d.readiness.flow_doc], ['Filters', d.readiness.filters],
+       ['Settings', d.readiness.settings], ['Test data', d.readiness.test_data], ['Not known yet', d.readiness.unknowns]].forEach(function (r) {
+        var v = Array.isArray(r[1]) ? r[1].join(' · ') : (r[1] || '');
+        if (!v) return;
+        dl.appendChild(el('dt', null, r[0])); dl.appendChild(el('dd', r[0] === 'Not known yet' ? 't-fail' : null, v));
+      });
+      rd.appendChild(dl); row.appendChild(rd);
+    }
+    if (d.elements && d.elements.checked) {   // every (#id) / (.class) of the draft looked up in the code
+      var miss = d.elements.missing || [];
+      row.appendChild(el('div', 'small ' + (miss.length ? 't-fail' : 't-pass'), miss.length
+        ? '⚠️ ' + miss.length + ' element problem(s): ' + miss.map(function (e) { return 'step ' + e.n + ' ' + (e.problem || e.missing.join(' ') + ' not in the code'); }).join('; ')
+        : '✅ All ' + d.elements.checked + ' element ids / classes found in the code.'));
+    }
+    if (d.preflight && d.preflight.checks && d.preflight.checks.length) {   // the draft's database steps, checked before any run
+      var bad = d.preflight.checks.filter(function (c) { return !c.ok; })[0];
+      var pf = el('div', 'small ' + (bad ? 't-fail' : 't-pass'),
+        bad ? '⚠️ Checked on ' + d.preflight.env + ': step ' + bad.n + ' ' + bad.problem + '. Do what the assistant says above before running.'
+            : '✅ Checked on ' + d.preflight.env + ': the test data is there (' + d.preflight.checks.length + ' database step' + (d.preflight.checks.length > 1 ? 's' : '') + ').');
+      row.appendChild(pf);
+    }
     if (d.draft) row.appendChild(draftCard(d, m.id));
     scrollDown();
   }
@@ -327,8 +406,17 @@
     if (!msg || busy) return;
     busy = true; stopped = null; sendBtn.hidden = true; stopBtn.hidden = false; text.value = '';
     markLastUser(bubble('user', msg));
-    var thinking = bubble('assistant', 'Thinking…'); thinking.classList.add('as-thinking');
+    var thinking = bubble('assistant', 'Starting…'); thinking.classList.add('as-thinking');
     reqId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    var myReq = reqId, started = Date.now();
+    var poll = setInterval(function () {   // what the server is doing now (reading code, checking the database...)
+      if (reqId !== myReq) { clearInterval(poll); return; }
+      post(URL_BASE + '/progress', { req: myReq }).then(function (p) {
+        if (reqId !== myReq || !p.text) return;
+        var secs = Math.round((Date.now() - started) / 1000);
+        thinking.querySelector('.as-bubble').textContent = p.text + '…' + (secs >= 10 ? ' (' + secs + 's)' : '');
+      });
+    }, 1500);
     var data = { thread_id: THREAD, text: msg, req: reqId, env_id: document.getElementById('asEnv') ? document.getElementById('asEnv').value : null };
     var codeSel = document.getElementById('asCodeSel'); if (codeSel) data.code_env_id = codeSel.value;   // '' = no code
     if (lastDraft) { data.draft_title = lastDraft.title.value; data.draft_text = lastDraft.steps.value; }
@@ -351,7 +439,7 @@
       if (!j.ok) { systemMessage({ text: j.error || 'Something went wrong.' }); return; }
       assistantMessage(j.message);
       if (j.warn) systemMessage({ text: j.warn });
-    }).finally(function () { busy = false; reqId = null; sendBtn.hidden = false; stopBtn.hidden = true; text.focus(); });
+    }).finally(function () { clearInterval(poll); busy = false; reqId = null; sendBtn.hidden = false; stopBtn.hidden = true; text.focus(); });
   }
 
   form.addEventListener('submit', function (e) { e.preventDefault(); send(text.value); });

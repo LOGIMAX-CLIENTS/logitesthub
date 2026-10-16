@@ -715,6 +715,9 @@ function help() {
   tester run "<test in plain English>" --url <site> [--project <id>]
   tester run --case <case id> --url <site>           run a saved test case
   tester run --case <id> ... --clean | --keep          a passed run kept its test data: delete it first, or leave it
+  tester check --case <id> | --file x_test.md --env <name>   before a run: settings + test data there? (read-only)
+  tester settings --project <id> --env <name>        live profile / retail settings: is the action allowed?
+  tester brain [words] [--path <repo or knowledge_brain>]   the app's knowledge brain docs for a test + out-of-date check
   tester run --file my_test.md --url <site>          run a test case file
   tester test [folder | files]                       run every *_test.md in ${WS_DIR}/ (same options as run)
         [--headed] [--no-ai] [--no-upload] [--no-login] [--no-save] [--env <name>] [--var k=v] [--secret k=v] [--vars file.json]
@@ -960,7 +963,123 @@ async function taskCmd() {
   print(j, j.task ? `Active task: ${j.task} (tester task stop to end it)` : 'No active task. Start one: tester task start PM-LMX-1741');
 }
 
-const COMMANDS = { init, test: testAll, task: taskCmd, login, logout, whoami, projects, cases, case: caseCmd, usage, generate, run, setup, help, modules, skill, lessons, lesson, upload: uploadCmd };
+// Precondition check + test data validation (fail fast): the case's leading database steps - settings, permissions,
+// the data it picks - run read-only on the environment before a run. Exit 0 passed, 1 failed (do not run), 2 error.
+async function check() {
+  const c = needLogin();
+  const caseRef = flag('--case'), file = flag('--file');
+  const env = flag('--env') && flag('--env') !== true ? flag('--env') : (loadConfig().env || '');
+  if (!env) fail('say which environment: tester check --case <id> --env <name> (its database is checked).');
+  let body;
+  if (caseRef && caseRef !== true) body = { case_id: Number(String(caseRef).replace(/^#/, '')) };
+  else if (file && file !== true) body = { content: fs.readFileSync(file, 'utf8') };
+  else fail('usage: tester check --case <id> --env <name>   |   tester check --file x_test.md --env <name>');
+  const j = await api(c, 'POST', '/check', { ...body, env });
+  const lines = (j.checks || []).map(x => `  ${x.ok ? 'OK  ' : 'FAIL'} step ${String(x.n).padStart(2)}  ${x.text.slice(0, 90)}` +
+    (x.ok ? (x.got != null ? `  = ${String(x.got).slice(0, 40)}` : '') : `\n             ${x.problem}`));
+  const el = j.elements || {};
+  const elLine = el.checked ? (el.missing.length ? `  FAIL elements: ${el.missing.map(e => `step ${e.n} ${e.problem || e.missing.join(' ') + ' not in the code'}`).join('; ')}`
+    : `  OK   elements: all ${el.checked} ids / classes found in the code`) : '';
+  print(j, [`Precondition check on ${j.env}: ${String(j.status).toUpperCase()}`, ...lines, elLine, j.message].filter(Boolean).join('\n'));
+  process.exitCode = j.status === 'failed' ? 1 : j.status === 'no_database' ? 2 : 0;
+}
+
+// Settings / permissions that decide whether a test can run (knowledge_brain/<project>/settings.json), read now
+async function settingsCmd() {
+  const c = needLogin();
+  const env = flag('--env') && flag('--env') !== true ? flag('--env') : '';
+  if (!env) fail('usage: tester settings --project <id|name> --env <name>');
+  const p = await resolveProject(c, flag('--project') || c.project);
+  const j = await api(c, 'GET', `/projects/${p.id}/settings?env=${encodeURIComponent(env)}`);
+  print(j, j.text);
+}
+
+// The app repo's own knowledge_brain (inside the code the developer works on): which module / flow docs to read for a
+// test, and whether they are out of date (code files of that module changed after the doc's source_ref, or not
+// committed yet = a feature in progress). Found from the current folder upward; else the saved path (--path).
+const BRAIN_READ = ['FUNCTIONAL_BRAIN.md', 'PERMISSION_MAP.md', 'SETTINGS_REGISTER.md', 'SCREENS.md', 'BUSINESS_RULES.md',
+  'FIELD_DICTIONARY.md', 'MODULE_BRAIN.md'];
+const BRAIN_ALIAS = { sale: ['Billing'], sales: ['Billing'], bill: ['Billing'], invoice: ['Billing'], billing: ['Billing'],
+  cancel: ['_cancel_master'], tag: ['Tagging'], tagging: ['Tagging'], lot: ['Lot', 'lot_inward'],
+  estimation: ['Estimation', 'estimation_billing'], chit: ['scheme', 'payment'], scheme: ['scheme'], installment: ['payment'],
+  instalment: ['payment'], transfer: ['Branch Transfer', 'branch_transfer'], grn: ['GRN'],
+  karigar: ['Smith_Metal_Issue', 'Purchase_Order'], order: ['customer_order', 'Purchase_Order'] };
+const BRAIN_STOP = new Set(['the', 'and', 'for', 'pannu', 'panni', 'check', 'test', 'oru', 'list', 'page', 'screen', 'add', 'new']);
+function findBrain() {
+  let d = process.cwd();
+  for (let i = 0; i < 6; i++) {
+    if (fs.existsSync(path.join(d, 'knowledge_brain'))) return path.join(d, 'knowledge_brain');
+    const up = path.dirname(d); if (up === d) break; d = up;
+  }
+  const saved = loadConfig().brain;
+  return saved && fs.existsSync(saved) ? saved : null;
+}
+function brainWords(t) { return new Set((String(t).toLowerCase().replace(/_/g, ' ').match(/[a-z]{3,}/g) || []).filter(w => !BRAIN_STOP.has(w))); }
+function brainMatch(names, want, boost) {
+  return names.map(n => {
+    const ws = brainWords(n); let sc = boost[n] || 0;
+    for (const w of ws) { if (want.has(w)) sc += 1; else for (const v of want) if (w.length > 3 && (w.startsWith(v) || v.startsWith(w))) sc += 0.5; }
+    return [sc, n];
+  }).filter(x => x[0] > 0).sort((a, b) => b[0] - a[0]).slice(0, 2).map(x => x[1]);
+}
+function brainFront(file) {
+  try { const m = fs.readFileSync(file, 'utf8').slice(0, 4000).match(/^---\s*\n([\s\S]*?)\n---/); const o = {};
+    (m ? m[1].split('\n') : []).forEach(l => { const i = l.indexOf(':'); if (i > 0) o[l.slice(0, i).trim()] = l.slice(i + 1).split('#')[0].trim(); }); return o;
+  } catch { return {}; }
+}
+function brainStale(brain, mod) {
+  const repo = path.dirname(brain);
+  const meta = brainFront(path.join(brain, mod, 'PERMISSION_MAP.md'));
+  const meta2 = Object.keys(meta).length ? meta : brainFront(path.join(brain, mod, 'MODULE_BRAIN.md'));
+  const out = { source_ref: meta2.source_ref || '', last_updated: meta2.last_updated || '', changed_since: [], uncommitted: [] };
+  let files = [];
+  try {
+    for (const line of fs.readFileSync(path.join(brain, '_SYSTEM', 'FILE_MODULE_MAP.md'), 'utf8').split('\n')) {
+      const c = line.split('|').map(x => x.trim());
+      if (c.length > 3 && c[1].startsWith('`') && c[2].split(',').map(x => x.trim().toLowerCase()).includes(mod.toLowerCase())) files.push(c[1].replace(/`/g, ''));
+    }
+  } catch { /* no map */ }
+  if (!files.length || !fs.existsSync(path.join(repo, '.git'))) return out;
+  const git = args => { try { return execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); } catch { return ''; } };
+  if (/^[0-9a-f]{7,40}$/.test(out.source_ref)) out.changed_since = git(['diff', '--name-only', `${out.source_ref}..HEAD`, '--', ...files]).split('\n').filter(Boolean);
+  out.uncommitted = git(['status', '--porcelain', '--', ...files]).split('\n').filter(x => x.length > 3).map(x => x.slice(3));
+  return out;
+}
+async function brainCmd() {
+  if (flag('--path') && flag('--path') !== true) {
+    const want = path.resolve(flag('--path'));
+    const dir = fs.existsSync(path.join(want, 'knowledge_brain')) ? path.join(want, 'knowledge_brain') : want;
+    if (!fs.existsSync(dir)) fail(`no such folder: ${dir}`);
+    saveConfig({ ...loadConfig(), brain: dir });
+    if (!positional().length) return print({ ok: true, brain: dir }, `Saved: the knowledge brain is ${dir}`);
+  }
+  const brain = findBrain();
+  if (!brain) fail('no knowledge_brain found here. Run this inside the app repo, or ask the user where it is and save it: tester brain --path <folder>', 3);
+  const dirs = fs.readdirSync(brain).filter(x => !x.startsWith('_') && fs.statSync(path.join(brain, x)).isDirectory());
+  const fdir = path.join(brain, '_SYSTEM', 'FLOW_CHECKLISTS');
+  const flowsAll = fs.existsSync(fdir) ? fs.readdirSync(fdir).filter(x => x.endsWith('.md')).map(x => x.slice(0, -3)) : [];
+  const text = positional().join(' ');
+  if (!text) return print({ ok: true, brain, modules: dirs, flows: flowsAll }, `Knowledge brain: ${brain}\nModules: ${dirs.join(', ')}\nFlow checklists: ${flowsAll.join(', ')}`);
+  const want = brainWords(text), boost = {};
+  for (const w of want) for (const t of (BRAIN_ALIAS[w] || [])) boost[t] = (boost[t] || 0) + 2;
+  const mods = brainMatch(dirs, want, boost), fls = brainMatch(flowsAll, want, boost);
+  const res = { ok: true, brain, modules: mods.map(m => ({ module: m, read: BRAIN_READ.filter(f => fs.existsSync(path.join(brain, m, f))).map(f => path.join(brain, m, f)), ...brainStale(brain, m) })),
+    flows: fls.map(f => path.join(fdir, f + '.md')) };
+  const lines = [`Knowledge brain: ${brain}`];
+  if (!mods.length && !fls.length) lines.push(`No module matched "${text}". Modules: ${dirs.join(', ')}`);
+  for (const m of res.modules) {
+    lines.push(`Module ${m.module}  (measured at ${m.source_ref || '?'}, ${m.last_updated || '?'})`);
+    m.read.forEach(f => lines.push(`  read ${f}`));
+    if (m.changed_since.length || m.uncommitted.length)
+      lines.push(`  ! OUT OF DATE: ${m.changed_since.length} code file(s) changed since, ${m.uncommitted.length} not committed (feature in progress): ` +
+        [...m.uncommitted, ...m.changed_since].slice(0, 8).join(', ') + '\n    -> read those files; where the doc and the code disagree, the code is right; tell the user which doc is out of date');
+    else lines.push('  current: no code change since the doc');
+  }
+  res.flows.forEach(f => lines.push(`Flow checklist: ${f}`));
+  print(res, lines.join('\n'));
+}
+
+const COMMANDS = { init, test: testAll, task: taskCmd, check, settings: settingsCmd, brain: brainCmd, login, logout, whoami, projects, cases, case: caseCmd, usage, generate, run, setup, help, modules, skill, lessons, lesson, upload: uploadCmd };
 (async () => {
   const cmd = argv[0];
   if (!cmd || cmd === '--help' || cmd === '-h') return help();
