@@ -52,8 +52,16 @@
                    placeholder="{{ 'In use: ' ~ in_use[name].split(' · ')[0] ~ ' - paste a new one to replace it' if in_use[name] else ph }}">
             <button class="btn btn-outline-secondary btn-sm text-nowrap" formaction="{{ url_for('settings.system_key_test', which=which) }}" formnovalidate>Test</button>
           </div>
-          <div class="small mt-1 {{ 't-pass' if in_use[name] else 'text-secondary' }}">{% if in_use[name] %}✓ In use: <code>{{ in_use[name].split(' · ')[0] }}</code> {{ in_use[name].split(' · ')[1] }}{% else %}Not set{% endif %}</div>
-          <div class="form-text">{{ help_html|safe }} Stored encrypted, never shown again; an empty box keeps the saved one. Test does not save.
+          {% set ck = checks[name] if in_use[name] else none %}
+          <div class="small mt-1 d-flex flex-wrap align-items-center gap-2">
+            {% if not in_use[name] %}<span class="badge text-bg-secondary">Not set</span>
+            {% elif ck and ck.ok %}<span class="badge text-bg-success">✓ Connected</span>
+            {% elif ck %}<span class="badge text-bg-danger">✗ Not working</span>
+            {% else %}<span class="badge text-bg-warning">Not tested</span>{% endif %}
+            {% if in_use[name] %}<span><code>{{ in_use[name].split(' · ')[0] }}</code> <span class="text-secondary">{{ in_use[name].split(' · ')[1] }}</span></span>{% endif %}
+          </div>
+          {% if ck %}<div class="small {{ 't-pass' if ck.ok else 't-fail' }}">{{ ck.msg }} <span class="text-secondary">· tested {{ ck.at|dmy }}</span></div>{% endif %}
+          <div class="form-text">{{ help_html|safe }} Stored encrypted, never shown again; an empty box keeps the saved one. <b>Test</b> saves a pasted key that works (one that fails is not saved); with an empty box it re-checks the key in use.
             {% if saved[name] %}<label class="ms-1"><input class="form-check-input me-1" type="checkbox" name="{{ name }}_clear">Remove the saved one</label>{% endif %}</div>
         </div>
         {% endfor %}

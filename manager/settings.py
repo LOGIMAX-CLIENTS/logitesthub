@@ -411,6 +411,15 @@ def secret_source(con, name):
     return f'{mask(key)} · {where}'
 
 
+def _check(con, name):
+    """The last Test of the key in use: {'ok', 'at', 'msg'} or None (never tested, or the key changed since)."""
+    import budget
+    try:
+        return json.loads(budget.get_setting(con, name + '_check') or 'null')
+    except ValueError:
+        return None
+
+
 def anthropic_test(key=None):
     """Checks an Anthropic API key (typed, else the one in use) by listing models: no tokens used. Returns (ok, message)."""
     import urllib.error
@@ -728,7 +737,8 @@ def register(app, con, admin_required, current_user):
         return render_template('settings_system.html', fields=SYSTEM, vals=vals, models=list(pricing.PRICES), providers=AI_PROVIDERS,
                                info=_system_info(c), auto=_auto_paths(c), auto_keys=AUTO_KEYS,
                                saved={n: bool(budget.get_setting(c, n)) for n in SECRETS},
-                               in_use={n: secret_source(c, n) for n in SECRETS})
+                               in_use={n: secret_source(c, n) for n in SECRETS},
+                               checks={n: _check(c, n) for n in SECRETS})
 
     @bp.route('/system', methods=['POST'])
     @super_required
@@ -771,6 +781,7 @@ def register(app, con, admin_required, current_user):
             for n in SECRETS:
                 if secrets[n] or n in cleared:
                     budget.set_setting(c, n, '' if n in cleared else envs.encrypt(secrets[n]))
+                    budget.set_setting(c, n + '_check', '')   # a new key has not been tested yet
         apply_system(c)
         changed = {k: [old[k], v] for k, v in new.items() if str(old[k]) != v}
         for n in SECRETS:   # the key itself is never written to the audit log
@@ -786,14 +797,30 @@ def register(app, con, admin_required, current_user):
     @bp.route('/system/key-test/<which>', methods=['POST'])
     @super_required
     def system_key_test(which):
-        """Test buttons: the key typed in the box (not saved), else the one in use."""
+        """Test buttons: the key typed in the box, else the one in use. A typed key that works is saved straight away
+        (one that fails is not); the result is kept and shown under the box."""
+        import budget
+        import envs
         name = {'anthropic': 'sys.anthropic_key', 'claude': 'sys.claude_token'}.get(which) or abort(404)
         v = re.sub(r'\s+', '', request.form.get(name, ''))
         if v and not SECRETS[name][1].match(v):
             flash(f'{SECRETS[name][2]}: paste the whole key from {SECRETS[name][3]}.', 'danger')
             return redirect(url_for('settings.system'))
+        if not v and not os.environ.get(SECRETS[name][0]):
+            flash(f'{SECRETS[name][2]}: paste a key in the box first, then Test.', 'warning')
+            return redirect(url_for('settings.system'))
         ok, msg = (anthropic_test if which == 'anthropic' else claude_test)(v or None)
-        flash(msg + (' Save to keep it.' if ok and v else ''), 'success' if ok else 'danger')
+        c = con()
+        with c:
+            if ok and v:
+                budget.set_setting(c, name, envs.encrypt(v))
+            if ok or not v:   # a typed key that failed says nothing about the key in use
+                budget.set_setting(c, name + '_check', json.dumps({'ok': ok, 'at': db.now(), 'msg': msg[:300]}))
+        if ok and v:
+            apply_system(c)
+            write_audit(current_user()['username'], 'system_save', 'settings', None, 'ok', f'{SECRETS[name][2]} tested and saved',
+                        {name: ['', 'replaced']}, request.remote_addr)
+        flash(msg + (' Saved: it is in use now.' if ok and v else ' Not saved.' if v else ''), 'success' if ok else 'danger')
         return redirect(url_for('settings.system'))
 
     # ------------------------------------------------------------ Integrations: PM (task links, test report link)
