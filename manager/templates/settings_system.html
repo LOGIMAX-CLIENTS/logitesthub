@@ -40,16 +40,16 @@
         {% if key == 'sys.ai_provider' %}
         {% for name, which, label, ph, help_html in [
              ('sys.anthropic_key', 'anthropic', 'Anthropic API key', 'sk-ant-...',
-              'For <b>Anthropic API</b>, and for AI steps in runs with either provider. From console.anthropic.com &rarr; API keys. <b>Test</b> lists the models (no credits used).'),
+              'From console.anthropic.com &rarr; API keys.'),
              ('sys.claude_token', 'claude', 'Claude subscription token', 'sk-ant-oat01-...',
-              'For <b>Claude subscription</b> on a server (no browser to sign in). On any PC with Claude Code run <code>claude setup-token</code>, sign in with the subscription and paste the token here (valid 1 year). <b>Test</b> asks Claude Code for one word.')] %}
+              'Run <code>claude setup-token</code> on any PC (valid 1 year).')] %}
         <div class="mt-2 p-2 rounded border">
           <label class="form-label fw-semibold mb-1 small" for="key-{{ which }}">{{ label }}</label>
           {# autocomplete=new-password + a readonly-until-focus box: browsers must not fill a saved login password in here #}
           <div class="d-flex gap-2">
             <input class="form-control form-control-sm" id="key-{{ which }}" name="{{ name }}" type="password" autocomplete="new-password"
                    spellcheck="false" readonly onfocus="this.removeAttribute('readonly')" data-lpignore="true" data-1p-ignore
-                   placeholder="{{ 'In use: ' ~ in_use[name].split(' · ')[0] ~ ' - paste a new one to replace it' if in_use[name] else ph }}">
+                   placeholder="{{ 'Paste a new one to replace it' if in_use[name] else ph }}">
             <button class="btn btn-outline-secondary btn-sm text-nowrap" formaction="{{ url_for('settings.system_key_test', which=which) }}" formnovalidate>Test</button>
           </div>
           {% set ck = checks[name] if in_use[name] else none %}
@@ -58,11 +58,12 @@
             {% elif ck and ck.ok %}<span class="badge text-bg-success">✓ Connected</span>
             {% elif ck %}<span class="badge text-bg-danger">✗ Not working</span>
             {% else %}<span class="badge text-bg-warning">Not tested</span>{% endif %}
-            {% if in_use[name] %}<span><code>{{ in_use[name].split(' · ')[0] }}</code> <span class="text-secondary">{{ in_use[name].split(' · ')[1] }}</span></span>{% endif %}
+            {% if in_use[name] %}<code title="{{ in_use[name].split(' · ')[1] }}">{{ in_use[name].split(' · ')[0] }}</code>{% endif %}
+            {% if ck %}<span class="text-secondary">· tested {{ ck.at|dmy }}</span>{% endif %}
           </div>
-          {% if ck %}<div class="small {{ 't-pass' if ck.ok else 't-fail' }}">{{ ck.msg }} <span class="text-secondary">· tested {{ ck.at|dmy }}</span></div>{% endif %}
-          <div class="form-text">{{ help_html|safe }} Stored encrypted, never shown again; an empty box keeps the saved one. <b>Test</b> saves a pasted key that works (one that fails is not saved); with an empty box it re-checks the key in use.
-            {% if saved[name] %}<label class="ms-1"><input class="form-check-input me-1" type="checkbox" name="{{ name }}_clear">Remove the saved one</label>{% endif %}</div>
+          {% if ck and not ck.ok %}<div class="small t-fail">{{ ck.msg }}</div>{% endif %}
+          <div class="form-text">{{ help_html|safe }} Paste and click <b>Test</b>: a key that works is saved.
+            {% if saved[name] %}<label class="ms-1"><input class="form-check-input me-1" type="checkbox" name="{{ name }}_clear">Remove</label>{% endif %}</div>
         </div>
         {% endfor %}
         {% endif %}
