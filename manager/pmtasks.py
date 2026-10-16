@@ -336,13 +336,24 @@ def run_started(con, run_id, case_id, username, code):
 
 
 def send_run(run_id):
-    """Attaches one finished run's link to its PM task, submitted by the PM member who ran it. Never raises."""
+    """Attaches one finished run's link to its PM task, submitted by the PM member who ran it. Never raises.
+    Only a PASSED run, and only the first one per case and tester: a case is re-run until it passes, and PM keeps
+    every link it gets (the task page link already shows every run)."""
     con = db.connect()
     try:
-        r = con.execute('SELECT l.task_code, l.username, l.url, r.status, r.passed, r.total, c.tc_no, c.title '
+        r = con.execute('SELECT l.task_code, l.username, l.url, r.status, r.passed, r.total, r.case_id, c.tc_no, c.title '
                         'FROM pm_run_links l JOIN runs r ON r.id=l.run_id JOIN cases c ON c.id=r.case_id WHERE l.run_id=?',
                         (run_id,)).fetchone()
         if not r:
+            return
+        sent = con.execute("SELECT l.run_id FROM pm_run_links l JOIN runs r ON r.id=l.run_id WHERE l.task_code=? AND l.username=? "
+                           "AND r.case_id=? AND l.status='attached' AND l.run_id<>? LIMIT 1",
+                           (r['task_code'], r['username'], r['case_id'], run_id)).fetchone()
+        skip = (f'{r["status"]}: only a passed run is sent to PM.' if r['status'] != 'PASSED' else
+                f'Run {sent["run_id"]} of this case already passed and was sent to PM.' if sent else None)
+        if skip:
+            with con:
+                con.execute("UPDATE pm_run_links SET status='skipped', message=?, at=? WHERE run_id=?", (skip, db.now(), run_id))
             return
         try:
             if not r['url']:
