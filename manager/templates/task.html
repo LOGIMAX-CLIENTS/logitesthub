@@ -67,7 +67,7 @@
         <td class="ps-3"><a href="{{ url_for('case', cid=l.case_id, run=l.run_id) }}"><b>TC-{{ l.tc_no }}</b> run #{{ l.run_id }}</a>
           {% if l.run_status %}<span class="badge st-{{ l.run_status|lower }}">{{ l.run_status }}</span>{% endif %}</td>
         <td class="small">{{ l.username }}</td>
-        <td class="small">{% if l.status == 'attached' %}<span class="badge st-passed">SENT</span>{% elif l.status == 'pending' %}<span class="badge st-none">PENDING</span>{% else %}<span class="badge st-failed">NOT SENT</span>{% endif %}
+        <td class="small">{% if l.status == 'attached' %}<span class="badge st-passed">SENT</span>{% elif l.status == 'pending' %}<span class="badge st-none">PENDING</span>{% elif l.status == 'skipped' %}<span class="badge st-none">NOT SENT</span>{% else %}<span class="badge st-failed">NOT SENT</span>{% endif %}
           <span class="text-secondary">{{ l.message }}</span></td>
         <td class="small text-secondary">{{ l.at|ago }}</td>
       </tr>
