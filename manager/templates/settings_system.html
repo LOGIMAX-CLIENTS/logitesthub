@@ -39,7 +39,7 @@
         {% endif %}
         {% if key == 'sys.ai_provider' %}
         {% for name, which, label, ph, help_html in [
-             ('sys.anthropic_key', 'anthropic', 'Anthropic API key', 'sk-ant-api03-...',
+             ('sys.anthropic_key', 'anthropic', 'Anthropic API key', 'sk-ant-...',
               'For <b>Anthropic API</b>, and for AI steps in runs with either provider. From console.anthropic.com &rarr; API keys. <b>Test</b> lists the models (no credits used).'),
              ('sys.claude_token', 'claude', 'Claude subscription token', 'sk-ant-oat01-...',
               'For <b>Claude subscription</b> on a server (no browser to sign in). On any PC with Claude Code run <code>claude setup-token</code>, sign in with the subscription and paste the token here (valid 1 year). <b>Test</b> asks Claude Code for one word.')] %}
@@ -49,9 +49,10 @@
           <div class="d-flex gap-2">
             <input class="form-control form-control-sm" id="key-{{ which }}" name="{{ name }}" type="password" autocomplete="new-password"
                    spellcheck="false" readonly onfocus="this.removeAttribute('readonly')" data-lpignore="true" data-1p-ignore
-                   placeholder="{{ 'Saved - paste a new one to replace it' if saved[name] else ph }}">
+                   placeholder="{{ 'In use: ' ~ in_use[name].split(' · ')[0] ~ ' - paste a new one to replace it' if in_use[name] else ph }}">
             <button class="btn btn-outline-secondary btn-sm text-nowrap" formaction="{{ url_for('settings.system_key_test', which=which) }}" formnovalidate>Test</button>
           </div>
+          <div class="small mt-1 {{ 't-pass' if in_use[name] else 'text-secondary' }}">{% if in_use[name] %}✓ In use: <code>{{ in_use[name].split(' · ')[0] }}</code> {{ in_use[name].split(' · ')[1] }}{% else %}Not set{% endif %}</div>
           <div class="form-text">{{ help_html|safe }} Stored encrypted, never shown again; an empty box keeps the saved one. Test does not save.
             {% if saved[name] %}<label class="ms-1"><input class="form-check-input me-1" type="checkbox" name="{{ name }}_clear">Remove the saved one</label>{% endif %}</div>
         </div>
