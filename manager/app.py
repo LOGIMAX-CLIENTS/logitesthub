@@ -77,7 +77,7 @@ def login_required(fn):
         u = current_user() if session.get('uid') else None
         if not u or not _pm_still_ok(u):   # also signs out a removed account / a member made inactive in PM
             session.clear()
-            return redirect(url_for('login', next=request.path))
+            return redirect(url_for('login', next=request.full_path.rstrip('?')))   # keeps ?task= from PM's links
         return fn(*a, **kw)
     return wrapper
 

@@ -4,8 +4,11 @@ A PM task (e.g. PM-LMX-1741) gets the test cases written for it:
 - Developer: the PM task page has "Start testing" / "Stop testing" buttons -> /tasks/<code>/start and /stop. While a
   user's task is active, every test case they create or run (web, Tester Assistant, Tester CLI) is tagged with it.
   One active task per user; it stops by itself after ACTIVE_HOURS.
-- Reviewer: the PM task in Review shows a "Tester Assistant" button -> /tasks/<code>/assistant opens a chat bound to
-  that task; every test case saved from that chat is tagged with it.
+- Reviewer: the PM task in Review shows a "Test Assistant" button (reviewer only). PM queues the click (MCP tool
+  pm_lth_assistant_requests) and opens /projects/<pid>/assistant?task=<code> in a new tab: a chat bound to that task.
+  Every test case saved from that chat is tagged with it. When a run ends, its card has "Send to PM" for a PASSED run
+  or for a failure the assistant found to be an app bug (a test-side failure is fixed and run again instead); only
+  when the queue holds that reviewer's click for the task. Nothing from that chat goes to PM by itself.
 - /tasks/<code> lists the task's test cases and their latest runs. That one link is attached to the PM task (PM MCP
   tool pm_task_test_report_attach), so PM prefills it as the "Test report link" when the task goes to Review.
 
@@ -33,7 +36,7 @@ CODE_RE = re.compile(r'^[A-Z][A-Z0-9]{0,9}(-[A-Z0-9]{1,12}(\.[0-9]{1,4})*){1,4}$
 ACTIVE_HOURS = 12
 PM_URL_DEFAULT = 'https://pm.logimaxindia.com/api/mcp/rpc/'
 # the PM MCP tools LogiTestHub's key must be allowed to call (Settings -> Integrations -> Test connection checks them)
-NEEDED_TOOLS = ('pm_lth_cli_requests', 'pm_task_test_report_attach', 'pm_members_search')
+NEEDED_TOOLS = ('pm_lth_cli_requests', 'pm_lth_assistant_requests', 'pm_task_test_report_attach', 'pm_members_search')
 # Settings -> Integrations (pm.* settings) override these; an empty box there leaves what the server was started with
 ENV_KEYS = {'pm.mcp_url': 'LTH_PM_MCP_URL', 'pm.mcp_key': 'LTH_PM_MCP_KEY', 'pm.public_url': 'LTH_PUBLIC_URL'}
 _STARTED_WITH = {e: os.environ.get(e) for e in ENV_KEYS.values()}
@@ -78,6 +81,11 @@ CREATE TABLE IF NOT EXISTS pm_cli_requests (
   request_id VARCHAR(64) PRIMARY KEY, task_code VARCHAR(40) NOT NULL, member_id VARCHAR(64), email VARCHAR(254), requested_at VARCHAR(40),
   username VARCHAR(64), status VARCHAR(16) NOT NULL, message VARCHAR(500), at VARCHAR(32) NOT NULL,
   KEY ix_pm_cli_requests_task (task_code)
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS pm_assistant_requests (
+  request_id VARCHAR(64) PRIMARY KEY, task_code VARCHAR(40) NOT NULL, member_id VARCHAR(64), email VARCHAR(254), requested_at VARCHAR(40),
+  username VARCHAR(64), status VARCHAR(16) NOT NULL, message VARCHAR(500), at VARCHAR(32) NOT NULL,
+  KEY ix_pm_assistant_requests_task (task_code, username)
 ) ENGINE=InnoDB
 """
 
@@ -99,6 +107,9 @@ def init(con):
     if not con.execute("SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() "
                        "AND TABLE_NAME='user_tasks' AND COLUMN_NAME='source'").fetchone()['n']:
         con.execute('ALTER TABLE user_tasks ADD COLUMN source VARCHAR(16) NULL')   # 'pm_click' = started by PM's Tester CLI button
+    if not con.execute("SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() "
+                       "AND TABLE_NAME='pm_run_links' AND COLUMN_NAME='via'").fetchone()['n']:
+        con.execute('ALTER TABLE pm_run_links ADD COLUMN via VARCHAR(16) NULL')   # 'cli' / 'assistant': which PM click sends it
     if pk == ['task_code']:   # one link per task before; now one per tester, so each one's work reaches PM as theirs
         con.execute("DELETE FROM pm_task_links WHERE attached_by IS NULL")
         con.execute('ALTER TABLE pm_task_links MODIFY attached_by VARCHAR(64) NOT NULL, '
@@ -323,28 +334,111 @@ def attach(code, username, base):
 
 # ---------------------------------------------------------------- every run of a task -> PM, as the user who ran it
 
+def assistant_task(con, username, case_id):
+    """The PM task of the user's Test Assistant chat that made this test case (opened from PM's button), else None."""
+    r = con.execute('SELECT task_code FROM chat_threads WHERE case_id=? AND created_by=? AND task_code IS NOT NULL '
+                    'ORDER BY id DESC LIMIT 1', (case_id, username)).fetchone()
+    return r['task_code'] if r else None
+
+
+def assistant_clicked(con, username, code):
+    """True when PM's queue held this user's Test Assistant click on the task (the reviewer's own click)."""
+    return bool(con.execute("SELECT 1 FROM pm_assistant_requests WHERE task_code=? AND username=? AND status='ready' LIMIT 1",
+                            (code, username)).fetchone())
+
+
+def review_check(con, username, code):
+    """Is the signed-in user the PM reviewer who clicked Test Assistant on this task? (None = yes, else why not.)
+    PM and LogiTestHub sign in separately: the click is matched to a LogiTestHub account by its PM email, so someone
+    signed in here as another person (or whose email differs) cannot send this task's runs to PM."""
+    if assistant_clicked(con, username, code):
+        return None
+    try:
+        poll_assistant_requests()   # the click may still be in PM's queue
+    except Exception:
+        pass
+    if assistant_clicked(con, username, code):
+        return None
+    q = con.execute('SELECT * FROM pm_assistant_requests WHERE task_code=? ORDER BY requested_at DESC LIMIT 1', (code,)).fetchone()
+    if not q:
+        return (f'No Test Assistant click on {code} has reached LogiTestHub from PM yet (or Settings -> Integrations does not '
+                'pick up PM clicks), so runs here cannot be sent to PM. Open this chat with the Test Assistant button in PM.')
+    if q['username']:
+        return (f'{code} was opened in PM by {q["email"]}, who is "{q["username"]}" here, but you are signed in as "{username}". '
+                f'Sign in to LogiTestHub as {q["username"]} to send runs to PM, or click Test Assistant in PM with your own PM account.')
+    return (f'{code} was opened in PM by {q["email"] or "someone"}, but no LogiTestHub account has that email, and yours '
+            f'("{username}") is not the PM reviewer. Ask an admin to set your email in Settings -> Users exactly as in PM.')
+
+
+def task_thread(con, username, code, pid):
+    """The user's Test Assistant chat for a PM task in a project (made the first time). Returns its id."""
+    t = con.execute('SELECT id FROM chat_threads WHERE created_by=? AND task_code=? AND project_id=? ORDER BY id DESC LIMIT 1',
+                    (username, code, pid)).fetchone()
+    if t:
+        return t['id']
+    with con:
+        return con.execute('INSERT INTO chat_threads(project_id, title, created_by, created_at, updated_at, task_code) '
+                           'VALUES (?,?,?,?,?,?)', (pid, f'{code}: test cases', username, db.now(), db.now(), code)).lastrowid
+
+
 def run_started(con, run_id, case_id, username, code):
     """A run of a test case linked to the user's PM task: noted now (task, user, link), sent to PM when it ends.
     Taken at the start, so a run still goes to the right task and person if they stop or switch task meanwhile.
-    Only when the user started this task with their own Tester CLI click in PM: with no click, nothing goes to PM."""
-    if not (code and run_id) or not pm_clicked(con, username, code):
+    - a test case from the user's Test Assistant chat for a PM task: that task (checked against their own click in PM
+      when the run ends, as the click may still be on its way here);
+    - else the task the user started with their own Tester CLI click in PM.
+    With no click, nothing goes to PM."""
+    via, asst = None, assistant_task(con, username, case_id) if run_id else None
+    if asst:
+        code, via = asst, 'assistant'
+    elif run_id and code and pm_clicked(con, username, code):
+        via = 'cli'
+    if not via:
         return
     base = public_base()
-    con.execute('REPLACE INTO pm_run_links(run_id, task_code, username, url, status, message, at) VALUES (?,?,?,?,?,?,?)',
+    con.execute('REPLACE INTO pm_run_links(run_id, task_code, username, url, status, message, at, via) VALUES (?,?,?,?,?,?,?,?)',
                 (run_id, code, username, f'{base}/cases/{case_id}?run={run_id}' if base else None, 'pending',
-                 'Sent to PM when the run ends.', db.now()))
+                 'Sent to PM if the run passes.' if via == 'cli' else 'When it ends: Send to PM in the chat.', db.now(), via))
+
+
+_RUN_SQL = ('SELECT l.task_code, l.username, l.url, l.via, l.status AS link_status, r.status, r.passed, r.total, r.case_id, '
+            'c.tc_no, c.title FROM pm_run_links l JOIN runs r ON r.id=l.run_id JOIN cases c ON c.id=r.case_id WHERE l.run_id=?')
+
+
+def _attach_run(con, run_id, r, note):
+    """Sends one run's link to its PM task as the PM member who ran it and records the outcome. Never raises."""
+    try:
+        if not r['url']:
+            raise PmError('No LogiTestHub address for PM users (Settings -> Integrations): link not sent.')
+        member = _member_id(con, r['username'])
+        if not member:
+            raise PmError(f'Could not find "{r["username"]}" among PM members: link not sent.')
+        res = pm_call('pm_task_test_report_attach', {'task': r['task_code'], 'url': r['url'], 'provider': 'LogiTestHub',
+                                                     'submitted_by_member_id': member, 'note': note[:2000]})
+        status, msg = 'attached', ('Already attached.' if res.get('already_attached') else 'Sent to the PM task.')
+    except PmError as e:
+        status, msg = ('no_key' if 'No PM MCP key' in str(e) else 'error'), str(e)
+    except Exception as e:   # never break a run over PM
+        status, msg = 'error', f'PM attach failed: {e}'[:400]
+    with con:
+        con.execute('UPDATE pm_run_links SET status=?, message=?, at=? WHERE run_id=?', (status, msg[:500], db.now(), run_id))
+    return status, msg
 
 
 def send_run(run_id):
-    """Attaches one finished run's link to its PM task, submitted by the PM member who ran it. Never raises.
-    Only a PASSED run, and only the first one per case and tester: a case is re-run until it passes, and PM keeps
-    every link it gets (the task page link already shows every run)."""
+    """When a run ends. Tester CLI: attaches its link to the PM task, submitted by the PM member who ran it - only a
+    PASSED run, and only the first one per case and tester (a case is re-run until it passes, and PM keeps every link
+    it gets). Test Assistant (reviewer): nothing is sent by itself - the reviewer sends it from the chat (push_run)."""
     con = db.connect()
     try:
-        r = con.execute('SELECT l.task_code, l.username, l.url, r.status, r.passed, r.total, r.case_id, c.tc_no, c.title '
-                        'FROM pm_run_links l JOIN runs r ON r.id=l.run_id JOIN cases c ON c.id=r.case_id WHERE l.run_id=?',
-                        (run_id,)).fetchone()
+        r = con.execute(_RUN_SQL, (run_id,)).fetchone()
         if not r:
+            return
+        if r['via'] == 'assistant':
+            msg = ('Passed: click Send to PM in the chat.' if r['status'] == 'PASSED' else
+                   f'{r["status"]}: fix the test and run again, or send it to PM if the assistant found an app bug.')
+            with con:
+                con.execute("UPDATE pm_run_links SET status='waiting', message=?, at=? WHERE run_id=?", (msg, db.now(), run_id))
             return
         sent = con.execute("SELECT l.run_id FROM pm_run_links l JOIN runs r ON r.id=l.run_id WHERE l.task_code=? AND l.username=? "
                            "AND r.case_id=? AND l.status='attached' AND l.run_id<>? LIMIT 1",
@@ -355,26 +449,46 @@ def send_run(run_id):
             with con:
                 con.execute("UPDATE pm_run_links SET status='skipped', message=?, at=? WHERE run_id=?", (skip, db.now(), run_id))
             return
-        try:
-            if not r['url']:
-                raise PmError('No LogiTestHub address for PM users (Settings -> Integrations): link not sent.')
-            member = _member_id(con, r['username'])
-            if not member:
-                raise PmError(f'Could not find "{r["username"]}" among PM members: link not sent.')
-            healed = con.execute('SELECT message FROM case_heals WHERE run_id=? ORDER BY id DESC LIMIT 1', (run_id,)).fetchone()
-            note = (f'[TC-{r["tc_no"]}] {r["title"]}: {r["status"]} {r["passed"] or 0}/{r["total"] or 0}'
-                    + (f' - {healed["message"]}' if healed else ''))[:2000]
-            res = pm_call('pm_task_test_report_attach', {'task': r['task_code'], 'url': r['url'], 'provider': 'LogiTestHub',
-                                                         'submitted_by_member_id': member, 'note': note})
-            status, msg = 'attached', ('Already attached.' if res.get('already_attached') else 'Attached to the PM task.')
-        except PmError as e:
-            status, msg = ('no_key' if 'No PM MCP key' in str(e) else 'error'), str(e)
-        except Exception as e:   # never break a run over PM
-            status, msg = 'error', f'PM attach failed: {e}'[:400]
-        with con:
-            con.execute('UPDATE pm_run_links SET status=?, message=?, at=? WHERE run_id=?', (status, msg[:500], db.now(), run_id))
+        healed = con.execute('SELECT message FROM case_heals WHERE run_id=? ORDER BY id DESC LIMIT 1', (run_id,)).fetchone()
+        _attach_run(con, run_id, r, f'[TC-{r["tc_no"]}] {r["title"]}: {r["status"]} {r["passed"] or 0}/{r["total"] or 0}'
+                    + (f' - {healed["message"]}' if healed else ''))
     finally:
         con.close()
+
+
+def push_run(run_id, username, bug=None):
+    """The reviewer's "Send to PM" on a run of their Test Assistant chat: a PASSED run, or a failed one the assistant
+    found to be an app bug (bug = what is wrong). Only after their own Test Assistant click on the task in PM.
+    Returns (ok, message)."""
+    con = db.connect()
+    try:
+        r = con.execute(_RUN_SQL, (run_id,)).fetchone()
+        if not r or r['via'] != 'assistant' or r['username'] != username:
+            return False, 'This run is not from your Test Assistant chat for a PM task.'
+        if r['link_status'] == 'attached':
+            return True, 'Already sent to PM.'
+        if r['status'] in ('running', 'queued'):
+            return False, 'The run has not finished yet.'
+        if r['status'] != 'PASSED' and not bug:
+            return False, 'Only a passed run, or a failure the assistant found to be an app bug, goes to PM.'
+        if not assistant_clicked(con, username, r['task_code']):
+            try:
+                poll_assistant_requests()   # the click may not have been read yet
+            except Exception:
+                pass
+            if not assistant_clicked(con, username, r['task_code']):
+                return False, (f'No Test Assistant click by you on {r["task_code"]} in PM yet (or PM has another email for you '
+                               'than Settings -> Users). Open the chat from the Test Assistant button in PM.')
+        head = f'[TC-{r["tc_no"]}] {r["title"]}: {r["status"]} {r["passed"] or 0}/{r["total"] or 0}'
+        status, msg = _attach_run(con, run_id, r, head if r['status'] == 'PASSED' else f'{head} - App bug: {bug}')
+        return status == 'attached', msg
+    finally:
+        con.close()
+
+
+def run_pm(con, run_id):
+    """The run's PM link state for the chat's run card (None when the run does not go to PM)."""
+    return con.execute('SELECT task_code, via, status, message FROM pm_run_links WHERE run_id=?', (run_id,)).fetchone()
 
 
 def run_finished(run_id):
@@ -392,12 +506,15 @@ def attach_later(code, username):
     threading.Thread(target=attach, args=(code, username, base), daemon=True).start()
 
 
-# ---------------------------------------------------------------- PM's "Tester CLI" button -> queue -> here
-# PM does not call LogiTestHub: the button puts a request in PM's queue (task + who clicked: member id and email) and
-# this server reads it with pm_lth_cli_requests. The clicker is found by email only (Settings -> Users). Each request
-# starts the task for that LogiTestHub account and
-# attaches their link, so the work reaches PM as the person who clicked, whoever is signed in to the browser.
-# Only one LogiTestHub server should read the queue: Settings -> Integrations -> "Pick up Tester CLI clicks".
+# ---------------------------------------------------------------- PM's "Tester CLI" / "Test Assistant" buttons -> queue -> here
+# PM does not call LogiTestHub: each button puts a request in a PM queue (task + who clicked: member id and email) and
+# this server reads it (pm_lth_cli_requests / pm_lth_assistant_requests). The clicker is found by email only
+# (Settings -> Users).
+# - Tester CLI: starts the task for that LogiTestHub account and attaches their link, so the work reaches PM as the
+#   person who clicked, whoever is signed in to the browser.
+# - Test Assistant (task's reviewer, task in Review): PM also opens the assistant page for the task. The request is
+#   only recorded here: it lets that reviewer's PASSED runs of the test cases from their chat go to PM.
+# Only one LogiTestHub server should read the queues: Settings -> Integrations -> "Pick up clicks from PM".
 
 POLL_SECONDS = 10
 
@@ -418,8 +535,16 @@ def lth_user(con, email, member_id=None):
     return r['username']
 
 
+def _record(con, table, q, code, user, status, msg):
+    with con:
+        con.execute(f'REPLACE INTO {table}(request_id, task_code, member_id, email, requested_at, username, status, message, at) '
+                    'VALUES (?,?,?,?,?,?,?,?,?)', (q.get('request_id'), code or str(q.get('task_code'))[:40],
+                                                   q.get('requested_by_member_id'), q.get('requested_by_email'),
+                                                   q.get('requested_at'), user, status, msg[:500], db.now()))
+
+
 def take_cli_request(con, q, base):
-    """One queued request -> start the task for its sender and attach their link. Records the outcome."""
+    """One queued Tester CLI request -> start the task for its sender and attach their link. Records the outcome."""
     code, member, email = norm(q.get('task_code')), q.get('requested_by_member_id'), q.get('requested_by_email')
     user, status = None, 'error'
     try:
@@ -440,45 +565,74 @@ def take_cli_request(con, q, base):
                 status, msg = 'started', f'Started for {user}.' + (f' {old} was stopped.' if old else '')
     except Exception as e:   # one bad request must not stop the queue
         msg = f'Could not take the request: {e}'[:400]
-    with con:
-        con.execute('REPLACE INTO pm_cli_requests(request_id, task_code, member_id, email, requested_at, username, status, message, at) '
-                    'VALUES (?,?,?,?,?,?,?,?,?)', (q.get('request_id'), code or str(q.get('task_code'))[:40], member, email,
-                                                 q.get('requested_at'), user, status, msg[:500], db.now()))
+    _record(con, 'pm_cli_requests', q, code, user, status, msg)
 
 
-def poll_cli_requests():
-    """Reads PM's queue once (when this server picks it up) and takes each new request. Returns how many."""
+def take_assistant_request(con, q, base=None):
+    """One queued Test Assistant request (the reviewer's click; PM opened the assistant page for them) -> recorded for
+    their LogiTestHub account: their passed runs of this task's test cases now go to PM. Nothing is started or attached."""
+    code, email = norm(q.get('task_code')), q.get('requested_by_email')
+    user, status = None, 'error'
+    try:
+        user = lth_user(con, email, q.get('requested_by_member_id'))
+        if not code:
+            msg = f'Not a task code: {q.get("task_code")}'
+        elif not email:
+            status, msg = 'no_email', 'PM sent no email for who clicked (requested_by_email).'
+        elif not user:
+            status, msg = 'no_account', f'No LogiTestHub account with the email {email} (Settings -> Users).'
+        else:
+            status, msg = 'ready', f'Review by {user}: each passed run of the test cases from their chat goes to PM.'
+    except Exception as e:   # one bad request must not stop the queue
+        msg = f'Could not take the request: {e}'[:400]
+    _record(con, 'pm_assistant_requests', q, code, user, status, msg)
+
+
+def _poll(tool, table, since_key, take, need_base):
+    """Reads one PM queue once (when this server picks it up) and takes each new request. Returns how many."""
     import budget
     con = db.connect()
     try:
         if budget.get_setting(con, 'pm.cli_poll') != '1' or not os.environ.get('LTH_PM_MCP_KEY'):
             return 0
         base = public_base()
-        if not base:
+        if need_base and not base:
             return 0   # links PM users can open need Settings -> Integrations -> LogiTestHub address
-        since = budget.get_setting(con, 'pm.cli_since') or ''
-        res = pm_call('pm_lth_cli_requests', {'since': since, 'limit': 50})
+        since = budget.get_setting(con, since_key) or ''
+        res = pm_call(tool, {'since': since, 'limit': 50})
         n = 0
         for q in res.get('requests') or []:
-            if not con.execute('SELECT 1 FROM pm_cli_requests WHERE request_id=?', (q.get('request_id'),)).fetchone():
-                take_cli_request(con, q, base)
+            if not con.execute(f'SELECT 1 FROM {table} WHERE request_id=?', (q.get('request_id'),)).fetchone():
+                take(con, q, base)
                 n += 1
             since = max(since, str(q.get('requested_at') or ''))
         with con:
-            budget.set_setting(con, 'pm.cli_since', since)
+            budget.set_setting(con, since_key, since)
         return n
     finally:
         con.close()
 
 
+def poll_cli_requests():
+    return _poll('pm_lth_cli_requests', 'pm_cli_requests', 'pm.cli_since', take_cli_request, True)
+
+
+def poll_assistant_requests():
+    return _poll('pm_lth_assistant_requests', 'pm_assistant_requests', 'pm.assistant_since', take_assistant_request, False)
+
+
 def _poll_loop():
     import time
+    wait = {}   # queue -> when to try again after an error (PM down, key expired, key without that tool)
     while True:
-        try:
-            poll_cli_requests()
-        except Exception as e:   # PM down / key expired: try again next time
-            print(f' * PM Tester CLI queue: {e}')
-            time.sleep(60)
+        for name, fn in (('Tester CLI', poll_cli_requests), ('Test Assistant', poll_assistant_requests)):
+            if wait.get(name, 0) > time.time():
+                continue
+            try:
+                fn()
+            except Exception as e:
+                print(f' * PM {name} queue: {e}')
+                wait[name] = time.time() + 60
         time.sleep(POLL_SECONDS)
 
 
@@ -516,7 +670,10 @@ def register(app, con, login_required, current_user):
             'UNION SELECT attached_by FROM pm_task_links WHERE task_code=?', (code, code, code)) if r['u']]
         cli_reqs = con().execute('SELECT * FROM pm_cli_requests WHERE task_code=? ORDER BY requested_at DESC LIMIT 20',
                                  (code,)).fetchall()
+        asst_reqs = con().execute('SELECT * FROM pm_assistant_requests WHERE task_code=? ORDER BY requested_at DESC LIMIT 20',
+                                  (code,)).fetchall()
         return render_template('task.html', code=code, rows=rows, s=summary(rows), link=link, links=links, by=by, cli_reqs=cli_reqs,
+                               asst_reqs=asst_reqs,
                                testers=sorted(set(testers)), run_links=run_links(con(), code, by),
                                mine=active_task(con(), me['username']) == code, hours=ACTIVE_HOURS,
                                clicked=pm_clicked(con(), me['username'], code),
@@ -569,15 +726,6 @@ def register(app, con, login_required, current_user):
         if not pid:
             flash('Create a project first, then open the Tester Assistant.', 'info')
             return redirect(url_for('pmtasks.page', code=code))
-        t = con().execute('SELECT id FROM chat_threads WHERE created_by=? AND task_code=? AND project_id=? ORDER BY id DESC LIMIT 1',
-                          (me['username'], code, pid)).fetchone()
-        if t:
-            tid = t['id']
-        else:
-            c = con()
-            with c:
-                tid = c.execute('INSERT INTO chat_threads(project_id, title, created_by, created_at, updated_at, task_code) '
-                                'VALUES (?,?,?,?,?,?)', (pid, f'{code}: test cases', me['username'], db.now(), db.now(), code)).lastrowid
-        return redirect(url_for('assistant.page', pid=pid, t=tid))
+        return redirect(url_for('assistant.page', pid=pid, t=task_thread(con(), me['username'], code, pid)))
 
     app.register_blueprint(bp)
