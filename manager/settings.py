@@ -369,6 +369,98 @@ def apply_system(con):
     os.environ['LTH_HELPERS_DIR'] = _get(con, 'sys.helpers_dir')
     os.environ['ETAIL_AI_MODEL'] = _get(con, 'sys.ai_model')
     os.environ['LTH_AI_PROVIDER'] = _get(con, 'sys.ai_provider')
+    import budget   # AI keys saved here; none = what the server was started with (its env file / start script)
+    for name, (env, _, _, _) in SECRETS.items():
+        v = envs.decrypt(budget.get_setting(con, name) or '') or _SECRETS_STARTED_WITH[env]
+        if v:
+            os.environ[env] = v
+        else:
+            os.environ.pop(env, None)
+
+
+# ---------------------------------------------------------------- AI keys (Settings -> System)
+# Pasted in Settings -> System, stored encrypted (envs.encrypt), never shown again; an empty box keeps the saved one.
+# - Anthropic API key: AI steps in runs, Generate with AI, and the Test Assistant when the provider is the API.
+# - Claude subscription token: the Test Assistant / Generate with AI run `claude -p` (lib/ai.js) when the provider is
+#   the Claude subscription. A server has no browser to sign in with, so it uses a long-lived token made on any PC
+#   with `claude setup-token` (CLAUDE_CODE_OAUTH_TOKEN).
+SECRETS = {   # setting -> (environment variable, pattern, label, where to get it)
+    'sys.anthropic_key': ('ANTHROPIC_API_KEY', re.compile(r'^sk-ant-api\d\d-[A-Za-z0-9_\-]{20,}$'), 'Anthropic API key',
+                          'console.anthropic.com -> API keys (it starts with sk-ant-api)'),
+    'sys.claude_token': ('CLAUDE_CODE_OAUTH_TOKEN', re.compile(r'^sk-ant-oat\d\d-[A-Za-z0-9_\-]{20,}$'), 'Claude subscription token',
+                         '`claude setup-token` (it starts with sk-ant-oat)'),
+}
+_SECRETS_STARTED_WITH = {env: os.environ.get(env) for env, _, _, _ in SECRETS.values()}
+
+
+def secret_source(con, name):
+    """Where the key in use comes from, for System information."""
+    import budget
+    env = SECRETS[name][0]
+    if budget.get_setting(con, name):
+        return 'Saved here (Settings -> System)'
+    return f'From the server settings ({env})' if os.environ.get(env) else None
+
+
+def anthropic_test(key=None):
+    """Checks an Anthropic API key (typed, else the one in use) by listing models: no tokens used. Returns (ok, message)."""
+    import urllib.error
+    import urllib.request
+    key = key or os.environ.get('ANTHROPIC_API_KEY')
+    if not key:
+        return False, 'No Anthropic API key on this server: paste one and Save.'
+    req = urllib.request.Request('https://api.anthropic.com/v1/models?limit=1',
+                                 headers={'x-api-key': key, 'anthropic-version': '2023-06-01'})
+    try:
+        with urllib.request.urlopen(req, timeout=20):
+            return True, 'Connected to the Anthropic API: the key works.'
+    except urllib.error.HTTPError as e:
+        return False, ('The Anthropic API refused this key (wrong, revoked or disabled).' if e.code in (401, 403)
+                       else f'The Anthropic API answered HTTP {e.code}.')
+    except (urllib.error.URLError, TimeoutError) as e:
+        return False, f'Cannot reach api.anthropic.com from this server ({getattr(e, "reason", e)}).'
+
+
+def claude_cli():
+    """The claude executable, found the way lib/ai.js finds it; None when it is not installed."""
+    if os.environ.get('LTH_CLAUDE_CLI'):
+        return os.environ['LTH_CLAUDE_CLI']
+    appdata = os.environ.get('APPDATA')
+    for f in ([os.path.join(appdata, 'npm', 'node_modules', '@anthropic-ai', 'claude-code', 'bin', n) for n in ('claude.exe', 'claude')]
+              if appdata else []) + ['/usr/local/bin/claude', '/usr/bin/claude']:
+        if os.path.isfile(f):
+            return f
+    return shutil.which('claude')
+
+
+def claude_test(token=None):
+    """Asks Claude Code for one word with the token (typed, else the one in use). Returns (ok, message)."""
+    exe = claude_cli()
+    if not exe:
+        return False, ('Claude Code is not installed on this server. Install it: sudo npm install -g @anthropic-ai/claude-code '
+                       '(Windows: npm install -g @anthropic-ai/claude-code).')
+    env = {k: v for k, v in os.environ.items() if k not in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN')}   # else it bills the API
+    if token:
+        env['CLAUDE_CODE_OAUTH_TOKEN'] = token
+    try:
+        p = subprocess.run([exe, '-p', 'Reply with the single word OK.', '--output-format', 'json', '--tools', '',
+                            '--no-session-persistence', '--setting-sources', ''], capture_output=True, text=True,
+                           timeout=90, env=env, cwd=db.RUNNER_DIR)
+    except subprocess.TimeoutExpired:
+        return False, 'Claude Code did not answer in 90 seconds.'
+    except OSError as e:
+        return False, f'Could not start Claude Code ({exe}): {e}'
+    try:
+        j = json.loads(p.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        j = {}
+    if p.returncode == 0 and not j.get('is_error'):
+        model = re.sub(r'\[.*\]$', '', next((m for m in (j.get('modelUsage') or {}) if 'haiku' not in m.lower()), ''))
+        return True, f'Connected to the Claude subscription{f" ({model})" if model else ""}. Answer: {str(j.get("result", "")).strip()[:40]}'
+    why = str(j.get('result') or p.stderr or p.stdout or f'exit code {p.returncode}').strip()[:300]
+    if re.search(r'401|invalid|expired|authenticat|log ?in', why, re.I):
+        why += ' - the token is wrong or expired: make a new one with `claude setup-token`.'
+    return False, f'Claude Code answered with an error: {why}'
 
 
 _INFO = {}
@@ -395,7 +487,9 @@ def _system_info(con):
         ('Python', f'{platform.python_version()} ({sys.executable})'),
         ('Node.js', _INFO['node']),
         ('Playwright', _INFO['playwright']),
-        ('Anthropic API key', 'Set on this server' if os.environ.get('ANTHROPIC_API_KEY') else 'Not set: AI steps and Generate with AI will not work'),
+        ('Anthropic API key', secret_source(con, 'sys.anthropic_key') or 'Not set: AI steps and Generate with AI will not work'),
+        ('Claude Code CLI', claude_cli() or 'not installed: the Claude subscription provider cannot answer'),
+        ('Claude subscription token', secret_source(con, 'sys.claude_token') or 'Not set: on a server, paste one under AI provider'),
         ('Runner folder', db.RUNNER_DIR),
         ('Run recordings', f'{runs} run folders in {db.RUNS_DIR}'),
     ]
@@ -621,7 +715,8 @@ def register(app, con, admin_required, current_user):
         for k in AUTO_KEYS:   # empty = automatic: the box stays empty and shows the folder in use
             vals[k] = budget.get_setting(c, k) or ''
         return render_template('settings_system.html', fields=SYSTEM, vals=vals, models=list(pricing.PRICES), providers=AI_PROVIDERS,
-                               info=_system_info(c), auto=_auto_paths(c), auto_keys=AUTO_KEYS)
+                               info=_system_info(c), auto=_auto_paths(c), auto_keys=AUTO_KEYS,
+                               saved={n: bool(budget.get_setting(c, n)) for n in SECRETS})
 
     @bp.route('/system', methods=['POST'])
     @super_required
@@ -647,21 +742,46 @@ def register(app, con, admin_required, current_user):
             errors.append('AI model: choose one from the list.')
         if not new['sys.audit_days'].isdigit() or not 7 <= int(new['sys.audit_days']) <= 365:
             errors.append('Keep audit log: a whole number of days from 7 to 365.')
+        secrets = {n: re.sub(r'\s+', '', f.get(n, '')) for n in SECRETS}   # empty = keep the saved one
+        for n, v in secrets.items():
+            if v and not SECRETS[n][1].match(v):
+                errors.append(f'{SECRETS[n][2]}: paste the whole key from {SECRETS[n][3]}.')
         if errors:
             for e in errors:
                 flash(e, 'danger')
             return redirect(url_for('settings.system'))
         old = {k: (budget.get_setting(c, k) or '') if k in AUTO_KEYS else _get(c, k) for k in new}
+        import envs
+        cleared = {n for n in SECRETS if f.get(n + '_clear')}
         with c:
             for k, v in new.items():
                 budget.set_setting(c, k, v)
+            for n in SECRETS:
+                if secrets[n] or n in cleared:
+                    budget.set_setting(c, n, '' if n in cleared else envs.encrypt(secrets[n]))
         apply_system(c)
         changed = {k: [old[k], v] for k, v in new.items() if str(old[k]) != v}
+        for n in SECRETS:   # the key itself is never written to the audit log
+            if secrets[n] or n in cleared:
+                changed[n] = ['', 'removed' if n in cleared else 'replaced']
         me = current_user()
         write_audit(me['username'], 'system_save', 'settings', None, 'ok',
                     'System settings saved' if changed else 'System settings saved (no change)',
                     {'changed': changed} if changed else None, request.remote_addr)
         flash('System settings saved. New runs use them straight away.' if changed else 'Nothing changed.', 'success')
+        return redirect(url_for('settings.system'))
+
+    @bp.route('/system/key-test/<which>', methods=['POST'])
+    @super_required
+    def system_key_test(which):
+        """Test buttons: the key typed in the box (not saved), else the one in use."""
+        name = {'anthropic': 'sys.anthropic_key', 'claude': 'sys.claude_token'}.get(which) or abort(404)
+        v = re.sub(r'\s+', '', request.form.get(name, ''))
+        if v and not SECRETS[name][1].match(v):
+            flash(f'{SECRETS[name][2]}: paste the whole key from {SECRETS[name][3]}.', 'danger')
+            return redirect(url_for('settings.system'))
+        ok, msg = (anthropic_test if which == 'anthropic' else claude_test)(v or None)
+        flash(msg + (' Save to keep it.' if ok and v else ''), 'success' if ok else 'danger')
         return redirect(url_for('settings.system'))
 
     # ------------------------------------------------------------ Integrations: PM (task links, test report link)
