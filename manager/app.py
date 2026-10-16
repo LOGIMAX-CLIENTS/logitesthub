@@ -221,8 +221,8 @@ def _pm_user(m):
     with c:
         u = c.execute('SELECT * FROM users WHERE pm_member_id=?', (m['pm_id'],)).fetchone()
         mail = m['login'].strip().lower()[:254] if '@' in m['login'] else None
-        if mail and c.execute('SELECT 1 FROM users WHERE LOWER(email)=? AND pm_member_id<=>?', (mail, None)).fetchone():
-            mail = None   # a local account already has this email: leave it to an admin
+        if mail and c.execute('SELECT 1 FROM users WHERE LOWER(email)=? AND NOT pm_member_id<=>?', (mail, m['pm_id'])).fetchone():
+            mail = None   # another account already has this email (local, or linked by a PM Tester CLI click): leave it to an admin
         if u:
             c.execute('UPDATE users SET pm_login=?, email=COALESCE(email, ?) WHERE id=?', (m['login'][:254], mail, u['id']))
             return u
