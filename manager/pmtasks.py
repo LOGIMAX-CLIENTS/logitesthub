@@ -36,7 +36,8 @@ CODE_RE = re.compile(r'^[A-Z][A-Z0-9]{0,9}(-[A-Z0-9]{1,12}(\.[0-9]{1,4})*){1,4}$
 ACTIVE_HOURS = 12
 PM_URL_DEFAULT = 'https://pm.logimaxindia.com/api/mcp/rpc/'
 # the PM MCP tools LogiTestHub's key must be allowed to call (Settings -> Integrations -> Test connection checks them)
-NEEDED_TOOLS = ('pm_lth_cli_requests', 'pm_lth_assistant_requests', 'pm_task_test_report_attach', 'pm_members_search')
+NEEDED_TOOLS = ('pm_lth_cli_requests', 'pm_lth_assistant_requests', 'pm_lth_task_events', 'pm_lth_run_status',
+                'pm_task_test_report_attach', 'pm_members_search')
 # Settings -> Integrations (pm.* settings) override these; an empty box there leaves what the server was started with
 ENV_KEYS = {'pm.mcp_url': 'LTH_PM_MCP_URL', 'pm.mcp_key': 'LTH_PM_MCP_KEY', 'pm.public_url': 'LTH_PUBLIC_URL'}
 _STARTED_WITH = {e: os.environ.get(e) for e in ENV_KEYS.values()}
@@ -86,6 +87,11 @@ CREATE TABLE IF NOT EXISTS pm_assistant_requests (
   request_id VARCHAR(64) PRIMARY KEY, task_code VARCHAR(40) NOT NULL, member_id VARCHAR(64), email VARCHAR(254), requested_at VARCHAR(40),
   username VARCHAR(64), status VARCHAR(16) NOT NULL, message VARCHAR(500), at VARCHAR(32) NOT NULL,
   KEY ix_pm_assistant_requests_task (task_code, username)
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS pm_task_events (
+  event_id VARCHAR(64) PRIMARY KEY, task_code VARCHAR(40), from_status VARCHAR(64), to_status VARCHAR(64),
+  changed_at VARCHAR(40), email VARCHAR(254), stopped VARCHAR(500), at VARCHAR(32) NOT NULL,
+  KEY ix_pm_task_events_task (task_code)
 ) ENGINE=InnoDB
 """
 
@@ -656,11 +662,77 @@ def poll_assistant_requests():
     return _poll('pm_lth_assistant_requests', 'pm_assistant_requests', 'pm.assistant_since', take_assistant_request, False)
 
 
+# ---------------------------------------------------------------- PM task moved on (Review ...) -> its testing stops
+# PM puts each process change of a task in a queue (pm_lth_task_events). When a task leaves Development / Testing
+# for Review or later, testing it is over: it stops for every tester. Sent back to Development, the tester's next
+# Tester CLI click starts it again.
+TESTING_DONE = re.compile(r'review|deploy|deliver|done|complete|closed|releas', re.I)
+
+
+def _first(q, *names):
+    """The first field PM filled in among names (field names as PM may spell them)."""
+    for n in names:
+        v = q.get(n)
+        if isinstance(v, dict):   # e.g. "to": {"status": "Review"}
+            v = v.get('status') or v.get('name')
+        if v not in (None, ''):
+            return str(v)
+    return ''
+
+
+def take_task_event(con, q):
+    """One queued process change of a PM task. Records it; stops the task for every tester when it moved to Review
+    or later. Never raises."""
+    code = norm(_first(q, 'task_code', 'code', 'task'))
+    to = _first(q, 'to_status', 'status', 'new_status', 'to_process', 'process', 'to')
+    stopped = []
+    if code and TESTING_DONE.search(to):
+        with con:
+            stopped = [x['username'] for x in con.execute('SELECT username FROM user_tasks WHERE task_code=?', (code,))]
+            con.execute('DELETE FROM user_tasks WHERE task_code=?', (code,))
+    with con:
+        con.execute('REPLACE INTO pm_task_events(event_id, task_code, from_status, to_status, changed_at, email, stopped, at) '
+                    'VALUES (?,?,?,?,?,?,?,?)',
+                    (_first(q, 'event_id', 'id', 'request_id')[:64], code or None,
+                     _first(q, 'from_status', 'old_status', 'from_process', 'from')[:64], to[:64],
+                     _first(q, 'changed_at', 'at', 'created_at', 'requested_at')[:40],
+                     _first(q, 'changed_by_email', 'requested_by_email', 'email')[:254],
+                     ', '.join(stopped)[:500] or None, db.now()))
+    if stopped:
+        print(f' * PM: {code} moved to {to}: testing stopped for {", ".join(stopped)}')
+
+
+def poll_task_events():
+    """Reads PM's task-event queue once (when this server picks up PM clicks). Returns how many were new."""
+    import budget
+    con = db.connect()
+    try:
+        if budget.get_setting(con, 'pm.cli_poll') != '1' or not os.environ.get('LTH_PM_MCP_KEY'):
+            return 0
+        since = budget.get_setting(con, 'pm.events_since') or ''
+        res = pm_call('pm_lth_task_events', {'since': since, 'limit': 50})
+        rows = res.get('events') or res.get('requests') or res.get('items') or []
+        n = 0
+        for q in rows:
+            eid = _first(q, 'event_id', 'id', 'request_id')
+            if not eid or con.execute('SELECT 1 FROM pm_task_events WHERE event_id=?', (eid[:64],)).fetchone():
+                continue
+            take_task_event(con, q)
+            n += 1
+            since = max(since, _first(q, 'changed_at', 'at', 'created_at', 'requested_at'))
+        with con:
+            budget.set_setting(con, 'pm.events_since', since)
+        return n
+    finally:
+        con.close()
+
+
 def _poll_loop():
     import time
     wait = {}   # queue -> when to try again after an error (PM down, key expired, key without that tool)
     while True:
-        for name, fn in (('Tester CLI', poll_cli_requests), ('Test Assistant', poll_assistant_requests)):
+        for name, fn in (('Tester CLI', poll_cli_requests), ('Test Assistant', poll_assistant_requests),
+                         ('task events', poll_task_events)):
             if wait.get(name, 0) > time.time():
                 continue
             try:
