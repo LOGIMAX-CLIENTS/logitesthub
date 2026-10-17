@@ -49,7 +49,8 @@ def package_path():
         return tgz
 
 
-CODE = ['run.js', 'cli/*.js', 'lib/*.js']   # the code a tester's CLI runs (same list in cli/lth.js: cliFingerprint)
+# the code a tester's CLI runs, plus the /tester skill it installs (same list in cli/lth.js: cliFingerprint)
+CODE = ['run.js', 'cli/*.js', 'lib/*.js', 'cli/skill/*.md', 'cli/skill/references/*.md']
 _fp = {}
 
 

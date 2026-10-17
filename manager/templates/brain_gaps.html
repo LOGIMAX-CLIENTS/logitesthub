@@ -1,0 +1,102 @@
+{% extends 'base.html' %}
+{% block title %}Brain gaps · {{ p.name }}{% endblock %}
+{% block crumbs %}<span class="tm-crumbs"><a href="{{ url_for('project', pid=p.id) }}">{{ p.name }}</a> <span>/</span> <b>Brain gaps</b></span>{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap gap-2 align-items-end justify-content-between mb-3">
+  <div><h1 class="h4 mb-0">Knowledge brain gaps</h1>
+    <div class="text-secondary small">What the application's knowledge brain was missing while a module was tested. The Test Assistant
+      found it in the code instead and noted it here. Give the open ones to the brain team; when they say it is done, press
+      <b>Check again</b>.</div></div>
+  <div class="d-flex gap-2">
+    <button class="btn btn-outline-primary" type="button" id="copyAll" {{ 'disabled' if not counts.get('open') }}
+            title="All open gaps as Markdown, to paste in a message to the brain team">⧉ Copy open gaps</button>
+    <a class="btn btn-outline-primary {{ 'disabled' if not counts.get('open') }}" href="{{ url_for('brain_gaps.download', pid=p.id, status='open') }}">⬇ Download .md</a>
+    <form method="post" action="{{ url_for('brain_gaps.check_all', pid=p.id) }}" class="d-inline" data-busy="Checking the brain…">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="status" value="{{ status }}">
+      <button class="btn btn-success" {{ 'disabled' if not counts.get('open') }}
+              title="Sync the code copy and read the brain again for every open gap">↻ Check again (all open)</button></form>
+  </div>
+</div>
+
+<div class="d-flex flex-wrap gap-2 align-items-center mb-2 small">
+  {% for k, label, help in statuses %}<a class="btn btn-sm {{ 'btn-primary' if status == k else 'btn-outline-secondary' }}" title="{{ help }}"
+     href="{{ url_for('brain_gaps.page', pid=p.id, status=k) }}">{{ label }} <span class="ms-1">{{ counts.get(k, 0) }}</span></a>{% endfor %}
+  <a class="btn btn-sm {{ 'btn-primary' if status == 'all' else 'btn-outline-secondary' }}" href="{{ url_for('brain_gaps.page', pid=p.id, status='all') }}">All</a>
+</div>
+
+{% for g in gaps %}
+<div class="panel mb-2">
+  <div class="d-flex flex-wrap gap-2 align-items-start justify-content-between">
+    <div>
+      <span class="badge text-bg-{{ {'open': 'warning', 'updated': 'success', 'closed': 'secondary'}[g.status] }}">{{ status_label[g.status] }}</span>
+      <span class="text-secondary small ms-1">G{{ g.id }} · {{ g.module }}{% if g.doc %} / {{ g.doc }}{% endif %}</span>
+      <div class="fw-semibold mt-1">{{ g.missing }}</div>
+      {% if g.screen %}<div class="small text-secondary">{{ g.screen }}</div>{% endif %}
+    </div>
+    <div class="d-flex gap-1 flex-wrap">
+      <button class="btn btn-sm btn-outline-secondary js-copy" type="button" data-copy="g{{ g.id }}">⧉ Copy</button>
+      <form method="post" action="{{ url_for('brain_gaps.check_all', pid=p.id) }}" data-busy="Checking…">
+        <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="gid" value="{{ g.id }}"><input type="hidden" name="status" value="{{ status }}">
+        <button class="btn btn-sm btn-outline-success">↻ Check again</button></form>
+      <form method="post" action="{{ url_for('brain_gaps.set_status', pid=p.id, gid=g.id) }}">
+        <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="back" value="{{ status }}">
+        {% if g.status == 'closed' %}<button class="btn btn-sm btn-link" name="status" value="open">Reopen</button>
+        {% else %}<button class="btn btn-sm btn-link text-secondary" name="status" value="closed" title="Not needed / will not be added">Close</button>{% endif %}
+      </form>
+    </div>
+  </div>
+  {% if g.detail %}<div class="small mt-2" style="white-space: pre-line"><span class="text-secondary">What the code does:</span> {{ g.detail }}</div>{% endif %}
+  {% if g.evidence %}<div class="small mt-1"><span class="text-secondary">Code:</span> <code>{{ g.evidence }}</code></div>{% endif %}
+  {% if g.suggested %}<details class="small mt-1"><summary class="text-secondary">Suggested text for the doc</summary>
+    <pre class="small mb-0 mt-1" style="white-space: pre-wrap">{{ g.suggested }}</pre></details>{% endif %}
+  <div class="small mt-1"><span class="text-secondary">Check looks for:</span>
+    {% for t in g.terms_list %}{% set at = g.result.found.get(t) if g.result else None %}
+      <span class="badge rounded-pill {{ 'text-bg-success' if at else 'text-bg-light border' }}" title="{{ at or 'not in the brain yet' }}">{{ '✓ ' if at }}{{ t }}</span>{% endfor %}</div>
+  {% if g.result %}<div class="small mt-1 {{ 'text-success' if g.result.status == 'updated' else 'text-warning-emphasis' }}">
+    Last check {{ g.checked_at|dmy }} by {{ g.checked_by }}:
+    {% if g.result.status == 'updated' %}✅ updated in the brain ({{ g.result.found.values()|join(', ') }}){% else %}❌ still missing{% if g.result.missing %}: {{ g.result.missing|join(', ') }}{% endif %}{% endif %}.
+    {{ g.result.note }}{% if g.result.ref %} <span class="text-secondary">Brain now: {{ g.result.ref }}.</span>{% endif %}</div>{% endif %}
+  <div class="small text-secondary mt-1">Found {{ g.created_at|dmy }} by {{ g.created_by or '-' }}{% if g.source == 'assistant' and g.thread_id %}
+    in <a href="{{ url_for('assistant.page', pid=p.id, t=g.thread_id) }}">Test Assistant chat #{{ g.thread_id }}</a>{% endif %}{% if g.case_id and g.tc_no %}
+    · <a href="{{ url_for('case', cid=g.case_id) }}">TC-{{ g.tc_no }}</a>{% endif %} · seen {{ g.hits }}x{% if g.brain_ref %} · brain then: {{ g.brain_ref }}{% endif %}</div>
+  <textarea class="d-none" id="g{{ g.id }}">## G{{ g.id }} · {{ g.module }} · {{ g.doc or '(any doc)' }}
+
+**Missing:** {{ g.missing }}
+{% if g.screen %}
+**Screen:** {{ g.screen }}
+{% endif %}{% if g.detail %}
+**What the code does:** {{ g.detail }}
+{% endif %}{% if g.evidence %}
+**Code:** {{ g.evidence }}
+{% endif %}{% if g.suggested %}
+**Suggested text for the doc:**
+
+{{ g.suggested }}
+{% endif %}
+**Check looks for:** {{ g.terms_list|join(', ') }}</textarea>
+</div>
+{% else %}
+<div class="panel text-center text-secondary py-4">{% if status == 'open' %}No open brain gaps. When the Test Assistant has to read
+  something from the code because the brain does not say it, it is listed here.{% else %}Nothing here.{% endif %}</div>
+{% endfor %}
+<textarea class="d-none" id="allOpen">{{ md }}</textarea>
+
+<script>
+(function () {
+  function copy(text, btn) {
+    var done = function () { var t = btn.textContent; btn.textContent = '✓ Copied'; setTimeout(function () { btn.textContent = t; }, 1500); };
+    if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(text).then(done); return; }
+    var ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); done(); } finally { ta.remove(); }
+  }
+  var all = document.getElementById('copyAll');
+  if (all) all.addEventListener('click', function () { copy(document.getElementById('allOpen').value, all); });
+  document.querySelectorAll('.js-copy').forEach(function (b) {
+    b.addEventListener('click', function () { copy(document.getElementById(b.dataset.copy).value, b); });
+  });
+  document.querySelectorAll('form[data-busy]').forEach(function (f) {
+    f.addEventListener('submit', function () { var b = f.querySelector('button'); b.disabled = true; b.textContent = f.dataset.busy; });
+  });
+})();
+</script>
+{% endblock %}
