@@ -79,8 +79,7 @@
     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
     <input name="q" value="{{ q }}" placeholder="Search schedule runs…" aria-label="Search scheduled runs">
   </form>
-  <span class="d-inline-block" tabindex="0" {% if not all_runs %}title="Create a Test Run first (Test Runs tab): a schedule repeats an existing Test Run."{% endif %}>
-    <button class="btn btn-success tb-add" type="button" data-bs-toggle="modal" data-bs-target="#newSched" {{ 'disabled' if not all_runs }}>Create a Scheduled Run</button></span>
+  <button class="btn btn-success tb-add" type="button" data-bs-toggle="modal" data-bs-target="#quickSched">Create a Scheduled Run</button>
 </div>
 <div class="trl">
   {% for s in scheds %}{% set ls = s_summ.get(s.last_exec_id) %}
@@ -110,9 +109,8 @@
   <div class="tr-empty">
     <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/><path d="m9 15 2 2 4-4"/></svg>
     <b>{{ 'No schedules match' if q else 'Create your first schedule' }}</b>
-    <span>{{ 'Create a Test Run first, then schedule it.' if not all_runs else 'Select a test run to set up automated execution based on your preferred schedule.' }}</span>
-    {% if all_runs and not q %}<button class="btn btn-success btn-sm mt-2" data-bs-toggle="modal" data-bs-target="#newSched">Create a Scheduled Run</button>
-    {% elif not all_runs %}<a class="btn btn-success btn-sm mt-2" href="{{ url_for('testruns.index') }}">Go to Test Runs</a>{% endif %}
+    <span>Give it a name, pick the test cases and the environment, and when it should run.</span>
+    {% if not q %}<button class="btn btn-success btn-sm mt-2" data-bs-toggle="modal" data-bs-target="#quickSched">Create a Scheduled Run</button>{% endif %}
   </div>
   {% endfor %}
 </div>
@@ -146,6 +144,56 @@
   </form></div>
 </div>
 
+<!-- Create a Scheduled Run in one step: name + test cases + environment + when -->
+<div class="modal fade" id="quickSched" tabindex="-1" aria-labelledby="qsTitle" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+    <form class="modal-content tb-modal cp" method="post" action="{{ url_for('testruns.schedule_quick') }}" id="qsForm">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="modal-header"><h2 class="modal-title h6" id="qsTitle">Create a Scheduled Run</h2><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+      <div class="modal-body">
+        <div class="row g-2">
+          <div class="col-md-6"><label class="form-label" for="qsName">Name</label>
+            <input class="form-control form-control-sm" id="qsName" name="name" maxlength="160" required placeholder="Test domain - Supplier &amp; GRN"></div>
+          <div class="col-md-3"><label class="form-label" for="qsProj">Project</label>
+            <select class="form-select form-select-sm" id="qsProj" name="project_id" required>{% for p in projects %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select></div>
+          <div class="col-md-3"><label class="form-label" for="qsEnv">Run on</label>
+            <select class="form-select form-select-sm" id="qsEnv" name="env_id" required>{% for e in env_list if e.owner is none %}<option value="{{ e.id }}">{{ e.name }}</option>{% endfor %}</select></div>
+        </div>
+
+        <div class="form-label mt-3 mb-1">Test cases <span class="text-secondary small">(<b id="qsCount">0</b> selected from <span id="qsFolders">0</span> folder(s) · web, Tester Assistant and Tester CLI cases)</span></div>
+        <div class="cp-tools px-0">
+          <label class="tm-search flex-grow-1"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+            <input id="qsSearch" type="search" placeholder="Search by TC number or title" aria-label="Search test cases"></label>
+          <select class="form-select form-select-sm cp-source" id="qsSource" aria-label="Made with">
+            <option value="">All sources</option><option value="assistant">Tester Assistant</option><option value="cli">Tester CLI</option><option value="manual">Manual / generated</option></select>
+          <button type="button" class="btn btn-sm btn-link" id="qsExpand">Expand all</button>
+          <button type="button" class="btn btn-sm btn-link text-danger" id="qsClear">Clear</button>
+        </div>
+        <div class="qs-cases" id="qsBody" role="tree" aria-label="Folders and test cases"></div>
+
+        <div class="form-label mt-3">When</div>
+        <div class="sc-kind" role="radiogroup">
+          {% for k, lbl in (('once', 'Once'), ('daily', 'Every day'), ('weekly', 'Weekly')) %}
+          <label><input type="radio" name="kind" value="{{ k }}" {{ 'checked' if k == 'once' }} onchange="scKind(this.form)"> {{ lbl }}</label>{% endfor %}
+        </div>
+        <div class="row g-2 mt-1">
+          <div class="col-6 sc-once"><label class="form-label small" for="qsDate">Date</label><input class="form-control form-control-sm" id="qsDate" type="date" name="run_date" min="{{ today }}" value="{{ today }}"></div>
+          <div class="col-6"><label class="form-label small" for="qsTime">Time</label><input class="form-control form-control-sm" id="qsTime" type="time" name="at_time" required></div>
+        </div>
+        <div class="sc-weekly mt-2" hidden>{% for d in days %}<label class="sc-day"><input type="checkbox" name="weekdays" value="{{ loop.index0 }}" {{ 'checked' if loop.index0 < 5 }}><span>{{ d }}</span></label>{% endfor %}</div>
+        <div class="small text-secondary mt-3">Runs on this server, one test case after another, with video + steps for each. A changed screen
+          (a new required field, a new id or label) is auto-healed and the test case updated; you are told what changed and who changed it.</div>
+      </div>
+      <div class="modal-footer">
+        {% if all_runs %}<button type="button" class="btn btn-link btn-sm me-auto" data-bs-toggle="modal" data-bs-target="#newSched">Schedule an existing Test Run instead</button>{% endif %}
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-primary">Create schedule</button>
+      </div>
+    </form>
+  </div>
+</div>
+<script type="application/json" id="qsData">{{ picker|tojson }}</script>
+
 <!-- Create schedule -->
 <div class="modal fade" id="newSched" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-dialog-centered">{{ m.schedule_form(all_runs, env_list|selectattr('owner', 'none')|list, days, today, back=url_for('testruns.index', tab='scheduled')) }}</div>
@@ -153,6 +201,23 @@
 {% endblock %}
 {% block scripts %}
 {{ m.schedule_js() }}
+<script src="{{ static_v('case_picker.js') }}"></script>
+<script>
+(function () {   // Create a Scheduled Run: the picker shows the chosen project's cases; time defaults to a few minutes from now
+  var $ = function (id) { return document.getElementById(id); };
+  if (!$('qsData')) return;
+  var proj = $('qsProj');
+  var pk = casePicker({ body: $('qsBody'), data: JSON.parse($('qsData').textContent), form: $('qsForm'), requireOne: true,
+                        search: $('qsSearch'), source: $('qsSource'), count: $('qsCount'), folders: $('qsFolders'),
+                        expand: $('qsExpand'), clear: $('qsClear'), project: +proj.value });
+  proj.addEventListener('change', function () { pk.setProject(proj.value); });
+  $('quickSched').addEventListener('show.bs.modal', function () {
+    var t = new Date(Date.now() + 5 * 60000), p = function (n) { return String(n).padStart(2, '0'); };
+    if (!$('qsTime').value) $('qsTime').value = p(t.getHours()) + ':' + p(t.getMinutes());
+  });
+  scKind($('qsForm'));
+})();
+</script>
 <script>
 function trFolders(pid) {
   var sel = document.getElementById('trFolder');

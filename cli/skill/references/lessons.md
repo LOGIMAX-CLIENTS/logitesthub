@@ -86,3 +86,7 @@ the server: `tester lessons <project> --json` (read them too - they are newer an
     `grn_item_grn_id`. The test saved a real GRN, then its check and Clean up failed and left the item row behind.
     Avoid: every table / column from the code that writes it (`insertData($data, 'table')`, the model); child rows by
     their parent-id column. `tester check` and the Run button now test every SQL step with LIMIT 0 first.
+34. **A filled-in value called hard-coded** (TC-79, server #43, agent_mistake). Run reports, events.ndjson and run
+    step texts show the steps after `{{variables}}` are filled: `Navigate to https://dev.../admin/...` was really
+    `Navigate to {{base_url}}...` in the case. Avoid: before saying a case hard-codes a URL, id or value, read the
+    saved case (`tester case pull <id>`), not the run.

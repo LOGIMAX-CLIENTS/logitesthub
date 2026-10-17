@@ -225,12 +225,13 @@
   // failure the assistant found to be an app bug (its lesson kind). A test-side failure is fixed and run again instead.
   var lastRun = null, bugFor = {}, bugShow = {};
   function pmBox(card, rid, st, pm) {
-    var line = el('div', 'd-flex flex-wrap align-items-center gap-2');
+    // hidden goes on a plain wrapper: Bootstrap's .d-flex is display:flex !important and would keep the row visible
+    var line = el('div'), row = el('div', 'd-flex flex-wrap align-items-center gap-2'); line.appendChild(row);
     var passed = st === 'PASSED';
     var btn = el('button', 'btn btn-sm align-self-start ' + (passed ? 'btn-primary' : 'btn-outline-danger'),
                  passed ? '📤 Send to PM · ' + TASK : '🐞 Send to PM as app bug · ' + TASK); btn.type = 'button';
     var note = el('span', 'small text-secondary');
-    line.appendChild(btn); line.appendChild(note); card.appendChild(line);
+    row.appendChild(btn); row.appendChild(note); card.appendChild(line);
     function sent(msg) { btn.disabled = true; btn.className = 'btn btn-sm btn-outline-success align-self-start'; btn.textContent = '✅ Sent to PM · ' + TASK;
                          note.className = 'small text-secondary'; note.textContent = msg || ''; }
     if (pm.status === 'attached') { sent(pm.message); return; }
@@ -245,7 +246,8 @@
     });
     if (!passed) {   // shown once the assistant says this failure is an app bug
       line.hidden = true;
-      var show = function (b) { bug = b; line.hidden = false; note.textContent = 'The assistant found an app bug: ' + b; scrollDown(); };
+      var show = function (b) { bug = b; line.hidden = false; scrollDown();
+        note.textContent = 'The assistant found an app bug: ' + b + (REVIEW_BLOCK ? ' (not sent: you are not the PM reviewer)' : ''); };
       if (bugFor[rid]) show(bugFor[rid]); else bugShow[rid] = show;
     }
   }
