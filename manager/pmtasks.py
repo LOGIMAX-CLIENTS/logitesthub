@@ -666,37 +666,26 @@ def poll_assistant_requests():
 # PM puts each process change of a task in a queue (pm_lth_task_events). When a task leaves Development / Testing
 # for Review or later, testing it is over: it stops for every tester. Sent back to Development, the tester's next
 # Tester CLI click starts it again.
-TESTING_DONE = re.compile(r'review|deploy|deliver|done|complete|closed|releas', re.I)
-
-
-def _first(q, *names):
-    """The first field PM filled in among names (field names as PM may spell them)."""
-    for n in names:
-        v = q.get(n)
-        if isinstance(v, dict):   # e.g. "to": {"status": "Review"}
-            v = v.get('status') or v.get('name')
-        if v not in (None, ''):
-            return str(v)
-    return ''
+# PM's event: {event_id, task_code, from_status, to_status, changed_by_email, changed_at}; from_status and
+# changed_by_email may be "" (a first handover / a member PM could not resolve); every process change comes, in
+# (changed_at, event_id) order, and `since` is inclusive (the last changed_at is sent back, its events skipped by id).
+TESTING_DONE = {'review', 'deployment', 'delivery'}   # PM's processes after Development / Testing
 
 
 def take_task_event(con, q):
     """One queued process change of a PM task. Records it; stops the task for every tester when it moved to Review
-    or later. Never raises."""
-    code = norm(_first(q, 'task_code', 'code', 'task'))
-    to = _first(q, 'to_status', 'status', 'new_status', 'to_process', 'process', 'to')
+    or later."""
+    code, to = norm(q.get('task_code')), str(q.get('to_status') or '')
     stopped = []
-    if code and TESTING_DONE.search(to):
+    if code and to.strip().lower() in TESTING_DONE:
         with con:
             stopped = [x['username'] for x in con.execute('SELECT username FROM user_tasks WHERE task_code=?', (code,))]
             con.execute('DELETE FROM user_tasks WHERE task_code=?', (code,))
     with con:
         con.execute('REPLACE INTO pm_task_events(event_id, task_code, from_status, to_status, changed_at, email, stopped, at) '
                     'VALUES (?,?,?,?,?,?,?,?)',
-                    (_first(q, 'event_id', 'id', 'request_id')[:64], code or None,
-                     _first(q, 'from_status', 'old_status', 'from_process', 'from')[:64], to[:64],
-                     _first(q, 'changed_at', 'at', 'created_at', 'requested_at')[:40],
-                     _first(q, 'changed_by_email', 'requested_by_email', 'email')[:254],
+                    (str(q.get('event_id'))[:64], code or None, str(q.get('from_status') or '')[:64], to[:64],
+                     str(q.get('changed_at') or '')[:40], str(q.get('changed_by_email') or '')[:254],
                      ', '.join(stopped)[:500] or None, db.now()))
     if stopped:
         print(f' * PM: {code} moved to {to}: testing stopped for {", ".join(stopped)}')
@@ -711,15 +700,13 @@ def poll_task_events():
             return 0
         since = budget.get_setting(con, 'pm.events_since') or ''
         res = pm_call('pm_lth_task_events', {'since': since, 'limit': 50})
-        rows = res.get('events') or res.get('requests') or res.get('items') or []
         n = 0
-        for q in rows:
-            eid = _first(q, 'event_id', 'id', 'request_id')
-            if not eid or con.execute('SELECT 1 FROM pm_task_events WHERE event_id=?', (eid[:64],)).fetchone():
-                continue
-            take_task_event(con, q)
-            n += 1
-            since = max(since, _first(q, 'changed_at', 'at', 'created_at', 'requested_at'))
+        for q in res.get('events') or []:
+            eid = str(q.get('event_id') or '')
+            if eid and not con.execute('SELECT 1 FROM pm_task_events WHERE event_id=?', (eid[:64],)).fetchone():
+                take_task_event(con, q)
+                n += 1
+            since = max(since, str(q.get('changed_at') or ''))
         with con:
             budget.set_setting(con, 'pm.events_since', since)
         return n
