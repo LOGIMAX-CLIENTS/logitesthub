@@ -1157,6 +1157,9 @@ def case(cid):
     c = case_or_404(cid)
     runs = con().execute('SELECT * FROM runs WHERE case_id=? ORDER BY id DESC', (cid,)).fetchall()
     run_id = request.args.get('run', type=int)
+    if not run_id and request.args.get('latest') == 'passed':   # the link PM keeps: this tester's newest passed run
+        by = request.args.get('by')
+        run_id = next((r['id'] for r in runs if r['status'] == 'PASSED' and (not by or r['run_by'] == by)), None)
     run = next((r for r in runs if r['id'] == run_id), runs[0] if runs else None)
     steps, has_video = run_view_data(run)
     tab = request.args.get('tab', 'summary')

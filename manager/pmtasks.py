@@ -396,8 +396,12 @@ def run_started(con, run_id, case_id, username, code):
     if not via:
         return
     base = public_base()
+    # Tester CLI: one link per case and tester that always opens their latest passed run (PM cannot replace a link,
+    # so a re-run adds nothing there). Test Assistant: the run itself, as the reviewer may send a failed run (app bug).
+    url = (f'{base}/cases/{case_id}?by={urllib.parse.quote(username)}&latest=passed' if via == 'cli' else
+           f'{base}/cases/{case_id}?run={run_id}') if base else None
     con.execute('REPLACE INTO pm_run_links(run_id, task_code, username, url, status, message, at, via) VALUES (?,?,?,?,?,?,?,?)',
-                (run_id, code, username, f'{base}/cases/{case_id}?run={run_id}' if base else None, 'pending',
+                (run_id, code, username, url, 'pending',
                  'Sent to PM if the run passes.' if via == 'cli' else 'When it ends: Send to PM in the chat.', db.now(), via))
 
 
@@ -446,7 +450,7 @@ def send_run(run_id):
                            "AND r.case_id=? AND l.status='attached' AND l.run_id<>? LIMIT 1",
                            (r['task_code'], r['username'], r['case_id'], run_id)).fetchone()
         skip = (f'{r["status"]}: only a passed run is sent to PM.' if r['status'] != 'PASSED' else
-                f'Run {sent["run_id"]} of this case already passed and was sent to PM.' if sent else None)
+                f'Already in PM: its link opens the latest passed run (this one).' if sent else None)
         if skip:
             with con:
                 con.execute("UPDATE pm_run_links SET status='skipped', message=?, at=? WHERE run_id=?", (skip, db.now(), run_id))
