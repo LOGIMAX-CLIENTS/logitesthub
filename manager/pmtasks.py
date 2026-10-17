@@ -447,8 +447,8 @@ def send_run(run_id):
                 con.execute("UPDATE pm_run_links SET status='waiting', message=?, at=? WHERE run_id=?", (msg, db.now(), run_id))
             return
         sent = con.execute("SELECT l.run_id FROM pm_run_links l JOIN runs r ON r.id=l.run_id WHERE l.task_code=? AND l.username=? "
-                           "AND r.case_id=? AND l.status='attached' AND l.run_id<>? LIMIT 1",
-                           (r['task_code'], r['username'], r['case_id'], run_id)).fetchone()
+                           "AND r.case_id=? AND l.status='attached' AND l.run_id<>? AND l.url=? LIMIT 1",   # same link: PM has it
+                           (r['task_code'], r['username'], r['case_id'], run_id, r['url'])).fetchone()
         skip = (f'{r["status"]}: only a passed run is sent to PM.' if r['status'] != 'PASSED' else
                 f'Already in PM: its link opens the latest passed run (this one).' if sent else None)
         if skip:
