@@ -1633,3 +1633,10 @@ html:has(main.as-page), body:has(main.as-page) { overflow: hidden; }
 .task-chip-stop:hover { background: rgba(220, 53, 69, .22); }
 .task-badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; text-decoration: none;
   background: var(--acc-tint, #f1ecff); color: var(--acc-ink, #5a2fd6); border: 1px solid var(--acc-line, #d6c9ff); margin-left: 4px; }
+
+/* case picker: where a case was made, and the inline list in Create a Scheduled Run */
+.cp-src { font-size: .68rem; font-weight: 600; padding: 1px 7px; border-radius: 999px; background: var(--bs-secondary-bg, #eef0f4); color: var(--bs-secondary-color, #5b6270); white-space: nowrap; }
+.cp-src-assistant { background: rgba(124, 58, 237, .12); color: #6d28d9; }
+.cp-src-cli { background: rgba(14, 116, 144, .12); color: #0e7490; }
+.cp-source { width: auto; min-width: 150px; }
+.qs-cases { max-height: 300px; overflow-y: auto; border: 1px solid var(--bs-border-color, #e3e6ec); border-radius: 10px; }

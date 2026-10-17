@@ -10,7 +10,7 @@
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <h2 class="h6 mb-1">Configuration</h2>
       <div class="small text-secondary mb-3">Used by every new run and by Generate with AI. Saved changes apply straight away; no restart.</div>
-      {% for key, label, help, default in fields %}
+      {% for key, label, help, default in fields %}{% if key not in ('sys.ai_model', 'sys.claude_model') %}{# models: in their key boxes below #}
       <div class="mb-3">
         <label class="form-label fw-semibold mb-1" for="s{{ loop.index }}">{{ label }}</label>
         {% if key == 'sys.ai_provider' %}
@@ -37,8 +37,44 @@
         {% else %}
         <div class="form-text">{{ help }}{% if vals[key] != default %} Default: <code>{{ default }}</code>{% endif %}</div>
         {% endif %}
+        {% if key == 'sys.ai_provider' %}
+        {% for name, which, label, ph, help_html, mkey in [
+             ('sys.anthropic_key', 'anthropic', 'Anthropic API key', 'sk-ant-...',
+              'From console.anthropic.com &rarr; API keys.', 'sys.ai_model'),
+             ('sys.claude_token', 'claude', 'Claude subscription token', 'sk-ant-oat01-...',
+              'Run <code>claude setup-token</code> on any PC (valid 1 year).', 'sys.claude_model')] %}
+        <div class="mt-2 p-2 rounded border">
+          <label class="form-label fw-semibold mb-1 small" for="key-{{ which }}">{{ label }}</label>
+          {# autocomplete=new-password + a readonly-until-focus box: browsers must not fill a saved login password in here #}
+          <div class="d-flex gap-2">
+            <input class="form-control form-control-sm" id="key-{{ which }}" name="{{ name }}" type="password" autocomplete="new-password"
+                   spellcheck="false" readonly onfocus="this.removeAttribute('readonly')" data-lpignore="true" data-1p-ignore
+                   placeholder="{{ 'Paste a new one to replace it' if in_use[name] else ph }}">
+            <button class="btn btn-outline-secondary btn-sm text-nowrap" formaction="{{ url_for('settings.system_key_test', which=which) }}" formnovalidate>Test</button>
+          </div>
+          <div class="d-flex align-items-center gap-2 mt-2">
+            <label class="small text-secondary text-nowrap" for="model-{{ which }}">Model</label>
+            <select class="form-select form-select-sm" id="model-{{ which }}" name="{{ mkey }}">
+              {% if mkey == 'sys.claude_model' %}<option value="" {{ 'selected' if not vals[mkey] }}>Same as the API model ({{ vals['sys.ai_model'] }})</option>{% endif %}
+              {% for m in models %}<option {{ 'selected' if vals[mkey] == m }}>{{ m }}</option>{% endfor %}</select>
+          </div>
+          {% set ck = checks[name] if in_use[name] else none %}
+          <div class="small mt-1 d-flex flex-wrap align-items-center gap-2">
+            {% if not in_use[name] %}<span class="badge text-bg-secondary">Not set</span>
+            {% elif ck and ck.ok %}<span class="badge text-bg-success">✓ Connected</span>
+            {% elif ck %}<span class="badge text-bg-danger">✗ Not working</span>
+            {% else %}<span class="badge text-bg-warning">Not tested</span>{% endif %}
+            {% if in_use[name] %}<code title="{{ in_use[name].split(' · ')[1] }}">{{ in_use[name].split(' · ')[0] }}</code>{% endif %}
+            {% if ck %}<span class="text-secondary">· tested {{ ck.at|dmy }}</span>{% endif %}
+          </div>
+          {% if ck and not ck.ok %}<div class="small t-fail">{{ ck.msg }}</div>{% endif %}
+          <div class="form-text">{{ help_html|safe }} Paste and click <b>Test</b>: a key that works is saved.
+            {% if saved[name] %}<label class="ms-1"><input class="form-check-input me-1" type="checkbox" name="{{ name }}_clear">Remove</label>{% endif %}</div>
+        </div>
+        {% endfor %}
+        {% endif %}
       </div>
-      {% endfor %}
+      {% endif %}{% endfor %}
       <button class="btn btn-primary btn-sm">Save</button>
     </form>
   </div>
