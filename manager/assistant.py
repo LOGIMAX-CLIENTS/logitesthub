@@ -636,6 +636,17 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
                'lesson': data.get('lesson') if isinstance(data.get('lesson'), dict) else None,
                'draft_text': draft_to_text(draft) if draft else '',
                'folder_id': match_folder(con(), pid, u.get('module'), u.get('sub_module'))}
+        if out['lesson']:   # saved by itself (nobody has to remember Save, testing never waits); the admin reviews it later
+            try:
+                import lessons
+                tc = con().execute('SELECT case_id FROM chat_threads WHERE id=?', (tid,)).fetchone()
+                v, errs = lessons.clean(dict(out['lesson'], case_id=tc['case_id'] if tc else None))
+                if not errs:
+                    c0 = con()
+                    with c0:
+                        out['lesson_saved'], out['lesson_new'] = lessons.add(c0, pid, v, me['username'], 'assistant')
+            except Exception as e:   # a lesson must never break the chat
+                print(f' * auto-save of a lesson from chat #{tid}: {e}')
         mid = add_message(tid, 'assistant', data.get('reply') or '', out)
         c = con()
         with c:
@@ -773,7 +784,9 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
     @bp.route('/projects/<int:pid>/assistant/<int:tid>/lesson', methods=['POST'])
     @login_required
     def save_lesson(pid, tid):
-        """The lesson the assistant wrote after explaining a failure -> the project's lessons (same title = counted again)."""
+        """The lesson the assistant wrote after explaining a failure -> the project's lessons (same title = counted again).
+        New lessons are saved by themselves when the assistant answers; this saves older ones, and action "remove" is the
+        card's "Not right": no longer sent to the AI, left in To review with that note for the admin."""
         import lessons
         import settings
         project_or_404(pid)
@@ -781,13 +794,27 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
         me = current_user()
         if t['created_by'] != me['username']:
             abort(403)
-        if not settings.can(con(), me['role'], 'runs.run'):
-            return jsonify({'ok': False, 'error': 'Your role cannot record lessons.'}), 403
-        mid = int(_payload().get('message_id') or 0)
+        body = _payload()
+        mid = int(body.get('message_id') or 0)
         m = con().execute("SELECT id, data FROM chat_messages WHERE id=? AND thread_id=? AND role='assistant'", (mid, tid)).fetchone()
         data = json.loads(m['data']) if m and m['data'] else {}
         if not data.get('lesson'):
             return jsonify({'ok': False, 'error': 'No lesson in that message.'}), 404
+        if body.get('action') == 'remove':
+            lid = data.get('lesson_saved')
+            if lid and not data.get('lesson_removed'):
+                c = con()
+                with c:
+                    if data.get('lesson_new'):   # this chat made it: take it out of the AI's lessons, the admin still sees it
+                        c.execute("UPDATE lessons SET active=0, review='new', review_note=? WHERE id=? AND project_id=?",
+                                  (f'{me["username"]} said "not right" in Test Assistant chat #{tid}', lid, pid))
+                    else:   # it only counted an existing lesson again: undo the count, leave that lesson alone
+                        c.execute('UPDATE lessons SET hits=GREATEST(hits-1, 1) WHERE id=? AND project_id=?', (lid, pid))
+                    data['lesson_removed'] = True
+                    c.execute('UPDATE chat_messages SET data=? WHERE id=?', (json.dumps(data), mid))
+            return jsonify({'ok': True, 'removed': True})
+        if not settings.can(con(), me['role'], 'runs.run'):
+            return jsonify({'ok': False, 'error': 'Your role cannot record lessons.'}), 403
         if data.get('lesson_saved'):
             return jsonify({'ok': True, 'id': data['lesson_saved'], 'created': False, 'already': True})
         v, errs = lessons.clean(dict(data['lesson'], case_id=t['case_id']))
@@ -796,7 +823,7 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
         c = con()
         with c:
             lid, created = lessons.add(c, pid, v, me['username'], 'assistant')
-            data['lesson_saved'] = lid
+            data['lesson_saved'], data['lesson_new'] = lid, created
             c.execute('UPDATE chat_messages SET data=? WHERE id=?', (json.dumps(data), mid))
         return jsonify({'ok': True, 'id': lid, 'created': created})
 
