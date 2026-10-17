@@ -241,6 +241,11 @@ function urlOpt() {   // --url, else the workspace's site URL
 }
 
 // front matter: read / set one "key: value" line (case_id links a file to its LogiTestHub case)
+// A _test.md as text. Windows PowerShell 5.1 (Set-Content / Out-File -Encoding utf8) starts files with a BOM: the
+// front matter was then not seen, ran as steps and was saved twice (TC-8). Every read of a case file goes through this.
+function readText(file) {
+  return fs.readFileSync(file, 'utf8').replace(/^﻿/, '');
+}
 function frontGet(text, key) {
   const fm = (text.match(/^---\s*\n([\s\S]*?)\n---\s*\n/) || [])[1] || '';
   const m = fm.match(new RegExp(`^\\s*${key}\\s*:\\s*['"]?([^'"\\n]*?)['"]?\\s*$`, 'm'));
@@ -257,6 +262,37 @@ function frontSet(text, key, value) {
 const frontDel = (text, key) => text.replace(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*\r?\n/, (all, fm) =>
   `---\n${fm.split('\n').filter(l => !new RegExp(`^\\s*${key}\\s*:`).test(l)).join('\n')}\n---\n`);
 
+// ---------------------------------------------------------------- review before run (team Rule 1)
+// A _test.md runs only in the version the user approved: a new or changed file stops with "review first" and its steps
+// (for the agent to show), and runs after the user's ok with --approved. The approved text is kept per file (sha256 of
+// the content without case_id, which a run adds by itself), so the next unchanged run needs nothing.
+// Cases pulled from / run from LogiTestHub and the user's own plain-English runs count as approved.
+const APPROVED = path.join(HOME, 'approved.json');
+function caseHash(text) {
+  const t = frontDel(String(text).replace(/^﻿/, '').replace(/\r\n/g, '\n'), 'case_id').trim();
+  return require('crypto').createHash('sha256').update(t).digest('hex').slice(0, 20);
+}
+function approvedList() {
+  try { return JSON.parse(fs.readFileSync(APPROVED, 'utf8')); } catch { return {}; }
+}
+function approve(file, text) {
+  fs.mkdirSync(HOME, { recursive: true });
+  fs.writeFileSync(APPROVED, JSON.stringify({ ...approvedList(), [path.resolve(file).toLowerCase()]: caseHash(text) }, null, 2));
+}
+function isApproved(file, text) {
+  return approvedList()[path.resolve(file).toLowerCase()] === caseHash(text);
+}
+// What the user reviews: the steps as they will run, and whether the run writes data.
+function reviewOf(file, text) {
+  const { parseCase } = require(path.join(__dirname, '..', 'lib', 'testcase.js'));
+  let tc;
+  try { tc = parseCase(text, path.dirname(path.resolve(file)), ''); } catch (e) { tc = { title: '', steps: [] }; }
+  const steps = (tc.steps || []).map((x, i) => ({ n: i + 1, section: x.section || '', text: x.text }));
+  const writes = steps.filter(x => /^set ?up sql\b/i.test(x.text) || /\b(save|submit|delete|cancel|approve|update)\b.*\bbutton\b/i.test(x.text));
+  return { file: path.resolve(file), title: tc.title, steps, saves_data: writes.length > 0,
+    saves_data_steps: writes.map(x => x.n) };
+}
+
 function slug(s) {
   return String(s || 'test').toLowerCase().replace(/\{\{.*?\}\}/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 50) || 'test';
 }
@@ -264,7 +300,7 @@ function slug(s) {
 function caseFile(dir, name, caseId) {
   if (caseId && fs.existsSync(dir)) {
     for (const f of fs.readdirSync(dir).filter(x => x.endsWith('_test.md'))) {
-      try { if (Number(frontGet(fs.readFileSync(path.join(dir, f), 'utf8'), 'case_id')) === Number(caseId)) return path.join(dir, f); } catch { /* skip */ }
+      try { if (Number(frontGet(readText(path.join(dir, f)), 'case_id')) === Number(caseId)) return path.join(dir, f); } catch { /* skip */ }
     }
   }
   let p = path.join(dir, `${name}_test.md`);
@@ -377,7 +413,7 @@ function gitDiff(base) {
 
 async function generate() {
   const c = needLogin();
-  const task = positional().join(' ').trim() || (flag('--file') && fs.readFileSync(flag('--file'), 'utf8'));
+  const task = positional().join(' ').trim() || (flag('--file') && readText(flag('--file')));
   const pid = Number(flag('--project') || c.project);
   if (!task || !pid) fail('usage: tester generate "<the task / bug / requirement>" --project <id> [--count 6] [--diff [base-branch]]');
   const body = { project_id: pid, task, count: Number(flag('--count')) || 6 };
@@ -522,13 +558,21 @@ async function run() {
     const ws = workspace(true);
     if (ws) {
       const f = caseFile(ws.dir, `${j.case.tc.replace('-', '')}_${slug(j.case.title)}`, caseId);
-      if (!fs.existsSync(f)) fs.writeFileSync(f, frontSet(content.replace(/\r\n/g, '\n'), 'case_id', caseId));
+      if (!fs.existsSync(f)) {
+        fs.writeFileSync(f, frontSet(content.replace(/\r\n/g, '\n'), 'case_id', caseId));
+        approve(f, content);   // the saved LogiTestHub case, as it is there
+      }
       savedFile = f;
     }
     if (/@import\s/.test(content)) console.error('Note: this case uses @import helpers; they must exist next to it on this PC, or run it from the LogiTestHub web page.');
   } else if (file && file !== true) {
-    content = fs.readFileSync(file, 'utf8');
+    content = readText(file);
     savedFile = path.resolve(file);
+    if (argv.includes('--approved')) approve(file, content);
+    else if (!isApproved(file, content)) {
+      fail(`${rel(file)} is new or changed since it was last approved. Show it to the user for review (steps below); ` +
+        'run it after their ok with --approved.', 6, { error: 'review_first', review: reviewOf(file, content) });
+    }
     // a file from tests/ that is linked to its LogiTestHub case: the run is saved under that case
     const linked = Number(frontGet(content, 'case_id'));
     if (linked && !argv.includes('--new-case')) caseId = linked;
@@ -538,6 +582,7 @@ async function run() {
     if (ws) {
       savedFile = caseFile(ws.dir, slug(title || text.split(/[.;\n]/)[0]));
       fs.writeFileSync(savedFile, content);
+      approve(savedFile, content);   // the user typed this test themselves
       if (!JSON_OUT) console.error(`Saved the test case as ${rel(savedFile)}`);
     }
   } else {
@@ -634,7 +679,7 @@ async function run() {
       if (result.upload.ok && pid) saveConfig({ ...loadConfig(), project: pid });
       // link the new file to the case LogiTestHub just made, so its next runs go under the same case
       if (result.upload.ok && savedFile && !caseId && result.case_id && fs.existsSync(savedFile))
-        fs.writeFileSync(savedFile, frontSet(fs.readFileSync(savedFile, 'utf8'), 'case_id', result.case_id));
+        fs.writeFileSync(savedFile, frontSet(readText(savedFile), 'case_id', result.case_id));
     }
   }
   if (savedFile) result.file = savedFile;
@@ -688,7 +733,8 @@ async function testAll() {
     });
     let r;
     try { r = JSON.parse(out.s.slice(out.s.indexOf('{'))); } catch { r = { outcome: 'not_completed', summary: 'no result (see above)' }; }
-    results.push({ file: f, exit: out.code, outcome: r.outcome || (r.ok === false ? 'error' : 'not_completed'),
+    results.push({ file: f, exit: out.code, outcome: r.outcome || (r.error === 'review_first' ? 'review_first' : r.ok === false ? 'error' : 'not_completed'),
+      ...(r.review ? { review: r.review } : {}),
       summary: r.summary || r.error || '', url: r.url, case_id: r.case_id });
     if (!JSON_OUT) console.log(`  ${(r.outcome || 'error').toUpperCase()} - ${r.summary || r.error || ''}${r.url ? `\n  ${r.url}` : ''}`);
   }
@@ -799,7 +845,7 @@ function help() {
   tester check --case <id> | --file x_test.md --env <name>   before a run: settings + test data there? (read-only)
   tester settings --project <id> --env <name>        live profile / retail settings: is the action allowed?
   tester brain [words] [--path <repo or knowledge_brain>]   the app's knowledge brain docs for a test + out-of-date check
-  tester run --file my_test.md --url <site>          run a test case file
+  tester run --file my_test.md --url <site>          run a test case file (new / changed: review first, then --approved)
   tester test [folder | files]                       run every *_test.md in ${WS_DIR}/ (same options as run)
         [--headed] [--no-ai] [--no-upload] [--no-login] [--no-save] [--env <name>] [--var k=v] [--secret k=v] [--vars file.json]
         (--env: the LogiTestHub environment whose read-only database "Assert SQL" / "Remember SQL" steps use)
@@ -820,7 +866,8 @@ function help() {
 
   --json   machine-readable output (for AI agents and CI)
   Exit codes: 0 passed, 1 failed, 3 partial (some steps need AI), 4 AI limit reached,
-              5 not completed (site / network / server problem, or the run stopped: not a test result), 2 other errors.
+              5 not completed (site / network / server problem, or the run stopped: not a test result),
+              6 review first (a new / changed _test.md: show it to the user, run with --approved after their ok), 2 other errors.
   A run's JSON: status, outcome (passed|failed|partial|not_completed), category (environment|needs_review|...),
               title, summary, counts, duration, failed_step {n, text, error, screenshot, screenshot_before},
               steps [{n, section, text, status, sec, error}], url, upload {ok, error, retry}.
@@ -846,7 +893,7 @@ async function resolveProject(c, want) {
 }
 
 function readRows(file) {   // JSON array, or TSV / CSV with a header line (e.g. mysql -B output)
-  const text = fs.readFileSync(file, 'utf8').replace(/^﻿/, '');
+  const text = readText(file);
   if (/^\s*[\[{]/.test(text)) {
     const j = JSON.parse(text);
     return Array.isArray(j) ? j : (j.rows || j.data || []);
@@ -991,6 +1038,7 @@ async function caseCmd() {
     const out = (flag('--out') !== true && flag('--out'))
       || (ws ? rel(caseFile(ws.dir, `${cur.tc.replace('-', '')}_${slug(cur.title)}`, id)) : `${cur.tc}_test.md`);
     fs.writeFileSync(out, ws ? frontSet(cur.content.replace(/\r\n/g, '\n'), 'case_id', id) : cur.content);
+    approve(out, cur.content);   // pulled from LogiTestHub: approved as it is; a change to it is reviewed again
     fs.mkdirSync(HOME, { recursive: true });
     fs.writeFileSync(PULLED, JSON.stringify({ ...pulled, [id]: cur.updated_at }, null, 2));
     await reportWs(c);
@@ -1001,7 +1049,7 @@ async function caseCmd() {
   const file = flag('--file');
   if (!file || file === true) fail(`tester case push ${id} --file <the fixed _test.md>`);
   let content;
-  try { content = frontDel(fs.readFileSync(file, 'utf8'), 'case_id').replace(/^﻿/, '').replace(/\r\n/g, '\n').trim() + '\n'; } catch (e) { fail(`cannot read ${file}: ${e.message}`); }
+  try { content = frontDel(readText(file), 'case_id').replace(/\r\n/g, '\n').trim() + '\n'; } catch (e) { fail(`cannot read ${file}: ${e.message}`); }
   const force = argv.includes('--force');
   const base = pulled[id];
   if (base && base !== cur.updated_at && !force)
@@ -1054,7 +1102,7 @@ async function check() {
   if (!env) fail('say which environment: tester check --case <id> --env <name> (its database is checked).');
   let body;
   if (caseRef && caseRef !== true) body = { case_id: Number(String(caseRef).replace(/^#/, '')) };
-  else if (file && file !== true) body = { content: fs.readFileSync(file, 'utf8') };
+  else if (file && file !== true) body = { content: readText(file) };
   else fail('usage: tester check --case <id> --env <name>   |   tester check --file x_test.md --env <name>');
   const j = await api(c, 'POST', '/check', { ...body, env });
   const lines = (j.checks || []).map(x => `  ${x.ok ? 'OK  ' : 'FAIL'} step ${String(x.n).padStart(2)}  ${x.text.slice(0, 90)}` +

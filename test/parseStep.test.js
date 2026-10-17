@@ -41,3 +41,21 @@ test('a hint the runner cannot read fails clearly, never goes to AI', () => {
 test('several hints in one sentence are several actions (AI)', () => {
   assert.strictEqual(parseStep('Fill Metal (#metal), Tax Group (#tax_group) and Save.').kind, 'unknown');
 });
+
+test('a CSS selector not starting with # or . fails clearly (run 37: it was looked for as text)', () => {
+  for (const s of ["Click the AI Usage link (a.side-item[title=\"AI Usage\"]).", 'Type 5 into the Pcs field (input[name=pcs]).']) {
+    assert.strictEqual(parseStep(s).kind, 'badHint', s);
+  }
+});
+
+test('words in brackets are not a selector', () => {
+  assert.strictEqual(parseStep('Click the Save button (e.g. the green one).').kind, 'click');
+  assert.strictEqual(parseStep("Assert the text 'v2.0' is visible (v2.0).").kind, 'assertText');
+});
+
+test('a BOM at the start of a case does not hide its front matter (TC-8)', () => {
+  const { parseCase } = require('../lib/testcase');
+  const tc = parseCase('﻿---\ncase_id: 7\n---\n\n# Title\n\n## S\nWait 2 seconds.\n', '.');
+  assert.strictEqual(tc.title, 'Title');
+  assert.strictEqual(tc.steps.length, 1);
+});
