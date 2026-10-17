@@ -112,6 +112,7 @@
   var CASE_TC = {{ (thread_case.tc_no if thread_case else none)|tojson }};   // the test case this chat saved: Save updates it
   var URL_SEND = {{ url_for('assistant.send', pid=p.id)|tojson }}, URL_BASE = {{ url_for('assistant.page', pid=p.id)|tojson }};
   var URL_LESSONS = {{ url_for('lessons.page', pid=p.id)|tojson }};
+  var URL_BRAIN_GAPS = {{ (url_for('brain_gaps.page', pid=p.id) if is_super else '')|tojson }};
   var MSGS = {{ msgs|tojson }};
   var box = document.getElementById('asMsgs'), empty = document.getElementById('asEmpty');
   var form = document.getElementById('asForm'), text = document.getElementById('asText'), sendBtn = document.getElementById('asSend'), stopBtn = document.getElementById('asStop');
@@ -343,10 +344,23 @@
     var line = el('div', 'd-flex align-items-center gap-2 mt-2');
     var btn = el('button', 'btn btn-sm btn-outline-primary', 'Save lesson'); btn.type = 'button';
     var note = el('span', 'small text-secondary');
-    function done(j) { btn.disabled = true; btn.textContent = 'Saved';
-      note.innerHTML = ''; var a = el('a', null, 'Lesson #' + j.id); a.href = URL_LESSONS; note.appendChild(a);
-      note.appendChild(document.createTextNode(j.created === false ? ' (same mistake seen before: counted again)' : ' saved: every next test reads it')); }
-    if (d.lesson_saved) done({ id: d.lesson_saved, created: true });
+    // saved by itself when the assistant answered; "Not right" takes it out of what the AI reads (the admin still reviews it)
+    var undo = el('button', 'btn btn-sm btn-link text-danger p-0', 'Not right'); undo.type = 'button'; undo.hidden = true;
+    undo.title = 'This lesson is wrong: stop sending it to the AI (the admin still sees it)';
+    function removed() { btn.hidden = true; undo.hidden = true; note.className = 'small text-secondary';
+      note.textContent = 'Removed: not sent to the AI. The admin will still look at it.'; }
+    function done(j) { btn.hidden = true; undo.hidden = READONLY;
+      note.innerHTML = ''; note.appendChild(document.createTextNode('✓ Saved automatically as '));
+      var a = el('a', null, 'Lesson #' + j.id); a.href = URL_LESSONS; note.appendChild(a);
+      note.appendChild(document.createTextNode(j.created === false ? ' (same mistake seen before: counted again).' : '. Every next test reads it; the admin reviews it.')); }
+    undo.onclick = function () {
+      undo.disabled = true;
+      post(URL_BASE + '/' + THREAD + '/lesson', { message_id: mid, action: 'remove' }).then(function (j) {
+        if (j.ok) removed(); else { undo.disabled = false; note.className = 'small t-fail'; note.textContent = j.error || 'Not removed.'; }
+      });
+    };
+    if (d.lesson_removed) removed();
+    else if (d.lesson_saved) done({ id: d.lesson_saved, created: d.lesson_new !== false });
     btn.onclick = function () {
       if (!THREAD || READONLY) return;
       btn.disabled = true;
@@ -355,7 +369,7 @@
       });
     };
     if (READONLY) btn.hidden = true;
-    line.appendChild(btn); line.appendChild(note); card.appendChild(line);
+    line.appendChild(btn); line.appendChild(note); line.appendChild(undo); card.appendChild(line);
     return card;
   }
 
@@ -369,6 +383,17 @@
     }
     if (d.choices && d.choices.length) row.appendChild(choicesCard(d.choices));
     if (d.lesson) row.appendChild(lessonCard(d, m.id));
+    if (d.brain_gap && d.brain_gap_saved) {   // the knowledge brain lacked this: listed for the brain team
+      var g = el('div', 'as-card as-lesson');
+      g.appendChild(el('div', 'as-card-title', '📘 Brain gap · ' + d.brain_gap.module + (d.brain_gap.doc ? ' / ' + d.brain_gap.doc : '')));
+      g.appendChild(el('div', 'fw-semibold', d.brain_gap.missing));
+      var gn = el('div', 'small text-secondary mt-1');
+      if (URL_BRAIN_GAPS) { var ga = el('a', null, 'Brain gap G' + d.brain_gap_saved); ga.href = URL_BRAIN_GAPS;
+        gn.appendChild(document.createTextNode('✓ Noted as ')); gn.appendChild(ga); }
+      else gn.appendChild(document.createTextNode('✓ Noted as brain gap G' + d.brain_gap_saved));
+      gn.appendChild(document.createTextNode(d.brain_gap_new === false ? ' (seen before: counted again).' : ' for the brain team.'));
+      g.appendChild(gn); row.appendChild(g);
+    }
     if (d.lesson && d.lesson.kind === 'app_bug' && lastRun) {   // the failed run just explained is an app bug: it may go to PM
       var b = [d.lesson.title, d.lesson.symptom].filter(Boolean).join(': ');
       bugFor[lastRun] = b; if (bugShow[lastRun]) bugShow[lastRun](b);

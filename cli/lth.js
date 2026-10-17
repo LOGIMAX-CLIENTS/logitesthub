@@ -17,16 +17,17 @@ const RUN_JS = path.join(__dirname, '..', 'run.js');
 // ---------------------------------------------------------------- self-update
 // The server sends the hash of the CLI code it hands out (X-Tester-CLI). When it differs from this install's,
 // `npm install -g <server>/cli/tester.tgz` runs once the command has ended (stderr only: --json stays clean).
-// LTH_NO_AUTO_UPDATE=1 turns it off.
-const CLI_CODE = ['run.js', 'cli', 'lib'];   // same files as manager/clitool.py CODE
+// LTH_NO_AUTO_UPDATE=1 turns it off. The skill files count too: a new rule for the agent reaches every tester.
+const CLI_CODE = ['run.js', 'cli/*.js', 'lib/*.js', 'cli/skill/*.md', 'cli/skill/references/*.md'];   // = manager/clitool.py CODE
 function cliFingerprint() {
   const root = path.join(__dirname, '..');
   const files = [];
   for (const p of CLI_CODE) {
-    const full = path.join(root, p);
-    if (p.endsWith('.js')) { if (fs.existsSync(full)) files.push(p); continue; }
+    if (!p.includes('*')) { if (fs.existsSync(path.join(root, p))) files.push(p); continue; }
+    const dir = path.posix.dirname(p), ext = path.posix.extname(p);
+    const full = path.join(root, dir);
     for (const f of fs.existsSync(full) ? fs.readdirSync(full) : []) {
-      if (f.endsWith('.js') && fs.statSync(path.join(full, f)).isFile()) files.push(`${p}/${f}`);
+      if (f.endsWith(ext) && fs.statSync(path.join(full, f)).isFile()) files.push(`${dir}/${f}`);
     }
   }
   files.sort();
@@ -490,7 +491,17 @@ function analyse(runDir, status) {
     : outcome === 'partial' ? `${counts.needs_ai} step(s) needed AI and did not run; the others passed.`
     : f ? `Step ${f.n} ${outcome === 'not_completed' ? 'could not run' : 'failed'}: ${f.text} - ${f.error || 'no error text'}`
     : 'The run did not finish.';
-  return { outcome, category, summary, counts, failed_step };
+  // what the agent shows the user after every run: title, how long, and each step's result (skill: section 4)
+  const ms = end.durationMs ?? steps.reduce((t, s) => t + (s.ms || 0), 0);
+  const steps_run = steps.map(s => ({ n: s.n, section: s.section || null, text: s.text, status: s.status,
+    sec: Math.round((s.ms || 0) / 100) / 10, ...(s.error ? { error: s.error } : {}) }));
+  return { title: end.test || null, outcome, category, summary, counts, duration: fmtDuration(ms), duration_ms: ms,
+    failed_step, steps: steps_run };
+}
+
+function fmtDuration(ms) {
+  const s = Math.round((ms || 0) / 1000);
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
 }
 
 async function run() {
@@ -632,7 +643,13 @@ async function run() {
                            url: typeof flag('--url') === 'string' ? flag('--url') : undefined });
   await reportWs(c);
   if (!JSON_OUT && savedFile) console.log(` FILE   : ${rel(savedFile)}`);
-  if (!JSON_OUT) console.log(` RESULT : ${result.outcome.toUpperCase()}${result.category ? ' (' + result.category + ')' : ''} - ${result.summary}`);
+  if (!JSON_OUT) {
+    const k = result.counts;
+    console.log(` STEPS  : ${k.total} total - ${k.passed} passed, ${k.failed} failed, ${k.skipped} skipped${k.needs_ai ? `, ${k.needs_ai} needed AI` : ''}`);
+    console.log(` TIME   : ${result.duration}`);
+    console.log(` RESULT : ${result.outcome.toUpperCase()}${result.category ? ' (' + result.category + ')' : ''} - ${result.summary}`);
+    if (result.url) console.log(` LTH    : ${result.url}`);
+  }
   print(result);
   process.exitCode = result.outcome === 'not_completed' ? 5 : ({ PASSED: 0, FAILED: 1, PARTIAL: 3 }[status] ?? 2);
 }
@@ -726,18 +743,42 @@ function setup() {
 function skill() {
   const sub = positional()[0] || 'install';
   if (sub !== 'install') fail('usage: tester skill install');
-  const os = require('os');
-  const dest = path.join(os.homedir(), '.claude', 'skills', 'tester');
+  installSkill();
+  console.log(`Installed the /tester skill for Claude Code in ${SKILL_DEST}
+Restart Claude Code (or start a new chat), then type /tester.`);
+}
+
+const SKILL_SRC = path.join(__dirname, 'skill');
+const SKILL_DEST = path.join(require('os').homedir(), '.claude', 'skills', 'tester');
+function skillFiles(root) {   // SKILL.md + references/*.md, relative paths
+  const ref = path.join(root, 'references');
+  return ['SKILL.md', ...(fs.existsSync(ref) ? fs.readdirSync(ref).filter(f => f.endsWith('.md')).map(f => `references/${f}`) : [])];
+}
+function installSkill() {
+  const dest = SKILL_DEST;
   fs.mkdirSync(dest, { recursive: true });
   fs.copyFileSync(path.join(__dirname, 'skill', 'SKILL.md'), path.join(dest, 'SKILL.md'));
   // references/ (write-case, debug, lessons ...): read by the agent only when it needs them; replaced as a whole
   fs.rmSync(path.join(dest, 'references'), { recursive: true, force: true });
   fs.cpSync(path.join(__dirname, 'skill', 'references'), path.join(dest, 'references'), { recursive: true });
-  console.log(`Installed the /tester skill for Claude Code in ${dest}
-Restart Claude Code (or start a new chat), then type /tester.`);
   // the old /lth skill (before the rename) would show twice in the / menu
   const old = path.join(os.homedir(), '.claude', 'skills', 'lth');
   if (fs.existsSync(path.join(old, 'SKILL.md'))) fs.rmSync(old, { recursive: true, force: true });
+}
+
+// Every command: a Claude Code user's /tester skill is kept the same as this CLI's (after an auto-update too), so
+// the team's agents follow the same rules (review before run, how to report). LTH_NO_SKILL_SYNC=1 turns it off.
+function syncSkill() {
+  if (process.env.LTH_NO_SKILL_SYNC === '1') return;
+  try {
+    if (!fs.existsSync(path.dirname(path.dirname(SKILL_DEST)))) return;   // no ~/.claude: Claude Code not used here
+    const want = skillFiles(SKILL_SRC), have = fs.existsSync(SKILL_DEST) ? skillFiles(SKILL_DEST) : [];
+    const same = want.length === have.length && want.every(f => fs.existsSync(path.join(SKILL_DEST, f))
+      && fs.readFileSync(path.join(SKILL_SRC, f)).equals(fs.readFileSync(path.join(SKILL_DEST, f))));
+    if (same) return;
+    installSkill();
+    process.stderr.write(`The /tester skill for Claude Code was ${have.length ? 'updated' : 'installed'} (${SKILL_DEST}); start a new chat to use it.\n`);
+  } catch { /* never stop a command over the skill */ }
 }
 
 function help() {
@@ -781,7 +822,8 @@ function help() {
   Exit codes: 0 passed, 1 failed, 3 partial (some steps need AI), 4 AI limit reached,
               5 not completed (site / network / server problem, or the run stopped: not a test result), 2 other errors.
   A run's JSON: status, outcome (passed|failed|partial|not_completed), category (environment|needs_review|...),
-              summary, counts, failed_step {n, text, error, screenshot, screenshot_before}, url, upload {ok, error, retry}.
+              title, summary, counts, duration, failed_step {n, text, error, screenshot, screenshot_before},
+              steps [{n, section, text, status, sec, error}], url, upload {ok, error, retry}.
   Inside a project, test cases are saved as files in ${WS_DIR}/ (made the first time; ${WS_DIR}/${WS_FILE} keeps the
   LogiTestHub project and site URL, so --project / --url can be left out). --no-save: do not write a file.
   Runs are kept in ${RUNS}`);
@@ -1126,5 +1168,6 @@ const COMMANDS = { init, test: testAll, task: taskCmd, check, settings: settings
   if (cmd === '--version' || cmd === '-v') return console.log(PKG.version);
   const fn = COMMANDS[cmd];
   if (!fn) fail(`unknown command "${cmd}". Try: tester help`);
+  if (cmd !== 'skill') syncSkill();
   await fn();
 })().catch(e => fail(e.message));

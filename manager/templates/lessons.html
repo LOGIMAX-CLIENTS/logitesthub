@@ -29,8 +29,16 @@
 <div class="d-flex flex-wrap gap-2 align-items-end justify-content-between mb-3">
   <div><h1 class="h4 mb-0">Lessons learned</h1>
     <div class="text-secondary small">Why tests failed and how to avoid it. The Tester Assistant, Generate with AI and the <code>/tester</code> skill read these, so the same mistake does not happen twice. App bugs are kept here for the record but not sent to the AI.</div></div>
-  {% if can('cases.edit') %}<button class="btn btn-success" type="button" data-bs-toggle="collapse" data-bs-target="#newLesson">+ Add Lesson</button>{% endif %}
+  <div class="d-flex gap-2">
+    {% if is_super %}<a class="btn btn-outline-primary" href="{{ url_for('lessons.download', pid=p.id, review=review or 'new') }}"
+       title="The lessons in this review filter as one Markdown file, to hand over for review">⬇ Download for review</a>{% endif %}
+    {% if can('cases.edit') %}<button class="btn btn-success" type="button" data-bs-toggle="collapse" data-bs-target="#newLesson">+ Add Lesson</button>{% endif %}
+  </div>
 </div>
+{% if is_super and to_review %}<div class="alert alert-warning py-2 small">
+  <b>{{ to_review }}</b> lesson{{ 's' if to_review != 1 }} to review. They are already used by the AI; mark each one
+  <b>Keep</b>, <b>Into skill</b>, <b>Fix in code</b> or <b>Rejected</b> (rejected ones stop going to the AI).
+  <a href="{{ url_for('lessons.page', pid=p.id, review='new') }}">Show them</a></div>{% endif %}
 
 {% if can('cases.edit') %}
 <div class="collapse mb-3" id="newLesson">
@@ -48,6 +56,12 @@
      href="{{ url_for('lessons.page', pid=p.id, kind=k, all='1' if show_all else None) }}">{{ label }} <span class="ms-1">{{ counts[k] }}</span></a>{% endfor %}
   <a class="ms-auto" href="{{ url_for('lessons.page', pid=p.id, kind=kind or None, all=None if show_all else '1') }}">{{ 'Hide archived' if show_all else 'Show archived' }}</a>
 </div>
+<div class="d-flex flex-wrap gap-2 align-items-center mb-2 small">
+  <span class="text-secondary">Review:</span>
+  <a class="btn btn-sm {{ 'btn-secondary' if not review else 'btn-outline-secondary' }}" href="{{ url_for('lessons.page', pid=p.id, kind=kind or None, all='1' if show_all else None) }}">Any</a>
+  {% for k, label, help in reviews %}<a class="btn btn-sm {{ 'btn-secondary' if review == k else 'btn-outline-secondary' }}" title="{{ help }}"
+     href="{{ url_for('lessons.page', pid=p.id, kind=kind or None, review=k, all='1' if show_all else None) }}">{{ label }}{% if k == 'new' %} <span class="ms-1">{{ to_review }}</span>{% endif %}</a>{% endfor %}
+</div>
 
 <div class="panel p-0">
   <div class="table-responsive">
@@ -57,7 +71,10 @@
       <tbody>
       {% for l in lessons %}
       <tr class="{{ 'text-secondary' if not l.active }}">
-        <td class="text-start text-nowrap"><span class="badge text-bg-{{ {'app_bug': 'danger', 'test_outdated': 'warning', 'environment': 'info', 'test_data': 'secondary', 'agent_mistake': 'primary'}[l.kind] or 'secondary' }}">{{ kind_label[l.kind] or l.kind }}</span>{% if not l.active %} <span class="badge text-bg-light">Archived</span>{% endif %}</td>
+        <td class="text-start text-nowrap"><span class="badge text-bg-{{ {'app_bug': 'danger', 'test_outdated': 'warning', 'environment': 'info', 'test_data': 'secondary', 'agent_mistake': 'primary'}[l.kind] or 'secondary' }}">{{ kind_label[l.kind] or l.kind }}</span>{% if not l.active %} <span class="badge text-bg-light">Archived</span>{% endif %}
+          <div class="mt-1"><span class="badge rounded-pill {{ {'new': 'text-bg-warning', 'keep': 'text-bg-success', 'skill': 'text-bg-primary', 'code': 'text-bg-info', 'rejected': 'text-bg-dark'}[l.review] or 'text-bg-light' }}"
+               title="{{ (l.review_note or '') ~ (' · ' ~ l.reviewed_by if l.reviewed_by else '') }}">{{ review_label[l.review] or l.review }}</span></div>
+          {% if l.review_note %}<div class="small text-secondary mt-1">{{ l.review_note }}</div>{% endif %}</td>
         <td class="text-start"><b>{{ l.title }}</b>{% if l.symptom %}<div class="small text-secondary" style="white-space: pre-line">{{ l.symptom }}</div>{% endif %}
           {% if l.fix %}<div class="small" style="white-space: pre-line"><span class="text-secondary">Fix:</span> {{ l.fix }}</div>{% endif %}</td>
         <td class="text-start small" style="white-space: pre-line">{{ l.avoid or '' }}</td>
@@ -65,7 +82,13 @@
         <td class="text-start text-nowrap small">{% if l.case_id %}<a href="{{ url_for('case', cid=l.case_id, run=l.run_id) if l.run_id else url_for('case', cid=l.case_id) }}">case {{ l.case_id }}{% if l.run_id %} · run {{ l.run_id }}{% endif %}</a>{% elif l.run_id %}run {{ l.run_id }}{% endif %}</td>
         <td class="text-start small">{{ l.updated_by or l.created_by or '' }}{% if l.source == 'cli' %} <span class="text-secondary">(CLI)</span>{% endif %}</td>
         <td class="text-start small text-nowrap">{{ l.updated_at|dmy }}</td>
-        <td class="text-end text-nowrap">{% if can('cases.edit') %}
+        <td class="text-end text-nowrap">
+          {% if is_super %}<form class="d-inline-flex gap-1 mb-1" method="post" action="{{ url_for('lessons.set_review', pid=p.id, lid=l.id) }}">
+            <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="{{ request.full_path }}">
+            {% for k, label, help in reviews if k != 'new' and k != l.review %}<button class="btn btn-sm {{ 'btn-outline-danger' if k == 'rejected' else 'btn-outline-success' }}"
+              name="review" value="{{ k }}" title="{{ help }}">{{ label }}</button>{% endfor %}
+          </form><br>{% endif %}
+          {% if can('cases.edit') %}
           <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#le{{ l.id }}">Edit</button>
           <form class="d-inline" method="post" action="{{ url_for('lessons.update', pid=p.id, lid=l.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}">
             <input type="hidden" name="action" value="{{ 'archive' if l.active else 'restore' }}"><button class="btn btn-sm btn-link">{{ 'Archive' if l.active else 'Restore' }}</button></form>

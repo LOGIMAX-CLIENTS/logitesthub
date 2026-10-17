@@ -12,6 +12,45 @@ server; AI steps and generation count against the user's monthly AI limit there.
 **Always add `--json`** and read the result from stdout. Never print, echo or store the access key or any
 `--secret` value.
 
+## Two team rules (every user, every IDE)
+
+**Rule 1 — Review before run.** A test case you wrote, generated or changed is **never run straight away**.
+1. Save it as `tests/<name>_test.md` (do not use `tester run "<plain English>"` for a new test: that runs at once).
+2. Show the user the case for review, then stop and wait:
+   ```
+   Test case ready for review: tests/<name>_test.md
+   Site: <url / environment>      Signs in as: <user variable>      Saves data: no | yes (what, on which environment)
+   | # | Section | Step |
+   |---|---------|------|
+   | 1 | Sign in | Navigate to {{base_url}}... |
+   ...
+   Any changes? Tell me what to change, or say "ok" to start the run.
+   ```
+3. The user asks for changes → make them, show the case again, wait again. Run only after an explicit **ok** (ok / run /
+   go / start).
+- A user's own "run TC-12" / "run tests/x_test.md" (a case they did not ask you to write or change) is already the ok.
+- While fixing a failed run you change steps → show what changed (old → new) and ask again before the next run,
+  unless the user said to keep fixing until it passes.
+
+**Rule 2 — Report every run the same way** (passed or failed), with the fields from the run's JSON (section 4):
+```
+**<title>** — PASSED | FAILED | NOT COMPLETED | PARTIAL
+| Steps | Passed | Failed | Skipped | Duration |
+|-------|--------|--------|---------|----------|
+| 8     | 7      | 1      | 0       | 42s      |
+
+Failed at step 5 (<section>): <step text>
+  Error: <error>    Expected: ...    Actual: ...    Cause: development bug | our side | environment (+ why)
+
+| # | Step | Result | Time |      <- every step from `steps` (for 40+ steps: the failed one and 3 around it, plus the counts)
+|---|------|--------|------|
+| 1 | Navigate to ... | passed | 1.2s |
+...
+LogiTestHub: <url>
+```
+- The LogiTestHub `url` is **always** in the report. Not saved (`upload.ok: false`) → say so and give `upload.retry`.
+- After the report, the verdict JSON block (section 4).
+
 ## 0. Check the connection first
 
 ```
@@ -133,6 +172,7 @@ Other free-text checks ("Check that the total is 1,000.00") are judged by AI fro
 ```
 tester run "Type {{user}} into the Username field. Type {{pw}} into the Password field. Click the Login button. Assert the text 'Dashboard' is visible." \
   --url <site login/start url> --var user=<username> --secret pw=<password> --project <id> --json
+#   ^ a quick one-off the user typed themselves. A test case you write: save the _test.md, review it (Rule 1), then --file
 tester run --case <case id> --url <site base url> --json          # saved LogiTestHub case
 tester run --file path/to/x_test.md --url <site base url> --json  # a _test.md file
 ```
@@ -164,12 +204,15 @@ Assert SQL "SELECT 1 FROM ret_taging WHERE tag_lot_id = {{last_lot}}" returns a 
 
 `tester run --json` prints the run result:
 ```
-{ "ok": true, "status": "FAILED", "outcome": "failed", "category": "needs_review",
+{ "ok": true, "status": "FAILED", "title": "GRN Entry: save a Bill-type GRN", "outcome": "failed", "category": "needs_review",
   "summary": "Step 7 failed: Click the Save button. - locator.waitFor: Timeout 10000ms exceeded.",
   "counts": { "total": 12, "passed": 6, "failed": 1, "skipped": 5, "needs_ai": 0 },
+  "duration": "1m 05s", "duration_ms": 65210,
   "failed_step": { "n": 7, "section": "Save", "text": "...", "error": "...", "screenshot": "...", "screenshot_before": "..." },
+  "steps": [ { "n": 1, "section": "Open", "text": "Navigate to ...", "status": "passed", "sec": 1.2 }, ... ],
   "url": "<LogiTestHub run page>", "run_id": 91, "run_dir": "...", "upload": { "ok": true } }
 ```
+Report it to the user with the Rule 2 layout (top of this file).
 
 | Exit | outcome | Meaning | Do |
 |---|---|---|---|
@@ -184,7 +227,7 @@ Assert SQL "SELECT 1 FROM ret_taging WHERE tag_lot_id = {{last_lot}}" returns a 
 `upload.ok: false` means the run finished but LogiTestHub could not save it (server unreachable / busy): the
 `status` / `outcome` are still the real result. Retry later with the `upload.retry` command (`tester upload <run_dir>`).
 
-**Finish every test with this verdict (a JSON block, then one plain sentence for the user):**
+**Finish every test with the Rule 2 report, then this verdict (a JSON block, then one plain sentence for the user):**
 ```json
 {
   "result": "PASSED | FAILED | NOT_COMPLETED | PARTIAL",
@@ -206,6 +249,7 @@ Assert SQL "SELECT 1 FROM ret_taging WHERE tag_lot_id = {{last_lot}}" returns a 
   and report the PASSING run (`retried`).
 - `environment`: neither the app nor the test failed; it could not be checked (network, server down or overloaded).
 - Omit `step` / `evidence` when the run passed. Always give the `url` when the run was saved.
+- The brain lacked something the test needed: add the 📘 Brain gap block for the developer (`references/write-case.md`).
 
 ## PM task (PM-LMX-1741 ...)
 

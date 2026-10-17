@@ -2012,6 +2012,8 @@ coderepo.register(app, con, admin_required, project_or_404)
 
 import lessons   # noqa: E402  (lessons learned per project: read by the /tester skill, Test Assistant and Generate)
 lessons.register(app, con, login_required, current_user, project_or_404)
+import brain_gaps   # noqa: E402  (what the app's knowledge_brain was missing while testing: for the brain team)
+brain_gaps.register(app, con, login_required, current_user, project_or_404)
 
 import pmtasks   # noqa: E402  (PM task codes on test cases: Start / Stop testing, task page, link attached to PM)
 pmtasks.register(app, con, login_required, current_user)

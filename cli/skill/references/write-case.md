@@ -11,6 +11,19 @@ the module -> say so and work from the code. Out of date -> read the changed fil
 the code is right; tell the user in one line which doc is out of date. Branches the user did not choose (payment
 mode ...): ask them. Then read the screen's code.
 
+**Brain gap -> tell the developer.** The developer keeps the brain up to date (their brain-update script, before they
+test). When the test needed something the module's docs do not say, or say wrongly, and you took it from the code (a
+mandatory field or row check, a setting, a filter, a message, a form order, a table), do not edit the brain yourself.
+End your report with one block per gap:
+```
+📘 Brain gap - <Module>/<DOC>.md
+Missing: <one line, general: "Touch and UOM are mandatory in every ticked item row">
+Code: <file:line>
+Add: <the table row or 2-4 lines to paste, in that doc's style>
+```
+Also when a failure was caused by a wrong / missing doc. After they update the brain, read the doc again before the
+next run.
+
 ## 1. Take everything from the code, never guess
 
 For the screen under test open (Glob / Grep / Read):
