@@ -28,6 +28,11 @@ server; AI steps and generation count against the user's monthly AI limit there.
    ```
 3. The user asks for changes → make them, show the case again, wait again. Run only after an explicit **ok** (ok / run /
    go / start).
+4. The CLI holds you to it: `tester run --file` on a new or changed `_test.md` stops with exit **6**,
+   `"error": "review_first"` and `review` = {title, steps [{n, section, text}], saves_data, saves_data_steps}. Show
+   that as the table above (Saves data from `saves_data`), wait for the ok, then run the same command with
+   `--approved`. Never add `--approved` before the user's ok. An unchanged approved file runs without it; cases pulled
+   from LogiTestHub (`tester case pull`, `tester run --case`) are already approved.
 - A user's own "run TC-12" / "run tests/x_test.md" (a case they did not ask you to write or change) is already the ok.
 - While fixing a failed run you change steps → show what changed (old → new) and ask again before the next run,
   unless the user said to keep fixing until it passes.
@@ -222,6 +227,7 @@ Report it to the user with the Rule 2 layout (top of this file).
 | 5 | `not_completed` (`run_stopped`) | The browser run stopped before the end | Run once more; again → report NOT COMPLETED with the message |
 | 3 | `partial` | Steps needed AI and could not run (e.g. no API credits) | Say which; rewrite them in the shapes above if possible |
 | 4 | — | AI limit reached | Stop and tell the user (admin can add extra in LogiTestHub) |
+| 6 | — | `review_first`: the `_test.md` is new or changed and not approved | Rule 1: show `review`, wait for ok, run with `--approved` |
 | 2 | — | Other error (bad URL, not logged in, case not found, LogiTestHub unreachable before the run) | Show the message |
 
 `upload.ok: false` means the run finished but LogiTestHub could not save it (server unreachable / busy): the
