@@ -611,6 +611,13 @@ def take_assistant_request(con, q, base=None):
             status, msg = 'no_account', f'No LogiTestHub account with the email {email} (Settings -> Users).'
         else:
             status, msg = 'ready', f'Review by {user}: each passed run of the test cases from their chat goes to PM.'
+            # PM shows Test Assistant only on a task in Review: its testing is over, so it stops for every tester (a
+            # task sent back to Development starts again with their next Tester CLI click)
+            with con:
+                done = [x['username'] for x in con.execute('SELECT username FROM user_tasks WHERE task_code=?', (code,))]
+                con.execute('DELETE FROM user_tasks WHERE task_code=?', (code,))
+            if done:
+                msg += f' In Review: testing stopped for {", ".join(done)}.'
     except Exception as e:   # one bad request must not stop the queue
         msg = f'Could not take the request: {e}'[:400]
     _record(con, 'pm_assistant_requests', q, code, user, status, msg)
