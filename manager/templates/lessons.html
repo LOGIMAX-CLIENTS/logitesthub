@@ -75,25 +75,28 @@
           <div class="mt-1"><span class="badge rounded-pill {{ {'new': 'text-bg-warning', 'keep': 'text-bg-success', 'skill': 'text-bg-primary', 'code': 'text-bg-info', 'rejected': 'text-bg-dark'}[l.review] or 'text-bg-light' }}"
                title="{{ (l.review_note or '') ~ (' · ' ~ l.reviewed_by if l.reviewed_by else '') }}">{{ review_label[l.review] or l.review }}</span></div>
           {% if l.review_note %}<div class="small text-secondary mt-1">{{ l.review_note }}</div>{% endif %}</td>
-        <td class="text-start"><b>{{ l.title }}</b>{% if l.symptom %}<div class="small text-secondary" style="white-space: pre-line">{{ l.symptom }}</div>{% endif %}
+        <td class="text-start" style="overflow-wrap: anywhere"><b>{{ l.title }}</b>{% if l.symptom %}<div class="small text-secondary" style="white-space: pre-line">{{ l.symptom }}</div>{% endif %}
           {% if l.fix %}<div class="small" style="white-space: pre-line"><span class="text-secondary">Fix:</span> {{ l.fix }}</div>{% endif %}</td>
-        <td class="text-start small" style="white-space: pre-line">{{ l.avoid or '' }}</td>
+        <td class="text-start small" style="white-space: pre-line; overflow-wrap: anywhere">{{ l.avoid or '' }}</td>
         <td class="text-end">{{ l.hits }}</td>
         <td class="text-start text-nowrap small">{% if l.case_id %}<a href="{{ url_for('case', cid=l.case_id, run=l.run_id) if l.run_id else url_for('case', cid=l.case_id) }}">case {{ l.case_id }}{% if l.run_id %} · run {{ l.run_id }}{% endif %}</a>{% elif l.run_id %}run {{ l.run_id }}{% endif %}</td>
         <td class="text-start small">{{ l.updated_by or l.created_by or '' }}{% if l.source == 'cli' %} <span class="text-secondary">(CLI)</span>{% endif %}</td>
         <td class="text-start small text-nowrap">{{ l.updated_at|dmy }}</td>
-        <td class="text-end text-nowrap">
-          {% if is_super %}<form class="d-inline-flex gap-1 mb-1" method="post" action="{{ url_for('lessons.set_review', pid=p.id, lid=l.id) }}">
+        <td class="text-end" style="width: 190px; min-width: 190px">
+          {# review buttons in a 2 x 2 grid: in one row they ran past the table's right edge #}
+          {% if is_super %}<form class="d-grid gap-1 mb-1" style="grid-template-columns: 1fr 1fr" method="post" action="{{ url_for('lessons.set_review', pid=p.id, lid=l.id) }}">
             <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="{{ request.full_path }}">
-            {% for k, label, help in reviews if k != 'new' and k != l.review %}<button class="btn btn-sm {{ 'btn-outline-danger' if k == 'rejected' else 'btn-outline-success' }}"
+            {% for k, label, help in reviews if k != 'new' and k != l.review %}<button class="btn btn-sm px-1 text-nowrap {{ 'btn-outline-danger' if k == 'rejected' else 'btn-outline-success' }}"
               name="review" value="{{ k }}" title="{{ help }}">{{ label }}</button>{% endfor %}
-          </form><br>{% endif %}
+          </form>{% endif %}
           {% if can('cases.edit') %}
+          <div class="d-flex justify-content-end align-items-center gap-1 flex-wrap">
           <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#le{{ l.id }}">Edit</button>
           <form class="d-inline" method="post" action="{{ url_for('lessons.update', pid=p.id, lid=l.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}">
-            <input type="hidden" name="action" value="{{ 'archive' if l.active else 'restore' }}"><button class="btn btn-sm btn-link">{{ 'Archive' if l.active else 'Restore' }}</button></form>
+            <input type="hidden" name="action" value="{{ 'archive' if l.active else 'restore' }}"><button class="btn btn-sm btn-link px-1">{{ 'Archive' if l.active else 'Restore' }}</button></form>
           {% if is_admin %}<form class="d-inline" method="post" action="{{ url_for('lessons.update', pid=p.id, lid=l.id) }}" onsubmit="return confirm('Delete this lesson?')">
-            <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="delete"><button class="btn btn-sm btn-link text-danger">Delete</button></form>{% endif %}
+            <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="delete"><button class="btn btn-sm btn-link text-danger px-1">Delete</button></form>{% endif %}
+          </div>
         {% endif %}</td>
       </tr>
       {% if can('cases.edit') %}
