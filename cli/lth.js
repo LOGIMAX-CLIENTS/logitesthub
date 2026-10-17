@@ -546,7 +546,10 @@ async function run() {
   fs.writeFileSync(varsPath, JSON.stringify(vars), { mode: 0o600 });
   const loginPath = loginText ? path.join(tmp, 'login.md') : null;
   if (loginPath) fs.writeFileSync(loginPath, loginText);
+  const live = (running) => api(c, 'POST', '/task/running',
+    { running, ...(flag('--task') && flag('--task') !== true ? { task: flag('--task') } : {}) }, false, true).catch(() => null);
   let res;
+  await live(true);   // PM's Tester CLI button blinks while this runs (a task started from PM only)
   try {
     res = await runRunner(mdPath, varsPath, {
       LTH_RUNS_DIR: RUNS, LTH_SERVER: c.server, LTH_USER: c.username, LTH_KEY: c.key, LTH_CASE_ID: caseId || '',
@@ -556,6 +559,7 @@ async function run() {
     }, loginPath, savedFile ? path.dirname(savedFile) : null);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });   // the vars file can hold passwords
+    await live(false);
   }
   const m = res.out.match(/REPORT : (.+)/);
   if (!m) {
