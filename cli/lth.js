@@ -14,6 +14,41 @@ const CONFIG = path.join(HOME, 'config.json');
 const RUNS = path.join(HOME, 'runs');
 const RUN_JS = path.join(__dirname, '..', 'run.js');
 
+// ---------------------------------------------------------------- self-update
+// The server sends the hash of the CLI code it hands out (X-Tester-CLI). When it differs from this install's,
+// `npm install -g <server>/cli/tester.tgz` runs once the command has ended (stderr only: --json stays clean).
+// LTH_NO_AUTO_UPDATE=1 turns it off.
+const CLI_CODE = ['run.js', 'cli', 'lib'];   // same files as manager/clitool.py CODE
+function cliFingerprint() {
+  const root = path.join(__dirname, '..');
+  const files = [];
+  for (const p of CLI_CODE) {
+    const full = path.join(root, p);
+    if (p.endsWith('.js')) { if (fs.existsSync(full)) files.push(p); continue; }
+    for (const f of fs.existsSync(full) ? fs.readdirSync(full) : []) {
+      if (f.endsWith('.js') && fs.statSync(path.join(full, f)).isFile()) files.push(`${p}/${f}`);
+    }
+  }
+  files.sort();
+  const h = require('crypto').createHash('sha256');
+  for (const f of files) h.update(Buffer.concat([Buffer.from(f + '\n'), fs.readFileSync(path.join(root, f)), Buffer.from('\n')]));
+  return h.digest('hex').slice(0, 16);
+}
+let pendingUpdate = null;   // server URL to update from
+function noteServerCli(server, fp) {
+  if (!fp || pendingUpdate || process.env.LTH_NO_AUTO_UPDATE === '1') return;
+  try { if (fp !== cliFingerprint()) pendingUpdate = server.replace(/\/+$/, ''); } catch { /* not comparable: skip */ }
+}
+process.on('exit', () => {
+  if (!pendingUpdate) return;
+  const url = `${pendingUpdate}/cli/tester.tgz`;
+  process.stderr.write(`\nA newer Tester CLI is on ${pendingUpdate}: updating (npm install -g ${url}) ...\n`);
+  const r = require('child_process').spawnSync('npm', ['install', '-g', url],
+    { stdio: ['ignore', 'ignore', 'inherit'], shell: process.platform === 'win32', timeout: 180000 });
+  process.stderr.write(r.status === 0 ? 'Tester CLI updated: the next command uses it.\n'
+    : `Update failed: run it yourself: npm install -g ${url}\n`);
+});
+
 // ---------------------------------------------------------------- small helpers
 
 const argv = process.argv.slice(2);
@@ -85,6 +120,7 @@ async function api(c, method, p, body, isForm, soft = false) {   // soft: throw 
     if (soft) throw new Error(msg);
     fail(msg, 2, { outcome: 'not_completed', category: 'logitesthub_unreachable' });
   }
+  noteServerCli(c.server, res.headers.get('x-tester-cli'));
   let j = {};
   try { j = await res.json(); } catch { /* not JSON */ }
   if (!res.ok || j.ok === false) {

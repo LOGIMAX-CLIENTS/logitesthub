@@ -49,6 +49,26 @@ def package_path():
         return tgz
 
 
+CODE = ['run.js', 'cli/*.js', 'lib/*.js']   # the code a tester's CLI runs (same list in cli/lth.js: cliFingerprint)
+_fp = {}
+
+
+def fingerprint():
+    """Short hash of the CLI code this server hands out. The CLI compares it with its own to update itself
+    (package.json keeps one version across changes, so the version cannot tell)."""
+    import hashlib
+    files = sorted({os.path.relpath(p, db.RUNNER_DIR).replace(os.sep, '/')
+                    for s in CODE for p in glob.glob(os.path.join(db.RUNNER_DIR, s))})
+    key = (tuple(files), max(os.path.getmtime(os.path.join(db.RUNNER_DIR, f)) for f in files))
+    if _fp.get('key') != key:
+        h = hashlib.sha256()
+        for f in files:
+            with open(os.path.join(db.RUNNER_DIR, f), 'rb') as fh:
+                h.update(f.encode() + b'\n' + fh.read() + b'\n')
+        _fp.update(key=key, value=h.hexdigest()[:16])
+    return _fp['value']
+
+
 def lan_ip():
     """This PC's address on the office network (no packet is sent: UDP connect only picks the route)."""
     try:
