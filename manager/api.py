@@ -24,6 +24,17 @@ import db
 
 bp = Blueprint('api', __name__, url_prefix='/api/v1')
 
+
+@bp.after_request
+def _cli_version(resp):
+    """Every answer says which CLI code this server hands out: an older CLI updates itself (cli/lth.js)."""
+    try:
+        import clitool
+        resp.headers['X-Tester-CLI'] = clitool.fingerprint()
+    except Exception:   # never break an answer over this
+        pass
+    return resp
+
 KEY_PREFIX = 'lth_'
 _FAILS = {}                    # ip -> [timestamps] of failed logins (brute-force brake)
 _FAILS_LOCK = threading.Lock()
