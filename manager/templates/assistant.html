@@ -343,10 +343,23 @@
     var line = el('div', 'd-flex align-items-center gap-2 mt-2');
     var btn = el('button', 'btn btn-sm btn-outline-primary', 'Save lesson'); btn.type = 'button';
     var note = el('span', 'small text-secondary');
-    function done(j) { btn.disabled = true; btn.textContent = 'Saved';
-      note.innerHTML = ''; var a = el('a', null, 'Lesson #' + j.id); a.href = URL_LESSONS; note.appendChild(a);
-      note.appendChild(document.createTextNode(j.created === false ? ' (same mistake seen before: counted again)' : ' saved: every next test reads it')); }
-    if (d.lesson_saved) done({ id: d.lesson_saved, created: true });
+    // saved by itself when the assistant answered; "Not right" takes it out of what the AI reads (the admin still reviews it)
+    var undo = el('button', 'btn btn-sm btn-link text-danger p-0', 'Not right'); undo.type = 'button'; undo.hidden = true;
+    undo.title = 'This lesson is wrong: stop sending it to the AI (the admin still sees it)';
+    function removed() { btn.hidden = true; undo.hidden = true; note.className = 'small text-secondary';
+      note.textContent = 'Removed: not sent to the AI. The admin will still look at it.'; }
+    function done(j) { btn.hidden = true; undo.hidden = READONLY;
+      note.innerHTML = ''; note.appendChild(document.createTextNode('✓ Saved automatically as '));
+      var a = el('a', null, 'Lesson #' + j.id); a.href = URL_LESSONS; note.appendChild(a);
+      note.appendChild(document.createTextNode(j.created === false ? ' (same mistake seen before: counted again).' : '. Every next test reads it; the admin reviews it.')); }
+    undo.onclick = function () {
+      undo.disabled = true;
+      post(URL_BASE + '/' + THREAD + '/lesson', { message_id: mid, action: 'remove' }).then(function (j) {
+        if (j.ok) removed(); else { undo.disabled = false; note.className = 'small t-fail'; note.textContent = j.error || 'Not removed.'; }
+      });
+    };
+    if (d.lesson_removed) removed();
+    else if (d.lesson_saved) done({ id: d.lesson_saved, created: d.lesson_new !== false });
     btn.onclick = function () {
       if (!THREAD || READONLY) return;
       btn.disabled = true;
@@ -355,7 +368,7 @@
       });
     };
     if (READONLY) btn.hidden = true;
-    line.appendChild(btn); line.appendChild(note); card.appendChild(line);
+    line.appendChild(btn); line.appendChild(note); line.appendChild(undo); card.appendChild(line);
     return card;
   }
 
