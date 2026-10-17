@@ -429,6 +429,16 @@ def task_start(code):
                     'url': pmtasks.task_url(pmtasks.public_base(), c, g.api_user['username'])})
 
 
+@bp.post('/task/running')
+@api_auth
+def task_running():
+    """The CLI at the start / end of a run: PM's Tester CLI button blinks while it runs. Body: {running, task?}."""
+    import pmtasks
+    f = request.get_json(silent=True) or {}
+    code, state = pmtasks.run_live(g.api_con, g.api_user['username'], f.get('task'), bool(f.get('running')))
+    return jsonify({'ok': True, 'task': code, 'pm': state})
+
+
 @bp.post('/task/stop')
 @api_auth
 def task_stop():

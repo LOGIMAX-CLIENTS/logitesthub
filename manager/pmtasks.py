@@ -431,6 +431,28 @@ def _attach_run(con, run_id, r, note):
     return status, msg
 
 
+_LIVE, _LIVE_LOCK = {}, threading.Lock()   # task code -> CLI runs going now (PM shows one flag per task)
+
+
+def run_live(con, username, code, running):
+    """A Tester CLI run started (running=True) or ended: PM's Tester CLI button blinks while any run of the task is
+    going. Only for a task the user started with their own Tester CLI click in PM. PM clears a flag left on for 20
+    minutes. Returns (task, sent or the reason not)"""
+    code = norm(code) or active_task(con, username)
+    if not code or not pm_clicked(con, username, code):
+        return code, 'not a task started from PM'
+    with _LIVE_LOCK:
+        n = max(0, _LIVE.get(code, 0) + (1 if running else -1))
+        _LIVE[code] = n
+        if not running and n:
+            return code, f'{n} other run(s) of {code} still going'
+    try:
+        pm_call('pm_lth_run_status', {'task': code, 'running': bool(running)})
+        return code, 'sent'
+    except Exception as e:   # never stop a run over PM
+        return code, f'PM: {e}'[:200]
+
+
 def send_run(run_id):
     """When a run ends. Tester CLI: attaches its link to the PM task, submitted by the PM member who ran it - only a
     PASSED run, and only the first one per case and tester (a case is re-run until it passes, and PM keeps every link
