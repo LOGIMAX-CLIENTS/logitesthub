@@ -413,7 +413,9 @@ def _attach_run(con, run_id, r, note):
         member = _member_id(con, r['username'])
         if not member:
             raise PmError(f'Could not find "{r["username"]}" among PM members: link not sent.')
-        res = pm_call('pm_task_test_report_attach', {'task': r['task_code'], 'url': r['url'], 'provider': 'LogiTestHub',
+        # PM files the link by provider: Test Assistant runs in its "Test Assistant" box, the rest under Tester CLI
+        provider = 'LogiTestHub Assistant' if r['via'] == 'assistant' else 'LogiTestHub'
+        res = pm_call('pm_task_test_report_attach', {'task': r['task_code'], 'url': r['url'], 'provider': provider,
                                                      'submitted_by_member_id': member, 'note': note[:2000]})
         status, msg = 'attached', ('Already attached.' if res.get('already_attached') else 'Sent to the PM task.')
     except PmError as e:
