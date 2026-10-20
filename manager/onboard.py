@@ -26,7 +26,16 @@ def ensure(con):
     global _ready
     if not _ready:
         con.execute(SCHEMA)
+        cols = {r['COLUMN_NAME'] for r in con.execute(
+            "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='project_repos'")}
+        if 'tests_remote' not in cols:   # the git repo the team keeps this code repo's test cases in (cloned by the next developer)
+            con.execute('ALTER TABLE project_repos ADD COLUMN tests_remote VARCHAR(500) NULL')
         _ready = True
+
+
+def set_tests_remote(con, repo, tests_remote):
+    ensure(con)
+    return con.execute('UPDATE project_repos SET tests_remote=? WHERE repo=?', ((tests_remote or '')[:500] or None, repo)).rowcount
 
 
 def repo_key(remote):
@@ -44,7 +53,7 @@ def repo_key(remote):
 
 def project_of_repo(con, repo):
     ensure(con)
-    return con.execute('SELECT p.id, p.name, r.linked_by, r.linked_at FROM project_repos r JOIN projects p ON p.id=r.project_id '
+    return con.execute('SELECT p.id, p.name, r.linked_by, r.linked_at, r.tests_remote FROM project_repos r JOIN projects p ON p.id=r.project_id '
                        'WHERE r.repo=?', (repo,)).fetchone()
 
 

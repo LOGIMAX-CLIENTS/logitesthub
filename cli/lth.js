@@ -107,14 +107,44 @@ function needLogin() {
   return c;
 }
 
+// One HTTP request with Node's http / https module. Not the built-in fetch(): on Windows (Node 24), process.exit() after
+// two or more fetch() calls aborts with "Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)" and exit code 127, so
+// every failing command (fail -> process.exit) crashed and lost its exit code.
+async function request(url, { method = 'GET', headers = {}, body, timeout = 20 * 60 * 1000 } = {}) {
+  let data = null;
+  if (body instanceof FormData) {   // multipart: let Response encode it (no network), then send the bytes
+    const r = new Response(body);
+    headers = { ...headers, 'Content-Type': r.headers.get('content-type') };
+    data = Buffer.from(await r.arrayBuffer());
+  } else if (body != null) data = Buffer.from(body);
+  if (data) headers = { ...headers, 'Content-Length': data.length };
+  const u = new URL(url);
+  const mod = u.protocol === 'http:' ? require('http') : require('https');
+  return new Promise((resolve, reject) => {
+    const req = mod.request(u, { method, headers, timeout }, res => {
+      const chunks = [];
+      res.on('data', d => chunks.push(d));
+      res.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode,
+          headers: { get: k => res.headers[String(k).toLowerCase()] ?? null }, json: async () => JSON.parse(text) });
+      });
+      res.on('error', reject);
+    });
+    req.on('timeout', () => req.destroy(Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' })));
+    req.on('error', e => reject(Object.assign(e, { cause: { code: e.code } })));
+    if (data) req.write(data);
+    req.end();
+  });
+}
+
 async function api(c, method, p, body, isForm, soft = false) {   // soft: throw instead of ending the command
   const headers = { Authorization: 'Basic ' + Buffer.from(`${c.username}:${c.key}`).toString('base64') };
   if (body && !isForm) headers['Content-Type'] = 'application/json';
   let res;
   try {
-    res = await fetch(c.server.replace(/\/+$/, '') + '/api/v1' + p, {
+    res = await request(c.server.replace(/\/+$/, '') + '/api/v1' + p, {
       method, headers, body: body ? (isForm ? body : JSON.stringify(body)) : undefined,
-      signal: AbortSignal.timeout(20 * 60 * 1000),
     });
   } catch (e) {
     const msg = `cannot reach LogiTestHub at ${c.server} (${e.cause?.code || e.message})`;
@@ -144,10 +174,28 @@ const ask = q => new Promise(resolve => {
 
 const WS_DIR = 'tests';
 const WS_FILE = 'tester.json';
+// The test cases may also live in a folder of their own, outside the code repo (e.g. C:\xampp\htdocs\etail-tests,
+// shown as a second folder in the IDE workspace). This PC remembers it per code repo in ~/.lth/config.json
+// ("tests_dirs": { "<code repo root>": "<tests folder>" }); the folder's tester.json says which code repo it is for.
+const samePath = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+function testsDirFor(root) {
+  const m = (loadConfig().tests_dirs || {});
+  const k = Object.keys(m).find(x => samePath(x, root));
+  return k && fs.existsSync(path.join(m[k], WS_FILE)) ? m[k] : null;
+}
 
-function findWorkspace(from = process.cwd()) {   // the nearest folder above with tests/tester.json
+// The workspace for the current folder: { root (code repo), dir (where tester.json and the cases are) } or null.
+// Inside a code repo: its own folder of tests (testsDirFor) or <repo>/tests/. Inside the tests folder itself: that.
+function findWorkspace(from = process.cwd()) {
   for (let d = path.resolve(from); ; d = path.dirname(d)) {
-    if (fs.existsSync(path.join(d, WS_DIR, WS_FILE))) return d;
+    const ext = testsDirFor(d);
+    if (ext) return { root: d, dir: ext };
+    if (fs.existsSync(path.join(d, WS_DIR, WS_FILE))) return { root: d, dir: path.join(d, WS_DIR) };
+    if (fs.existsSync(path.join(d, WS_FILE))) {   // inside a tests folder of its own: its code repo, as this PC knows it
+      const m = loadConfig().tests_dirs || {};
+      const k = Object.keys(m).find(x => samePath(m[x], d));
+      if (k) return { root: k, dir: d };
+    }
     if (path.dirname(d) === d) return null;
   }
 }
@@ -161,16 +209,17 @@ function projectRoot(from = process.cwd()) {   // the code project we are in: gi
     if (path.dirname(d) === d || d === os.homedir()) return null;
   }
 }
-function readWs(root) {
-  try { return JSON.parse(fs.readFileSync(path.join(root, WS_DIR, WS_FILE), 'utf8')); } catch { return {}; }
+function readWs(dir) {   // dir = the folder with tester.json
+  try { return JSON.parse(fs.readFileSync(path.join(dir, WS_FILE), 'utf8')); } catch { return {}; }
 }
-function createWs(root, settings = {}) {
-  const dir = path.join(root, WS_DIR);
+function createWs(dir, settings = {}) {
   // helpers/: @import files (login.md ...). variables/: test data (base_url, username, password ...) - not committed
   fs.mkdirSync(path.join(dir, 'helpers'), { recursive: true });
   fs.mkdirSync(path.join(dir, 'variables'), { recursive: true });
-  const ws = { format: 'tester.workspace/v1', variables: 'variables/variables.json', ...readWs(root), ...settings };
-  fs.writeFileSync(path.join(dir, WS_FILE), JSON.stringify(ws, null, 2) + '\n');
+  const old = readWs(dir);
+  const ws = { format: 'tester.workspace/v1', variables: 'variables/variables.json', ...old, ...settings };
+  // written only when it changes: a shared tests repo (git, CRLF on Windows) must not show it as modified
+  if (JSON.stringify(ws) !== JSON.stringify(old)) fs.writeFileSync(path.join(dir, WS_FILE), JSON.stringify(ws, null, 2) + '\n');
   const vfile = path.join(dir, ws.variables);
   if (!fs.existsSync(vfile)) fs.writeFileSync(vfile, JSON.stringify({
     base_url: { value: '' }, username: { value: '' }, password: { value: '', secret: true } }, null, 2) + '\n');
@@ -181,7 +230,7 @@ function createWs(root, settings = {}) {
 
 Each \`*_test.md\` here is one test case in plain English, one step per line. Commit them with the code they test.
 
-    tester run --file ${WS_DIR}/<name>_test.md     run one case
+    tester run --file <module>/<sub-module>/<name>_test.md     run one case
     tester test                          run every case in this folder
     tester run "<what to test>"          new case: runs it and saves it here
     tester case pull <id>                copy a LogiTestHub case here
@@ -195,25 +244,85 @@ the file to its LogiTestHub case, so its runs are saved under that case.
 `);
   return ws;
 }
-// The workspace for this command. First use inside a code project: create tests/ there (no --no-save, not a dry run).
+// The workspace for this command. A folder for the test cases is chosen with tester init (the user picks where); a
+// command run before that saves no file and says so.
 let WS;
 function workspace(create = false) {
   if (WS !== undefined && !(create && !WS)) return WS;
-  const root = findWorkspace();
-  if (root) return (WS = { root, dir: path.join(root, WS_DIR), ...readWs(root) });
-  const proj = create && !argv.includes('--no-save') && projectRoot();
-  if (!proj) return (WS = null);
-  createWs(proj);
-  if (!JSON_OUT) console.error(`Created ${path.join(proj, WS_DIR)}${path.sep} for this project's test cases (first use here).`);
-  return (WS = { root: proj, dir: path.join(proj, WS_DIR), created: true });
+  const found = findWorkspace();
+  if (found) return (WS = { ...found, ...readWs(found.dir) });
+  if (create && !argv.includes('--no-save') && projectRoot() && !JSON_OUT)
+    console.error('Note: no folder for test cases yet, so this case is not saved as a file. Run tester init (it suggests a folder).');
+  return (WS = null);
 }
 const wsGet = key => (workspace() || {})[key];
 function wsSet(settings) {   // remember project / url for the next command in this workspace
   const ws = workspace();
   if (!ws) return;
-  const cur = readWs(ws.root);
+  const cur = readWs(ws.dir);
   if (Object.entries(settings).every(([k, v]) => v == null || cur[k] === v)) return;
-  createWs(ws.root, Object.fromEntries(Object.entries(settings).filter(([, v]) => v != null)));
+  createWs(ws.dir, Object.fromEntries(Object.entries(settings).filter(([, v]) => v != null)));
+}
+
+// ---------------------------------------------------------------- the tests folder in the IDE
+// Adds the tests folder to the IDE window that has the code repo open, as a second folder. VS Code / Cursor: the
+// .code-workspace file of an open window that holds the repo gets a "folders" entry (the IDE reloads it by itself);
+// a window with only the repo folder open gets it with `code --add`. Other IDEs: the user opens it. Never stops init.
+function ideStorageFiles() {
+  const base = process.platform === 'win32' ? process.env.APPDATA
+    : process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support') : path.join(os.homedir(), '.config');
+  return ['Code', 'Cursor', 'Code - Insiders'].map(n => path.join(base || '', n, 'User', 'globalStorage', 'storage.json')).filter(f => fs.existsSync(f));
+}
+function fileUrlPath(u) {
+  try { return require('url').fileURLToPath(u); } catch { return null; }
+}
+// text of a .code-workspace (JSON with comments) with { "path": rel } added as the last entry of "folders", or null
+function appendFolder(text, rel) {
+  const m = /"folders"\s*:\s*\[/.exec(text);
+  if (!m) return null;
+  let i = m.index + m[0].length, depth = 1, inStr = false, end = -1;
+  for (; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) { if (ch === '\\') i++; else if (ch === '"') inStr = false; continue; }
+    if (ch === '"') inStr = true;
+    else if (ch === '/' && text[i + 1] === '/') { const n = text.indexOf('\n', i); i = n < 0 ? text.length : n; }
+    else if (ch === '/' && text[i + 1] === '*') { const n = text.indexOf('*/', i + 2); i = n < 0 ? text.length : n + 1; }
+    else if (ch === '[' || ch === '{') depth++;
+    else if ((ch === ']' || ch === '}') && --depth === 0) { end = i; break; }
+  }
+  if (end < 0) return null;
+  const before = text.slice(0, end).replace(/\s+$/, '');
+  const last = before[before.length - 1];
+  const entry = `{\n\t\t\t"path": ${JSON.stringify(rel)}\n\t\t}`;
+  return before + (last === '[' || last === ',' ? '\n\t\t' : ',\n\t\t') + entry + '\n\t' + text.slice(end);
+}
+function addToIde(testsDir, codeRoot) {
+  const seen = new Set();
+  for (const sf of ideStorageFiles()) {
+    let st;
+    try { st = JSON.parse(fs.readFileSync(sf, 'utf8')); } catch { continue; }
+    const w = st.windowsState || {};
+    for (const win of [w.lastActiveWindow, ...(w.openedWindows || [])].filter(Boolean)) {
+      const cfg = win.workspaceIdentifier && fileUrlPath(win.workspaceIdentifier.configURIPath);
+      if (!cfg || seen.has(cfg.toLowerCase()) || !fs.existsSync(cfg)) continue;
+      seen.add(cfg.toLowerCase());
+      const text = fs.readFileSync(cfg, 'utf8');
+      const folders = [...text.matchAll(/"path"\s*:\s*"([^"]+)"/g)].map(m => path.resolve(path.dirname(cfg), m[1].replace(/\\\\/g, '\\')));
+      if (!folders.some(f => samePath(f, codeRoot))) continue;
+      if (folders.some(f => samePath(f, testsDir))) return { ide: 'workspace', file: cfg, added: false };
+      const rel = path.relative(path.dirname(cfg), testsDir).split(path.sep).join('/');
+      // a text insert at the end of "folders" keeps the file's comments and puts the tests below the code
+      const out = appendFolder(text, rel);
+      if (!out) continue;
+      fs.writeFileSync(cfg, out);
+      return { ide: 'workspace', file: cfg, added: true };
+    }
+  }
+  if (process.env.VSCODE_PID || process.env.TERM_PROGRAM === 'vscode') {   // a window with just the repo folder
+    const r = require('child_process').spawnSync('code', ['--add', testsDir], { shell: process.platform === 'win32', stdio: 'ignore', timeout: 30000 });
+    if (r.status === 0) return { ide: 'code --add', added: true };
+  }
+  return { ide: 'manual', added: false };
 }
 
 // The workspace's test data (tests/variables/...): values that are filled in, as { key: { value, secret } }
@@ -231,7 +340,7 @@ function wsVars() {
 async function reportWs(c) {
   const ws = workspace();
   if (!ws || !c || !c.server) return;
-  try { await api(c, 'POST', '/workspace', { tests_dir: ws.dir, root: ws.root, project: Number(readWs(ws.root).project) || undefined }, false, true); }
+  try { await api(c, 'POST', '/workspace', { tests_dir: ws.dir, root: ws.root, project: Number(readWs(ws.dir).project) || undefined }, false, true); }
   catch { /* old server or no permission: nothing to do */ }
 }
 
@@ -332,6 +441,11 @@ const rel = p => path.relative(process.cwd(), p) || p;
 // ---------------------------------------------------------------- repo setup (tester init)
 // The repo's git remote: LogiTestHub keeps "this repo's tests go to project X" by it, so only the first developer of a
 // repo is asked which project; everyone after gets it from the server.
+function gitTop(dir) {
+  try {
+    return path.resolve(execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim());
+  } catch { return null; }
+}
 function gitRemote(root) {
   try {
     return execFileSync('git', ['remote', 'get-url', 'origin'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
@@ -344,17 +458,21 @@ const NEXT_STEP = {
     'menu -> sub-menu list, then tester modules push logitesthub.modules.json',
 };
 
-// tester init [--project <id|name>] [--create] [--url <site>]: set this repo up for LogiTestHub.
+// tester init [--project <id|name>] [--create] [--tests-dir <folder>] [--url <site>]: set this repo up for LogiTestHub.
 //  1. which project: linked on the server for this repo -> used, nobody is asked; else --project (an id or a name;
 //     a name that does not exist is made with --create); else stop with the project list (exit 7) for the user to pick
 //  2. the repo is linked to that project for every next developer
-//  3. what the project still needs: login helper, modules (todo + the command for each)
+//  3. where the test cases go on this PC: a folder of their own (suggested next to the repo, the user says yes or gives
+//     another path) - stop with the suggestion (exit 8) until --tests-dir is given; it is made, remembered for this
+//     repo and added to the IDE window as a second folder
+//  4. what the project still needs: login helper, modules (todo + the command for each)
 async function init() {
-  const root = findWorkspace() || projectRoot() || process.cwd();
+  const found = findWorkspace();
+  const root = found ? found.root : (projectRoot() || process.cwd());
   const c = needLogin();
   const remote = gitRemote(root);
   const want = typeof flag('--project') === 'string' ? flag('--project') : '';
-  let project = null, linkedBy = null;
+  let project = null, linkedBy = null, testsRemote = null;
   if (want) {
     if (/^\d+$/.test(want)) project = { id: Number(want) };
     else {
@@ -372,33 +490,94 @@ async function init() {
     }
   } else if (remote) {
     const r = await api(c, 'GET', `/repo?remote=${encodeURIComponent(remote)}`, null, false, true).catch(() => ({}));   // older server: no repo links
-    if (r.linked) { project = r.project; linkedBy = r.linked_by; }
+    if (r.linked) { project = r.project; linkedBy = r.linked_by; testsRemote = r.tests_remote || null; }
   }
-  if (!project && readWs(root).project) project = { id: Number(readWs(root).project) };
+  if (argv.includes('--unlink')) {   // a repo linked to the wrong project: the next init asks again
+    if (!remote) fail('this folder has no git remote: nothing to unlink.');
+    const j = await api(c, 'DELETE', `/repo?remote=${encodeURIComponent(remote)}`);
+    return print({ ok: true, repo: j.repo, unlinked: j.unlinked },
+      j.unlinked ? `This repo (${j.repo}) is no longer linked to a LogiTestHub project. tester init asks again.` : `This repo (${j.repo}) was not linked.`);
+  }
+  // tester.json's project is used for this run only: it may have been set for something else (the repo is linked for
+  // every developer only when the user names the project: tester init --project ...)
+  let fromWs = false;
+  if (!project && found && readWs(found.dir).project) { project = { id: Number(readWs(found.dir).project) }; fromWs = true; }
   if (!project) {
     const all = (await api(c, 'GET', '/projects')).projects;
     fail('This repo is not linked to a LogiTestHub project yet. Ask the user which one (once: the next developer of ' +
       'this repo gets it by itself), then: tester init --project <id or name>  (a new name: add --create)', 7,
       { error: 'project_needed', repo: remote || null, projects: all.map(x => ({ id: x.id, name: x.name, cases: x.cases })) });
   }
-  if (remote && !linkedBy) {   // the next developer of this repo is not asked again
+  if (remote && !linkedBy && !fromWs) {   // the next developer of this repo is not asked again
     const j = await api(c, 'POST', '/repo', { remote, project_id: project.id }, false, true).catch(() => null);
     if (j) linkedBy = c.username;
   }
+
+  // where the test cases go on this PC. The team may keep them in a git repo of their own: the first developer pushes
+  // it, LogiTestHub remembers its URL for this code repo, and the next developer is offered to clone it.
+  let dir = found ? found.dir : null, ide = null, cloned = false;
+  const given = typeof flag('--tests-dir') === 'string' ? path.resolve(flag('--tests-dir')) : null;
+  if (!dir && !given) {
+    const suggested = path.join(path.dirname(root), testsRemote ? path.basename(testsRemote).replace(/\.git$/i, '') : `${path.basename(root)}-tests`);
+    fail(testsRemote
+      ? `The team keeps this repo's test cases in ${testsRemote}. Ask the user: clone it to ${suggested} (or another path)? ` +
+        `Then: tester init --tests-dir "<folder>"  (it is cloned there and added to the IDE workspace as a second folder)`
+      : `Where should this repo's test cases be kept on this PC? Suggest a folder of their own: ${suggested} ` +
+        '(it is added to the IDE workspace as a second folder). Ask the user to say yes or give another path, then: ' +
+        `tester init --tests-dir "<folder>"`, 8,
+      { error: 'tests_dir_needed', repo_root: root, suggested, tests_remote: testsRemote, inside_repo: path.join(root, WS_DIR), project: { id: project.id } });
+  }
+  if (!dir) {
+    dir = given;
+    const empty = !fs.existsSync(dir) || !fs.readdirSync(dir).length;
+    if (empty && testsRemote) {   // the team's tests repo: clone it (the user's own git login is used)
+      fs.mkdirSync(path.dirname(dir), { recursive: true });
+      const r = require('child_process').spawnSync('git', ['clone', testsRemote, dir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 600000 });
+      if (r.status !== 0) fail(`git clone ${testsRemote} failed: ${(r.stderr || '').trim().split('\n').pop()}. Check that you can open that repo ` +
+        '(GitHub login / access), or clone it yourself to that folder and run tester init --tests-dir again.', 2, { error: 'clone_failed', tests_remote: testsRemote });
+      cloned = true;
+    } else if (!empty && !fs.existsSync(path.join(dir, WS_FILE)) && !argv.includes('--force'))
+      fail(`${dir} already has other files. Ask the user: use it anyway (--force) or give an empty / new folder.`, 2,
+        { error: 'tests_dir_not_empty', dir });
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  const outside = !samePath(path.dirname(dir), root) || path.basename(dir) !== WS_DIR;
+  // tester.json is shared (committed in the tests repo): project and site URL only, never a path of this PC
   const settings = { project: project.id };
   if (urlOpt()) settings.url = urlOpt();
-  const ws = createWs(root, settings);
+  const old = readWs(dir);
+  if (old.code_root) { delete old.code_root; fs.writeFileSync(path.join(dir, WS_FILE), JSON.stringify(old, null, 2) + '\n'); }
+  const ws = createWs(dir, settings);
+  if (outside) {   // remember it for this repo on this PC, and show it next to the code in the IDE
+    const cfg = loadConfig();
+    const m = Object.fromEntries(Object.entries(cfg.tests_dirs || {}).filter(([k]) => !samePath(k, root)));
+    saveConfig({ ...cfg, tests_dirs: { ...m, [root]: dir } });
+    ide = addToIde(dir, root);
+  }
+  // the tests folder is a git repo with a remote: tell LogiTestHub, so the next developer is offered to clone it
+  const own = outside && gitRemote(dir);
+  let shared = false;
+  if (own && remote && !samePath(gitTop(dir) || '', root)) {
+    const j = await api(c, 'POST', '/repo/tests', { remote, tests_remote: own }, false, true).catch(() => null);
+    shared = !!j;
+  }
   WS = undefined;   // read it again: it exists now
   await reportWs(c);
   const st = await api(c, 'GET', `/projects/${project.id}/setup`);
   const next = st.todo.map(t => NEXT_STEP[t]);
-  print({ ok: true, dir: path.join(root, WS_DIR), repo: remote || null, linked_by: linkedBy, ...ws, ...st, next },
-    `Test cases folder: ${path.join(root, WS_DIR)}${path.sep}\n` +
+  const ideLine = !ide ? '' : ide.ide === 'workspace' ? `  IDE: ${ide.added ? 'added to' : 'already in'} the workspace ${ide.file}\n`
+    : ide.ide === 'code --add' ? '  IDE: added to the open VS Code window\n' : `  IDE: open this folder in your IDE next to the code: ${dir}\n`;
+  const share = !outside ? '' : cloned ? `  Cloned the team's tests repo ${testsRemote}\n`
+    : shared ? `  Team tests repo: ${own} (the next developer of this repo is offered to clone it)\n`
+    : '  Not shared yet: to share these cases with the team, make this folder a git repo, push it, then run tester init again\n';
+  print({ ok: true, dir, repo_root: root, repo: remote || null, linked_by: linkedBy, ide, cloned, tests_remote: own || testsRemote || null,
+    shared: shared || cloned, ...ws, ...st, next },
+    `Test cases folder: ${dir}${path.sep}\n` + ideLine + share +
     `  LogiTestHub project: ${st.project.name} (${st.project.id})${linkedBy ? `  - this repo is linked to it (by ${linkedBy})` : ''}\n` +
     `  Login helper: ${st.login_helper ? 'yes' : 'NOT SET'}\n` +
     `  Modules: ${st.modules} modules, ${st.sub_modules} sub-modules\n` +
     `${ws.url ? `  Site URL: ${ws.url}\n` : '  Site URL: not set (tester init --url <site>)\n'}` +
-    (next.length ? `To do:\n${next.map(n => '  - ' + n).join('\n')}` : 'Ready: write a test (saved in tests/<module>/<sub-module>/).'));
+    (next.length ? `To do:\n${next.map(n => '  - ' + n).join('\n')}` : `Ready: write a test (saved in ${dir}${path.sep}<module>${path.sep}<sub-module>${path.sep}).`));
 }
 
 // tester login-helper [show] | set --file <steps.md> [--force]: the project's login steps (run before every case)
@@ -814,7 +993,7 @@ async function testAll() {
     } else files.push(g);
   }
   if (!files.length) fail(ws ? `no *_test.md in ${rel(ws.dir)} yet. Make one: tester run "<what to test>"`
-    : `no ${WS_DIR}/ folder here. Run inside your project (tester init), or: tester test <folder>`);
+    : 'no tests folder for this repo yet. Run tester init (it suggests one), or: tester test <folder>');
   files.sort();
   // the options for every run: everything except the command, its folder / file words and --json
   const skip = new Set(given);
@@ -928,7 +1107,6 @@ function help() {
   console.log(`Tester CLI ${PKG.version} - LogiTestHub
 
   tester login [--server <url>] [--username <u>] [--key <access key>]   connect to LogiTestHub
-  tester init [--project <id|name>] [--url <site>]  make ${WS_DIR}/ in this project for its test cases (also made on first use)
   tester setup                                      install the headless browser (once)
   tester whoami | tester logout
   tester projects                                    list projects
@@ -943,7 +1121,7 @@ function help() {
   tester settings --project <id> --env <name>        live profile / retail settings: is the action allowed?
   tester brain [words] [--path <repo or knowledge_brain>]   the app's knowledge brain docs for a test + out-of-date check
   tester run --file my_test.md --url <site>          run a test case file (new / changed: review first, then --approved)
-  tester test [folder | files]                       run every *_test.md in ${WS_DIR}/ (same options as run)
+  tester test [folder | files]                       run every *_test.md in the tests folder (same options as run)
         [--headed] [--no-ai] [--no-upload] [--no-login] [--no-save] [--env <name>] [--var k=v] [--secret k=v] [--vars file.json]
         (--env: the LogiTestHub environment whose read-only database "Assert SQL" / "Remember SQL" steps use)
         (the project's login helper runs first; --no-login, or "login: none" in the case, skips it)
@@ -956,7 +1134,10 @@ function help() {
   tester lesson add --project <id|name> --kind <app_bug|test_outdated|environment|test_data|agent_mistake>
         --title "<what went wrong>" --avoid "<rule for next time>" [--symptom ..] [--fix ..] [--case <id>] [--run <id>]
   tester skill install                               add the /tester skill to Claude Code (~/.claude/skills/tester)
-  tester init [--project <id|name>] [--create] [--url <site>]   set this repo up: project (asked once per repo), what is missing
+  tester init [--project <id|name>] [--create] [--tests-dir <folder>] [--url <site>]
+                                                     set this repo up: project (asked once per repo), tests folder
+                                                     (added to the IDE workspace), what is missing
+  tester init --unlink                                           this repo was linked to the wrong project: unlink it
   tester login-helper [show] | set --file <login.md> [--force]   the project's login steps (run before every case)
   tester modules read --url <menu page> [--var/--secret ..]      read the app's menu -> sub-menus on this PC (no AI) into a file
   tester modules add "<Module>" ["<Sub-module>"]                 add a module the app has but LogiTestHub does not
@@ -972,8 +1153,9 @@ function help() {
   A run's JSON: status, outcome (passed|failed|partial|not_completed), category (environment|needs_review|...),
               title, summary, counts, duration, failed_step {n, text, error, screenshot, screenshot_before},
               steps [{n, section, text, status, sec, error}], url, upload {ok, error, retry}.
-  Inside a project, test cases are saved as files in ${WS_DIR}/ (made the first time; ${WS_DIR}/${WS_FILE} keeps the
-  LogiTestHub project and site URL, so --project / --url can be left out). --no-save: do not write a file.
+  Test cases are files in the repo's tests folder, chosen with tester init --tests-dir (a folder of its own, shown next
+  to the code in the IDE; or <repo>/tests). Its ${WS_FILE} keeps the LogiTestHub project and site URL, so --project /
+  --url can be left out. --no-save: do not write a file.
   Runs are kept in ${RUNS}`);
 }
 

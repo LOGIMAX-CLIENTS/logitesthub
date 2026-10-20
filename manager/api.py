@@ -369,7 +369,27 @@ def repo_project():
         return _error(400, 'remote is required (the repo\'s git remote URL).')
     r = onboard.project_of_repo(g.api_con, key)
     return jsonify({'ok': True, 'repo': key, 'linked': bool(r),
-                    **({'linked_by': r['linked_by'], 'linked_at': r['linked_at'], **onboard.status(g.api_con, r['id'])} if r else {})})
+                    **({'linked_by': r['linked_by'], 'linked_at': r['linked_at'], 'tests_remote': r['tests_remote'],
+                        **onboard.status(g.api_con, r['id'])} if r else {})})
+
+
+@bp.post('/repo/tests')
+@api_auth
+def repo_tests():
+    """{"remote": "<code repo git remote>", "tests_remote": "<git remote of the folder with its test cases>"}: the next
+    developer of the code repo is offered that repo to clone (tester init)."""
+    import onboard
+    body = request.get_json(silent=True) or {}
+    key = onboard.repo_key(body.get('remote'))
+    tests = re.sub(r'^([a-z+]+://)[^/@]+@', r'\1', str(body.get('tests_remote') or '').strip(), flags=re.I)   # never keep a token
+    if not key or not tests:
+        return _error(400, 'remote and tests_remote are required.')
+    con = g.api_con
+    with con:
+        n = onboard.set_tests_remote(con, key, tests)
+    if not n:
+        return _error(404, 'This repo is not linked to a project yet (tester init --project ...).')
+    return jsonify({'ok': True, 'repo': key, 'tests_remote': tests})
 
 
 @bp.post('/repo')
@@ -388,6 +408,25 @@ def repo_link():
     with con:
         onboard.link(con, key, pid, body.get('remote'), g.api_user['username'])
     return jsonify({'ok': True, 'repo': key, **onboard.status(con, pid)})
+
+
+@bp.delete('/repo')
+@api_auth
+def repo_unlink():
+    """?remote=<git remote URL>: the repo is no longer linked (it was linked to the wrong project); tester init asks again."""
+    import onboard
+    import settings
+    key = onboard.repo_key(request.args.get('remote'))
+    if not key:
+        return _error(400, 'remote is required.')
+    con = g.api_con
+    onboard.ensure(con)
+    with con:
+        n = con.execute('DELETE FROM project_repos WHERE repo=?', (key,)).rowcount
+    if n:
+        settings.write_audit(g.api_user['username'], 'api.repo_unlink', 'repo', None, 'ok', f'Repo {key} unlinked from its project',
+                             None, request.remote_addr)
+    return jsonify({'ok': True, 'repo': key, 'unlinked': bool(n)})
 
 
 @bp.get('/projects/<int:pid>/setup')
