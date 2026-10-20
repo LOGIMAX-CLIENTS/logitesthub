@@ -81,6 +81,12 @@ Run `tester init --json` in the developer's repo before the first test, then do 
    makes it, remembers it for this repo and adds it to the IDE workspace as a second folder (`ide` in the result:
    `workspace` / `code --add` = done; `manual` = tell the user to open that folder in their IDE). Asked once per PC.
    Below, `<tests>` = that folder (`dir` in the result).
+   - **The team already has a tests repo** (`tests_remote` in the JSON): ask "The team keeps the test cases in
+     `<tests_remote>`. Clone it to `<suggested>`?" - `tester init --tests-dir "<folder>"` clones it (the user's own
+     git login) and adds it to the workspace. Clone failed (no access): tell the user to get access or clone it themselves.
+   - **Not shared yet** (`shared: false`): after the first cases are written, offer to make `<tests>` a git repo and push
+     it (the user gives / creates the remote), then `tester init` again: LogiTestHub then offers it to the next developer.
+   - `tester.json` in `<tests>` is shared (project, site URL only); `variables/` (passwords) stays out of git.
 3. **Login helper** (`login_helper` in `todo`): find the app's login page in the code (form ids, button text), write
    the steps with `{{username}}` / `{{password}}` (never real values) in `<tests>/helpers/login.md`, show them to the user
    (Rule 1: review), then `tester login-helper set --file <tests>/helpers/login.md`. An existing helper (409): show both
