@@ -67,6 +67,38 @@ tester whoami --json
 - `tester` not found → `npm install -g http://<logitesthub-pc>:5050/cli/tester.tgz` then `tester setup` (one time browser download).
 - "browser is not installed" → `tester setup`.
 
+## 0b. Set the repo up (first use in a repo, and whenever `tester init` lists a to-do)
+
+Run `tester init --json` in the developer's repo before the first test, then do every item of its `todo`, in order:
+1. **Project.** `project_needed` / `no_such_project` (exit 7): the repo is not linked yet. Ask the user once which
+   LogiTestHub project it belongs to (show `projects`). Then `tester init --project <id or name>`; a name that is not
+   there → ask "create it?" and add `--create`. The link is kept on the server by the repo's git remote, so the next
+   developer of this repo is **never asked again** - do not ask when `tester init` already gives a project.
+2. **Login helper** (`login_helper` in `todo`): find the app's login page in the code (form ids, button text), write
+   the steps with `{{username}}` / `{{password}}` (never real values) in `tests/helpers/login.md`, show them to the user
+   (Rule 1: review), then `tester login-helper set --file tests/helpers/login.md`. An existing helper (409): show both
+   and replace only if the user says so (`--force`). From then on test cases have **no** login steps.
+3. **Modules** (`modules` in `todo`): `tester modules read --url <the app page that shows the full menu> --var
+   username=.. --secret password=.. --json` signs in on this PC (localhost works) and reads menu → sub-menu. Show the
+   user the list (`menu`), then `tester modules push logitesthub.modules.json`. It only adds; nothing is renamed or deleted.
+   The reader takes the first menu it finds: when the list is not the app's main menu (e.g. header dropdowns, a user
+   name), never push it - build it from the app's menu table instead (`tester modules build --rows <menu rows>`, rows
+   from a read-only SELECT of the menu table the menu code reads), show it, then push.
+
+**Every test case goes in its module.** Before writing a case, `tester modules pull --json` and pick the module /
+sub-module that is the screen's menu → sub-menu in the app (the menu code / menu table, not a guess). Put it in the
+front matter and save the file in that folder:
+```
+---
+module: Retail Catalog
+sub_module: MC & VA Settings
+---
+```
+→ `tests/retail_catalog/mc_va_settings/<name>_test.md`. LogiTestHub files the case in that module when it is saved.
+The screen is new and not in LogiTestHub yet (a module being developed): ask the user "add module X > Y?", then
+`tester modules add "X" "Y"`, then save the case there. A run result with `folder_note` = the module was not found:
+add it, run again (the case moves there).
+
 ## Learn from mistakes (every time)
 
 1. **Before** writing or running a test: `tester lessons <project> --json` and follow every lesson. Also read
@@ -147,7 +179,7 @@ of every test case of that project — web runs, Test Runs / schedules and `test
   login: none
   ---
   ```
-- If `tester` prints that the project has no login helper, tell the user to add one there (do not inline login steps instead).
+- If `tester` prints that the project has no login helper, set it up first (section 0b, step 2) - do not inline login steps instead.
 - `--no-login` skips the helper for one run.
 
 ## 3. Preflight check, then run
