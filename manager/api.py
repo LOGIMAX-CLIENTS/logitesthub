@@ -216,11 +216,13 @@ def cases(pid):
 @bp.get('/cases/<int:cid>')
 @api_auth
 def case(cid):
-    r = g.api_con.execute('SELECT c.id, c.tc_no, c.title, c.content, c.project_id, c.updated_at, c.updated_by, '
+    import onboard
+    r = g.api_con.execute('SELECT c.id, c.tc_no, c.title, c.content, c.project_id, c.updated_at, c.updated_by, c.folder_id, '
                           'f.name AS folder FROM cases c LEFT JOIN folders f ON f.id=c.folder_id WHERE c.id=?', (cid,)).fetchone()
     if not r:
         return _error(404, 'Test case not found.')
-    return jsonify({'ok': True, 'case': dict(r, tc=f"TC-{r['tc_no']}")})
+    module, sub = onboard.folder_path(g.api_con, r['folder_id'])   # tester case pull files it under tests/<module>/<sub>/
+    return jsonify({'ok': True, 'case': dict(r, tc=f"TC-{r['tc_no']}", module=module, sub_module=sub)})
 
 
 @bp.put('/cases/<int:cid>')
@@ -311,6 +313,91 @@ def project_login_helper(pid):
     if not r:
         return _error(404, 'Project not found.')
     return jsonify({'ok': True, 'login_helper': r['login_helper'] or ''})
+
+
+@bp.put('/projects/<int:pid>/login-helper')
+@api_auth
+def project_login_helper_set(pid):
+    """{"login_helper": "<steps>", "force": false}: the project's login steps (tester login-helper set). An existing
+    helper is replaced only with force (every case of the project runs it)."""
+    import settings
+    body = request.get_json(silent=True) or {}
+    r = g.api_con.execute('SELECT login_helper FROM projects WHERE id=?', (pid,)).fetchone()
+    if not r:
+        return _error(404, 'Project not found.')
+    steps = str(body.get('login_helper') or '').replace('\r\n', '\n').strip()[:4000]
+    if not steps:
+        return _error(400, 'login_helper is empty: send the login steps.')
+    if (r['login_helper'] or '').strip() and not body.get('force'):
+        return jsonify({'ok': False, 'error': 'This project already has a login helper. Show it to the user; replace it '
+                        'only if they say so (--force).', 'login_helper': r['login_helper']}), 409
+    con = g.api_con
+    with con:
+        con.execute('UPDATE projects SET login_helper=? WHERE id=?', (steps, pid))
+    settings.write_audit(g.api_user['username'], 'api.login_helper', 'project', pid, 'ok',
+                         'Login helper ' + ('replaced' if r['login_helper'] else 'set') + ' from the CLI / IDE', None, request.remote_addr)
+    return jsonify({'ok': True, 'replaced': bool(r['login_helper'])})
+
+
+# ---------------------------------------------------------------- repo setup (tester init): repo -> project
+
+@bp.post('/projects')
+@api_auth
+def project_create():
+    """{"name": "Retail", "description": ""}: the project with that name (any case), made when it does not exist."""
+    name = ' '.join(str((request.get_json(silent=True) or {}).get('name') or '').split())[:120]
+    if not name:
+        return _error(400, 'name is required.')
+    con = g.api_con
+    p = con.execute('SELECT id, name FROM projects WHERE LOWER(name)=LOWER(?)', (name,)).fetchone()
+    if p:
+        return jsonify({'ok': True, 'created': False, 'project': {'id': p['id'], 'name': p['name']}})
+    with con:
+        pid = con.execute('INSERT INTO projects(name, description, created_by, created_at) VALUES (?,?,?,?)',
+                          (name, str((request.get_json(silent=True) or {}).get('description') or '')[:500],
+                           g.api_user['username'], db.now())).lastrowid
+    return jsonify({'ok': True, 'created': True, 'project': {'id': pid, 'name': name}})
+
+
+@bp.get('/repo')
+@api_auth
+def repo_project():
+    """?remote=<git remote URL>: the LogiTestHub project this repo was linked to (by any developer), and what it still needs."""
+    import onboard
+    key = onboard.repo_key(request.args.get('remote'))
+    if not key:
+        return _error(400, 'remote is required (the repo\'s git remote URL).')
+    r = onboard.project_of_repo(g.api_con, key)
+    return jsonify({'ok': True, 'repo': key, 'linked': bool(r),
+                    **({'linked_by': r['linked_by'], 'linked_at': r['linked_at'], **onboard.status(g.api_con, r['id'])} if r else {})})
+
+
+@bp.post('/repo')
+@api_auth
+def repo_link():
+    """{"remote": "<git remote URL>", "project_id": 1}: this repo's tests go to that project, for every developer."""
+    import onboard
+    body = request.get_json(silent=True) or {}
+    key = onboard.repo_key(body.get('remote'))
+    pid = body.get('project_id')
+    if not key or not isinstance(pid, int):
+        return _error(400, 'remote and project_id are required.')
+    if not _project(pid):
+        return _error(404, 'Project not found.')
+    con = g.api_con
+    with con:
+        onboard.link(con, key, pid, body.get('remote'), g.api_user['username'])
+    return jsonify({'ok': True, 'repo': key, **onboard.status(con, pid)})
+
+
+@bp.get('/projects/<int:pid>/setup')
+@api_auth
+def project_setup(pid):
+    """What the project still needs: login helper, modules (tester init shows it)."""
+    import onboard
+    if not _project(pid):
+        return _error(404, 'Project not found.')
+    return jsonify({'ok': True, **onboard.status(g.api_con, pid)})
 
 
 # ---------------------------------------------------------------- lessons learned (tester lessons / tester lesson add)
@@ -687,6 +774,7 @@ def run_upload():
             return _error(400, 'project_id must be an existing project (tester projects) when no case_id is sent.')
         if not content or len(content) > 100_000:
             return _error(400, 'content (the test case markdown) is required, max 100,000 characters.')
+    folder_note = None
     run_dir = os.path.join(db.RUNS_DIR, f"{datetime.now():%Y-%m-%d-%H-%M-%S}-cli-{secrets.token_hex(4)}")
     os.makedirs(run_dir)
     try:
@@ -696,10 +784,25 @@ def run_upload():
         if not summary:
             raise ValueError('events.ndjson has no run_end line: the run did not finish.')
         with con:
+            import onboard
+            module, sub = f.get('module') or '', f.get('sub_module') or ''
             if not case_id:
                 title = (f.get('title') or db.case_title(content, '') or 'CLI test')[:180]
-                folder = db.get_or_create_folder(con, pid, 'CLI runs')
+                # the case file's module / sub-module (an existing folder only), else "CLI runs" as before
+                folder = onboard.folder_for(con, pid, module, sub) if module else None
+                if module and not folder:
+                    folder_note = (f'Module "{module}' + (f' > {sub}' if sub else '') + '" is not in LogiTestHub: '
+                                   'saved in "CLI runs". Add it (tester modules add), then run again to move the case.')
+                folder = folder or db.get_or_create_folder(con, pid, 'CLI runs')
                 case_id = db.add_case(con, pid, folder, title, content + '\n', user)
+            elif module:   # an existing case still in "CLI runs" / no folder: move it to the module its file names
+                cur = con.execute('SELECT c.project_id, c.folder_id, fo.name AS fname FROM cases c '
+                                  'LEFT JOIN folders fo ON fo.id=c.folder_id WHERE c.id=?', (case_id,)).fetchone()
+                target = onboard.folder_for(con, cur['project_id'], module, sub)
+                if target and (not cur['folder_id'] or cur['fname'] == 'CLI runs'):
+                    con.execute('UPDATE cases SET folder_id=? WHERE id=?', (target, case_id))
+                elif not target:
+                    folder_note = f'Module "{module}' + (f' > {sub}' if sub else '') + '" is not in LogiTestHub (tester modules add).'
             env_row = _env_from(f.get('env'))[0] if f.get('env') else None   # the --env whose database the run used
             run_id = con.execute("INSERT INTO runs(case_id, status, started_at, run_by, env_name, env_id) VALUES (?,?,?,?,?,?)",
                                  (case_id, 'running', db.to_local(summary.get('at')), user,
@@ -718,7 +821,7 @@ def run_upload():
         pmtasks.run_finished(run_id)   # the run's link goes to the PM task, as the user who ran it
     base = request.host_url.rstrip('/')
     return jsonify({'ok': True, 'run_id': run_id, 'case_id': case_id, 'status': summary.get('status'),
-                    'url': f'{base}/cases/{case_id}?run={run_id}', 'task': task,
+                    'url': f'{base}/cases/{case_id}?run={run_id}', 'task': task, 'folder_note': folder_note,
                     'task_url': f'{base}/tasks/{task}' if task else None})
 
 
