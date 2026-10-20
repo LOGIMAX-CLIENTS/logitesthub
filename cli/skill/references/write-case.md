@@ -38,6 +38,24 @@ A hint may use ids, classes (`.a.b`), tag names, `:first-child` / `:last-child` 
 `(#billing_list tbody tr:first-child .btn-warning)`. Never `[attr]` or quotes: the runner fails such a step, and
 `tester check` reports it before the run.
 
+**Pick the most stable hint, in this order** (TC-13: a `*` found by `.col-sm-12 > .row > .col-sm-2:nth-child(5) > label
+> .error` could have matched the item row's `*` and passed while the fix was missing):
+1. `(#id)` of the element itself.
+2. A class that only that element has (check with Grep in the view / JS that it is unique on the page).
+3. A short path from the nearest id: `(#lot_form .category_req)`, `(#billing_list tbody tr:first-child .btn-warning)`.
+4. Only when nothing else exists: a position path (`nth-child`, long `>` chains). Then say in the review, on that step:
+   "position-based: a new field or another column order breaks it, and it may match another row".
+When the element has no id and it is in code the developer is changing now (their own uncommitted fix, a new screen),
+ask: "Add `id="<name>"` to it in your change? The test then finds exactly that element." Add it only after their yes,
+and show the diff with the test. Never add ids to code nobody is changing for this task.
+
+**A test for a bug fix must check the fix itself.** Before writing it, say in one line what the fix changes on the
+screen (e.g. "Non-Tagged now shows `*` on Category, Purity, Gold Smith"). Put steps that check exactly that, and mark
+them in the review: "⭐ steps 7-9 prove the fix: they fail without it". Steps that only check what worked before the fix
+(an old validation message) may stay, but never as the only checks - such a test passes on the old code too.
+Do not switch the developer's working tree to the old code to prove it (no `git stash` / checkout of their changes):
+their uncommitted work could be lost.
+
 ## 2. Step shapes that run without AI
 
 ```

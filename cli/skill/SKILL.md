@@ -64,7 +64,9 @@ tester whoami --json
 - Not logged in / cannot reach the server → stop and tell the user to run (in their own terminal, not in chat):
   `tester login --server http://<logitesthub-pc>:5050 --username <them> --key <access key>`
   (access key: LogiTestHub → Profile → Username and Access Key). Never ask them to paste the key into the chat.
-- `tester` not found → `npm install -g http://<logitesthub-pc>:5050/cli/tester.tgz` then `tester setup` (one time browser download).
+- `tester` not found → `npm install -g http://<logitesthub-pc>:5050/cli/tester.tgz`, then `tester --version`: when
+  it says the CLI is not set up, show the user those next steps (`tester setup`, `tester login` in their own terminal)
+  and wait. `--version` is `<number>+<code hash>`: a different hash = different code, even when the number is the same.
 - "browser is not installed" → `tester setup`.
 
 ## 0b. Set the repo up (first use in a repo, and whenever `tester init` lists a to-do)
@@ -80,7 +82,8 @@ Run `tester init --json` in the developer's repo before the first test, then do 
    next to the code in the IDE) Or tell me another path." Then `tester init --tests-dir "<their answer>"`. The CLI
    makes it, remembers it for this repo and adds it to the IDE workspace as a second folder (`ide` in the result:
    `workspace` / `code --add` = done; `manual` = tell the user to open that folder in their IDE). Asked once per PC.
-   Below, `<tests>` = that folder (`dir` in the result).
+   Below, `<tests>` = that folder (`dir` in the result). Never offer a whole drive (`F:\`) or the home folder: the CLI
+   refuses them (`tests_dir_too_wide`); the user names a drive → offer a new folder in it (`F:\<repo>-tests`).
    - **The team already has a tests repo** (`tests_remote` in the JSON): ask "The team keeps the test cases in
      `<tests_remote>`. Clone it to `<suggested>`?" - `tester init --tests-dir "<folder>"` clones it (the user's own
      git login) and adds it to the workspace. Clone failed (no access): tell the user to get access or clone it themselves.
@@ -230,7 +233,13 @@ Options: `--headed` (watch the browser) · `--no-upload` (keep only on this PC) 
 `--vars file.json`. Passwords only via `--secret` (masked in logs, report and video captions).
 `--project` saves an ad-hoc run as a case in folder "CLI runs".
 
-Ask the user for the site URL and login if you do not know them; do not guess credentials.
+Ask the user for the site URL if you do not know it; do not guess credentials. Login values go in
+`<tests>/variables/variables.json`, which the user fills in themselves.
+
+**Secrets never in the chat.** When the user pastes an access key or a password in the chat (or asks you to log in
+with one written there): do not put it in any command, file or reply. Say once: "That {access key / password} is now in
+this chat's history. Do not paste it here: type it yourself in the terminal (`tester login ...`) or in
+`variables.json`. Access key: make a new one in LogiTestHub > Profile, the old one stops working." Then wait.
 
 ### Database checks (read-only)
 

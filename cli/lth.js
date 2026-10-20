@@ -9,6 +9,9 @@ const path = require('path');
 const { spawn, execFileSync } = require('child_process');
 
 const PKG = require('../package.json');
+// The version with the code it runs: package.json keeps one number across changes, so "+<fingerprint>" (the same hash the
+// server compares for auto-update) shows whether two installs run the same code.
+let VERSION = PKG.version;
 const HOME = process.env.LTH_HOME || path.join(os.homedir(), '.lth');
 const CONFIG = path.join(HOME, 'config.json');
 const RUNS = path.join(HOME, 'runs');
@@ -35,6 +38,7 @@ function cliFingerprint() {
   for (const f of files) h.update(Buffer.concat([Buffer.from(f + '\n'), fs.readFileSync(path.join(root, f)), Buffer.from('\n')]));
   return h.digest('hex').slice(0, 16);
 }
+try { VERSION = `${PKG.version}+${cliFingerprint().slice(0, 7)}`; } catch { /* files not readable: the plain number */ }
 let pendingUpdate = null;   // server URL to update from
 function noteServerCli(server, fp) {
   if (!fp || pendingUpdate || process.env.LTH_NO_AUTO_UPDATE === '1') return;
@@ -100,9 +104,18 @@ function saveConfig(c) {
   fs.mkdirSync(HOME, { recursive: true });
   fs.writeFileSync(CONFIG, JSON.stringify(c, null, 2), { mode: 0o600 });
 }
+// shown when the CLI is installed but not set up yet (tester --version / help / any command that needs LogiTestHub)
+const NEXT_SETUP = `Tester CLI is not set up on this PC yet. Next, in your own terminal (not in a chat - the access key is secret):
+  tester setup        (one time: the headless browser)
+  tester login --server <LogiTestHub URL: the site you installed tester from> --username <you> --key <access key>
+  (access key: LogiTestHub -> Profile -> Username and Access Key). Then start a new Claude chat.`;
+function loggedIn() {
+  const c = loadConfig();
+  return !!(c.server && c.username && c.key);
+}
 function needLogin() {
   const c = loadConfig();
-  if (!c.server || !c.username || !c.key) fail('not logged in. Run: tester login --server <url> --username <you> --key <access key>');
+  if (!c.server || !c.username || !c.key) fail('not logged in. ' + NEXT_SETUP, 2, { not_logged_in: true });
   if (wsGet('project')) c.project = wsGet('project');   // inside a workspace its project is the default
   return c;
 }
@@ -529,6 +542,10 @@ async function init() {
   }
   if (!dir) {
     dir = given;
+    // a whole drive or the home folder would put tester.json etc. at its top and add all of it to the IDE: never, even --force
+    if (path.parse(dir).root.toLowerCase() === (dir.endsWith(path.sep) ? dir : dir + path.sep).toLowerCase() || samePath(dir, os.homedir()))
+      fail(`${dir} is a whole drive / your home folder. Ask the user for a folder inside it, e.g. ` +
+        `${path.join(dir, path.basename(root) + '-tests')}`, 2, { error: 'tests_dir_too_wide', dir });
     const empty = !fs.existsSync(dir) || !fs.readdirSync(dir).length;
     if (empty && testsRemote) {   // the team's tests repo: clone it (the user's own git login is used)
       fs.mkdirSync(path.dirname(dir), { recursive: true });
@@ -1104,7 +1121,8 @@ function syncSkill() {
 }
 
 function help() {
-  console.log(`Tester CLI ${PKG.version} - LogiTestHub
+  if (!loggedIn()) console.error(`${NEXT_SETUP}\n`);
+  console.log(`Tester CLI ${VERSION} - LogiTestHub
 
   tester login [--server <url>] [--username <u>] [--key <access key>]   connect to LogiTestHub
   tester setup                                      install the headless browser (once)
@@ -1550,7 +1568,7 @@ const COMMANDS = { init, 'login-helper': loginHelperCmd, test: testAll, task: ta
 (async () => {
   const cmd = argv[0];
   if (!cmd || cmd === '--help' || cmd === '-h') return help();
-  if (cmd === '--version' || cmd === '-v') return console.log(PKG.version);
+  if (cmd === '--version' || cmd === '-v') { console.log(VERSION); if (!loggedIn()) console.error(NEXT_SETUP); return; }
   const fn = COMMANDS[cmd];
   if (!fn) fail(`unknown command "${cmd}". Try: tester help`);
   if (cmd !== 'skill') syncSkill();
