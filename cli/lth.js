@@ -107,14 +107,44 @@ function needLogin() {
   return c;
 }
 
+// One HTTP request with Node's http / https module. Not the built-in fetch(): on Windows (Node 24), process.exit() after
+// two or more fetch() calls aborts with "Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)" and exit code 127, so
+// every failing command (fail -> process.exit) crashed and lost its exit code.
+async function request(url, { method = 'GET', headers = {}, body, timeout = 20 * 60 * 1000 } = {}) {
+  let data = null;
+  if (body instanceof FormData) {   // multipart: let Response encode it (no network), then send the bytes
+    const r = new Response(body);
+    headers = { ...headers, 'Content-Type': r.headers.get('content-type') };
+    data = Buffer.from(await r.arrayBuffer());
+  } else if (body != null) data = Buffer.from(body);
+  if (data) headers = { ...headers, 'Content-Length': data.length };
+  const u = new URL(url);
+  const mod = u.protocol === 'http:' ? require('http') : require('https');
+  return new Promise((resolve, reject) => {
+    const req = mod.request(u, { method, headers, timeout }, res => {
+      const chunks = [];
+      res.on('data', d => chunks.push(d));
+      res.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode,
+          headers: { get: k => res.headers[String(k).toLowerCase()] ?? null }, json: async () => JSON.parse(text) });
+      });
+      res.on('error', reject);
+    });
+    req.on('timeout', () => req.destroy(Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' })));
+    req.on('error', e => reject(Object.assign(e, { cause: { code: e.code } })));
+    if (data) req.write(data);
+    req.end();
+  });
+}
+
 async function api(c, method, p, body, isForm, soft = false) {   // soft: throw instead of ending the command
   const headers = { Authorization: 'Basic ' + Buffer.from(`${c.username}:${c.key}`).toString('base64') };
   if (body && !isForm) headers['Content-Type'] = 'application/json';
   let res;
   try {
-    res = await fetch(c.server.replace(/\/+$/, '') + '/api/v1' + p, {
+    res = await request(c.server.replace(/\/+$/, '') + '/api/v1' + p, {
       method, headers, body: body ? (isForm ? body : JSON.stringify(body)) : undefined,
-      signal: AbortSignal.timeout(20 * 60 * 1000),
     });
   } catch (e) {
     const msg = `cannot reach LogiTestHub at ${c.server} (${e.cause?.code || e.message})`;
@@ -374,14 +404,23 @@ async function init() {
     const r = await api(c, 'GET', `/repo?remote=${encodeURIComponent(remote)}`, null, false, true).catch(() => ({}));   // older server: no repo links
     if (r.linked) { project = r.project; linkedBy = r.linked_by; }
   }
-  if (!project && readWs(root).project) project = { id: Number(readWs(root).project) };
+  if (argv.includes('--unlink')) {   // a repo linked to the wrong project: the next init asks again
+    if (!remote) fail('this folder has no git remote: nothing to unlink.');
+    const j = await api(c, 'DELETE', `/repo?remote=${encodeURIComponent(remote)}`);
+    return print({ ok: true, repo: j.repo, unlinked: j.unlinked },
+      j.unlinked ? `This repo (${j.repo}) is no longer linked to a LogiTestHub project. tester init asks again.` : `This repo (${j.repo}) was not linked.`);
+  }
+  // tests/tester.json's project is used for this run only: it may have been set for something else (the repo is
+  // linked for every developer only when the user names the project: tester init --project ...)
+  let fromWs = false;
+  if (!project && readWs(root).project) { project = { id: Number(readWs(root).project) }; fromWs = true; }
   if (!project) {
     const all = (await api(c, 'GET', '/projects')).projects;
     fail('This repo is not linked to a LogiTestHub project yet. Ask the user which one (once: the next developer of ' +
       'this repo gets it by itself), then: tester init --project <id or name>  (a new name: add --create)', 7,
       { error: 'project_needed', repo: remote || null, projects: all.map(x => ({ id: x.id, name: x.name, cases: x.cases })) });
   }
-  if (remote && !linkedBy) {   // the next developer of this repo is not asked again
+  if (remote && !linkedBy && !fromWs) {   // the next developer of this repo is not asked again
     const j = await api(c, 'POST', '/repo', { remote, project_id: project.id }, false, true).catch(() => null);
     if (j) linkedBy = c.username;
   }
@@ -957,6 +996,7 @@ function help() {
         --title "<what went wrong>" --avoid "<rule for next time>" [--symptom ..] [--fix ..] [--case <id>] [--run <id>]
   tester skill install                               add the /tester skill to Claude Code (~/.claude/skills/tester)
   tester init [--project <id|name>] [--create] [--url <site>]   set this repo up: project (asked once per repo), what is missing
+  tester init --unlink                                           this repo was linked to the wrong project: unlink it
   tester login-helper [show] | set --file <login.md> [--force]   the project's login steps (run before every case)
   tester modules read --url <menu page> [--var/--secret ..]      read the app's menu -> sub-menus on this PC (no AI) into a file
   tester modules add "<Module>" ["<Sub-module>"]                 add a module the app has but LogiTestHub does not

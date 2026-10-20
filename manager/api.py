@@ -390,6 +390,25 @@ def repo_link():
     return jsonify({'ok': True, 'repo': key, **onboard.status(con, pid)})
 
 
+@bp.delete('/repo')
+@api_auth
+def repo_unlink():
+    """?remote=<git remote URL>: the repo is no longer linked (it was linked to the wrong project); tester init asks again."""
+    import onboard
+    import settings
+    key = onboard.repo_key(request.args.get('remote'))
+    if not key:
+        return _error(400, 'remote is required.')
+    con = g.api_con
+    onboard.ensure(con)
+    with con:
+        n = con.execute('DELETE FROM project_repos WHERE repo=?', (key,)).rowcount
+    if n:
+        settings.write_audit(g.api_user['username'], 'api.repo_unlink', 'repo', None, 'ok', f'Repo {key} unlinked from its project',
+                             None, request.remote_addr)
+    return jsonify({'ok': True, 'repo': key, 'unlinked': bool(n)})
+
+
 @bp.get('/projects/<int:pid>/setup')
 @api_auth
 def project_setup(pid):

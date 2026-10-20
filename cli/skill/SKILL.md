@@ -74,6 +74,7 @@ Run `tester init --json` in the developer's repo before the first test, then do 
    LogiTestHub project it belongs to (show `projects`). Then `tester init --project <id or name>`; a name that is not
    there → ask "create it?" and add `--create`. The link is kept on the server by the repo's git remote, so the next
    developer of this repo is **never asked again** - do not ask when `tester init` already gives a project.
+   The user says the project is wrong → `tester init --unlink`, then ask again.
 2. **Login helper** (`login_helper` in `todo`): find the app's login page in the code (form ids, button text), write
    the steps with `{{username}}` / `{{password}}` (never real values) in `tests/helpers/login.md`, show them to the user
    (Rule 1: review), then `tester login-helper set --file tests/helpers/login.md`. An existing helper (409): show both
