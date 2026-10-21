@@ -137,7 +137,8 @@
   if (!el) return;
   var $ = function (id) { return document.getElementById(id); };
   casePicker({ body: $('cpBody'), data: JSON.parse(el.textContent), form: $('cpForm'), search: $('cpSearch'), ready: $('cpReady'),
-               source: $('cpSource'), count: $('cpCount'), folders: $('cpFolders'), expand: $('cpExpand'), clear: $('cpClear') });
+               source: $('cpSource'), count: $('cpCount'), folders: $('cpFolders'), expand: $('cpExpand'), clear: $('cpClear'),
+               projectName: function () { return {{ (tr.project_name or '')|tojson }}; } });
   if (new URLSearchParams(location.search).get('pick')) bootstrap.Modal.getOrCreateInstance($('casePicker')).show();
 })();
 </script>

@@ -750,7 +750,7 @@ video.rec { display: block; width: 100%; aspect-ratio: 1366 / 768; object-fit: c
 .cp-fcb, .cp-ccb { width: 17px; height: 17px; flex: none; margin: 0; }
 .cp-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; border: 0; background: none; padding: 2px 0; text-align: left; color: var(--ink); font-weight: 600; }
 .cp-chev { color: var(--muted); transition: transform .15s ease; flex: none; }
-.cp-folder[aria-expanded="true"] .cp-chev { transform: rotate(90deg); }
+.cp-folder[aria-expanded="true"] > .cp-frow .cp-chev { transform: rotate(90deg); }
 .cp-ficon { color: var(--brand); flex: none; }
 .cp-fname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cp-fcount { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -761,6 +761,15 @@ video.rec { display: block; width: 100%; aspect-ratio: 1366 / 768; object-fit: c
 .cp-tc { flex: none; font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--muted); width: 58px; }
 .cp-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cp-empty { color: var(--muted); font-size: 13px; padding: 8px 44px; }
+.cp-more { margin-left: 34px; padding: 4px 10px; font-size: 13px; }
+/* "My test cases" first, then the whole project under one folder */
+.cp-mine > .cp-frow { background: var(--brand-tint); }
+.cp-mine .cp-case { padding-left: 44px; }
+.cp-all > .cp-frow { padding-left: 43px; }
+.cp-all-body .cp-frow { padding-left: 34px; }
+.cp-all-body .cp-case { padding-left: 62px; }
+.cp-task { flex: none; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px; background: rgba(217, 119, 6, .12); color: #b45309; white-space: nowrap; }
+.cp-notlive { flex: none; font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px dashed var(--line-2, #b8c0c6); color: var(--muted); white-space: nowrap; }
 .cp-mode { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .cp-mode label { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; font-size: 13px; cursor: pointer; }
 .cp-mode label:has(input:checked) { border-color: var(--brand-line, #9fd9dd); background: var(--brand-tint); }

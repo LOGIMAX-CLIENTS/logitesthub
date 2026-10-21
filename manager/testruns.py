@@ -79,12 +79,16 @@ def resolve_cases(con, tr, ignore_ready=False):
     return con.execute(q + ' ORDER BY c.tc_no', params).fetchall()
 
 
-def picker_data(con, project_id=None):
+def picker_data(con, project_id=None, me=None):
     """Test case picker: every case (web, Tester Assistant, Tester CLI) under the folder it is in, shown as
-    "Module › Sub-module"; only folders that have cases. source: assistant / cli / manual."""
+    "Module › Sub-module"; only folders that have cases. source: assistant / cli / manual.
+    With me (a username) each case also says whether it is that user's (made, linked to a PM task or run by them) and
+    when they last worked on it, so the picker can show "My test cases" first, newest first, with their PM task codes
+    and whether they have run on a server environment yet (a developer's own PC / localhost does not count)."""
     live = '(c.folder_id IS NULL OR c.folder_id NOT IN (SELECT id FROM folders WHERE archived=1))'
     rows = con.execute(
-        "SELECT c.id, c.tc_no, c.title, c.folder_id, c.project_id, c.qa_status, c.created_by, lr.status AS last, "
+        "SELECT c.id, c.tc_no, c.title, c.folder_id, c.project_id, c.qa_status, c.created_by, c.created_at, c.updated_at, "
+        "lr.status AS last, "
         "CASE WHEN c.content LIKE '%tags: [assistant]%' THEN 'assistant' WHEN f.name='CLI runs' OR c.source_path IS NOT NULL "
         "THEN 'cli' ELSE 'manual' END AS source FROM cases c LEFT JOIN folders f ON f.id=c.folder_id "
         'LEFT JOIN runs lr ON lr.id=(SELECT MAX(id) FROM runs WHERE case_id=c.id) '
@@ -98,10 +102,32 @@ def picker_data(con, project_id=None):
         return f"{p['name']} › {f['name']}" if p else f['name']
     folders = sorted(({'id': i, 'name': full(allf[i]), 'project': allf[i]['project_id']} for i in used if i in allf),
                      key=lambda f: f['name'].lower())
-    return {'folders': folders,
-            'cases': [{'id': x['id'], 'tc': x['tc_no'], 'title': x['title'], 'folder': x['folder_id'], 'project': x['project_id'],
-                       'ready': x['qa_status'] == 'ready', 'last': x['last'], 'source': x['source'], 'by': x['created_by']}
-                      for x in rows]}
+    ids = [r['id'] for r in rows]
+    tasks, mine_at, server = {}, {}, {}
+    if ids:
+        marks = ','.join('?' * len(ids))
+        for t in con.execute(f'SELECT case_id, task_code, added_by FROM case_tasks WHERE case_id IN ({marks}) ORDER BY added_at', ids):
+            tasks.setdefault(t['case_id'], []).append(t['task_code'])
+            if me and t['added_by'] == me:
+                mine_at.setdefault(t['case_id'], '')
+        if me:
+            for r in con.execute(f'SELECT case_id, MAX(started_at) AS at FROM runs WHERE run_by=? AND case_id IN ({marks}) '
+                                 'GROUP BY case_id', [me, *ids]):
+                mine_at[r['case_id']] = max(mine_at.get(r['case_id']) or '', r['at'] or '')
+        # latest run on a server environment: not a CLI run on a PC, not an environment whose site is localhost
+        for r in con.execute(
+                'SELECT r.case_id, r.status, r.started_at, r.env_name FROM runs r JOIN environments e ON e.id=r.env_id '
+                f"WHERE r.case_id IN ({marks}) AND r.env_name NOT LIKE '%(CLI)%' AND e.base_url NOT LIKE '%localhost%' "
+                "AND e.base_url NOT LIKE '%127.0.0.1%' AND r.status NOT IN ('running', 'queued') ORDER BY r.id", ids):
+            server[r['case_id']] = {'status': r['status'], 'at': (r['started_at'] or '')[:16], 'env': r['env_name']}
+    out = []
+    for x in rows:
+        mine = bool(me) and (x['created_by'] == me or x['id'] in mine_at)
+        at = max(mine_at.get(x['id']) or '', x['updated_at'] or '', x['created_at'] or '') if mine else ''
+        out.append({'id': x['id'], 'tc': x['tc_no'], 'title': x['title'], 'folder': x['folder_id'], 'project': x['project_id'],
+                    'ready': x['qa_status'] == 'ready', 'last': x['last'], 'source': x['source'], 'by': x['created_by'],
+                    'tasks': tasks.get(x['id'], []), 'mine': mine, 'at': at, 'server': server.get(x['id'])})
+    return {'folders': folders, 'cases': out, 'me': me}
 
 
 SQL_STEP = re.compile(r'^\s*(?:\d+\.|[-*])?\s*(?:remember sql|assert sql|set ?up sql)\b', re.I | re.M)
@@ -258,7 +284,7 @@ def make_blueprint(deps):
         folders = c.execute('SELECT id, project_id, name FROM folders WHERE archived=0 ORDER BY name').fetchall()
         creators = [r[0] for r in c.execute('SELECT DISTINCT created_by FROM test_runs WHERE created_by IS NOT NULL ORDER BY 1')]
         all_runs = c.execute('SELECT id, name FROM test_runs WHERE archived=0 ORDER BY name').fetchall()
-        return render_template('test_runs.html', tab=tab, runs=runs, summ=summ, counts=counts, scheds=scheds, picker=picker_data(c),
+        return render_template('test_runs.html', tab=tab, runs=runs, summ=summ, counts=counts, scheds=scheds, picker=picker_data(c, me=current_user()['username']),
                                s_summ=s_summ, describe=describe, projects=projects, folders=folders, q=q, by=creator,
                                status=status, creators=creators, all_runs=all_runs, days=DAYS,
                                today=date.today().isoformat(), total=len(runs))
@@ -282,7 +308,7 @@ def make_blueprint(deps):
                            'WHERE s.test_run_id=? ORDER BY s.id', (tid,)).fetchall()
         any_running = any(r['status'] in ('running', 'queued') for r in results.values())
         folders = c.execute('SELECT id, name FROM folders WHERE project_id=? AND archived=0 ORDER BY name', (tr['project_id'],)).fetchall()
-        picker = {**picker_data(c, tr['project_id']),
+        picker = {**picker_data(c, tr['project_id'], me=current_user()['username']),
                   'selected': [x['id'] for x in cases] if tr['mode'] == 'fixed' else [x['id'] for x in cases if x['id'] not in skip_ids]}
         return render_template('test_run.html', tr=tr, folders=folders, picker=picker, skip_ids=skip_ids, n_run=n_run, cases=cases, execs=execs, summ=summ, sel=sel, results=results,
                                scheds=scheds, describe=describe, any_running=any_running, days=DAYS,
