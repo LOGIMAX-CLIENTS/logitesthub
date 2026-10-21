@@ -58,6 +58,34 @@ def init(con):
                     "AND TABLE_NAME='runs' AND COLUMN_NAME='exec_id'").fetchone()['n']
     if not n:
         con.execute('ALTER TABLE runs ADD COLUMN exec_id INT NULL, ADD KEY ix_runs_exec (exec_id)')
+    # a scheduled run's result is shown to its owner (banner on every page) until they open it or dismiss it
+    n = con.execute("SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() "
+                    "AND TABLE_NAME='test_run_execs' AND COLUMN_NAME='seen_at'").fetchone()['n']
+    if not n:
+        con.execute('ALTER TABLE test_run_execs ADD COLUMN seen_at VARCHAR(32) NULL')
+        con.execute('UPDATE test_run_execs SET seen_at=started_at WHERE started_at < ?',   # older results are not news
+                    (date.today().isoformat(),))
+
+
+SEEN_DAYS = 7   # results older than this are not shown as news
+
+
+def unseen_results(con, username, limit=5):
+    """The user's finished scheduled runs they have not looked at yet, newest first:
+    [{exec_id, test_run_id, name, env, at, total, passed, failed, other, status}]."""
+    since = (datetime.now() - timedelta(days=SEEN_DAYS)).strftime('%Y-%m-%d %H:%M:%S')
+    rows = con.execute('SELECT x.id, x.test_run_id, x.started_at, x.env_name, t.name FROM test_run_execs x '
+                       'JOIN test_runs t ON t.id=x.test_run_id WHERE x.schedule_id IS NOT NULL AND x.started_by=? '
+                       'AND x.seen_at IS NULL AND x.started_at >= ? ORDER BY x.id DESC LIMIT 20', (username, since)).fetchall()
+    summ = exec_summary(con, [r['id'] for r in rows])
+    out = []
+    for r in rows:
+        sm = summ.get(r['id'])
+        if not sm or sm['running']:   # still running (or nothing ran): not a result yet
+            continue
+        out.append({'exec_id': r['id'], 'test_run_id': r['test_run_id'], 'name': r['name'], 'env': r['env_name'],
+                    'at': (r['started_at'] or '')[:16], **sm})
+    return out[:limit]
 
 
 # ---------------------------------------------------------------- cases, results, schedule maths
@@ -289,11 +317,44 @@ def make_blueprint(deps):
                                status=status, creators=creators, all_runs=all_runs, days=DAYS,
                                today=date.today().isoformat(), total=len(runs))
 
+    @bp.app_context_processor
+    def _scheduled_results():   # banner on every page: "your scheduled run finished: 3 passed, 1 failed"
+        if not request.endpoint or request.endpoint == 'static' or request.endpoint.startswith('api.'):
+            return {}
+        try:
+            me = current_user()
+        except Exception:
+            return {}
+        if not me:
+            return {}
+        try:
+            return {'sched_results': unseen_results(con(), me['username'])}
+        except Exception:   # never break a page over the banner
+            return {}
+
+    @bp.route('/test-runs/results/seen', methods=['POST'])
+    @login_required
+    def results_seen():
+        """Dismiss: the user's scheduled run results shown in the banner (exec_id=..., or all of them)."""
+        me = current_user()['username']
+        eid = request.form.get('exec_id', type=int)
+        c = con()
+        with c:
+            c.execute('UPDATE test_run_execs SET seen_at=? WHERE seen_at IS NULL AND schedule_id IS NOT NULL AND started_by=?'
+                      + (' AND id=?' if eid else ''), (db.now(), me, eid) if eid else (db.now(), me))
+        nxt = request.form.get('next') or url_for('testruns.index', tab='scheduled')
+        return redirect(nxt if nxt.startswith('/') else url_for('testruns.index'))
+
     @bp.route('/test-runs/<int:tid>')
     @login_required
     def detail(tid):
         c = con()
         tr = tr_or_404(tid)
+        seen = request.args.get('exec', type=int)
+        if seen:   # opening a result from the banner (or anywhere) marks it as seen for its owner
+            with c:
+                c.execute('UPDATE test_run_execs SET seen_at=? WHERE id=? AND test_run_id=? AND seen_at IS NULL AND started_by=?',
+                          (db.now(), seen, tid, current_user()['username']))
         cases = resolve_cases(c, tr, ignore_ready=True)
         skip_ids = {x['id'] for x in cases if tr['only_ready'] and x['qa_status'] != 'ready'}
         n_run = len(cases) - len(skip_ids)

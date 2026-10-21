@@ -191,6 +191,18 @@
   {% with msgs = get_flashed_messages(with_categories=true) %}
   {% for cat, m in msgs %}<div class="alert alert-{{ cat }} py-2">{{ m }}</div>{% endfor %}
   {% endwith %}
+  {% if sched_results %}<div class="sched-news" role="status">
+    <div class="sched-news-head"><b>{{ 'Your scheduled run finished' if sched_results|length == 1 else sched_results|length ~ ' scheduled runs finished' }}</b>
+      <form method="post" action="{{ url_for('testruns.results_seen') }}" class="ms-auto"><input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="next" value="{{ request.full_path }}"><button class="btn btn-sm btn-link p-0">Dismiss</button></form></div>
+    {% for r in sched_results %}<div class="sched-news-row">
+      <span class="badge st-{{ r.status|lower }}">{{ r.status }}</span>
+      <span class="sched-news-name">{{ r.name }}</span>
+      <span class="text-secondary small">{{ r.env or '' }} · {{ r.at|dmy }}</span>
+      <span class="sched-news-count"><b class="text-success">{{ r.passed }} passed</b>{% if r.failed %} · <b class="text-danger">{{ r.failed }} failed</b>{% endif %}{% if r.other %} · {{ r.other }} partial / error{% endif %} <span class="text-secondary">of {{ r.total }}</span></span>
+      <a class="btn btn-sm btn-primary ms-auto" href="{{ url_for('testruns.detail', tid=r.test_run_id, exec=r.exec_id) }}">View results</a>
+    </div>{% endfor %}
+  </div>{% endif %}
   {% block content %}{% endblock %}
 </main>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
