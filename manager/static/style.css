@@ -1649,3 +1649,10 @@ html:has(main.as-page), body:has(main.as-page) { overflow: hidden; }
 .cp-src-cli { background: rgba(14, 116, 144, .12); color: #0e7490; }
 .cp-source { width: auto; min-width: 150px; }
 .qs-cases { max-height: 300px; overflow-y: auto; border: 1px solid var(--bs-border-color, #e3e6ec); border-radius: 10px; }
+
+/* scheduled run results the user has not looked at yet (base.html) */
+.sched-news { border: 1px solid var(--line); border-left: 4px solid var(--brand); border-radius: 10px; background: var(--card, #fff); padding: 10px 14px; margin-bottom: 16px; box-shadow: var(--shadow-card, none); }
+.sched-news-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.sched-news-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 6px 0; border-top: 1px solid var(--line); }
+.sched-news-name { font-weight: 600; }
+.sched-news-count { font-size: 13px; }
