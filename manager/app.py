@@ -560,20 +560,28 @@ def home():
     # Test cases tile: straight into the project when there is only one, else the project picker
     only = c.execute('SELECT id FROM projects LIMIT 2').fetchall()
     cases_url = url_for('project', pid=only[0]['id']) if len(only) == 1 else url_for('projects')
-    ai_daily = None
-    if settings.is_admin(current_user()['role']):   # AI spend is admin-only, like the AI Usage report
+    # AI usage per day, last 30 days, in rupees, with this month against the team limit (admins, like the AI Usage report)
+    ai = None
+    if settings.is_admin(current_user()['role']):
         from datetime import date, timedelta
+        import budget
         import pricing
         start = date.today() - timedelta(days=29)
         rows = {r['day']: r for r in c.execute(
             'SELECT SUBSTR(at, 1, 10) AS day, SUM(cost_usd) AS cost, SUM(input_tokens + output_tokens) AS tokens, '
             'SUM(calls) AS calls FROM ai_usage WHERE at >= ? GROUP BY SUBSTR(at, 1, 10)', (start.isoformat(),)).fetchall()}
-        days = [(start + timedelta(days=i)).isoformat() for i in range(30)]
-        ai_daily = {'inr': pricing.usd_inr(con()), 'days': [
-            {'day': d, 'cost': round(float(rows[d]['cost'] or 0), 6) if d in rows else 0,
-             'tokens': int(rows[d]['tokens'] or 0) if d in rows else 0,
-             'calls': int(rows[d]['calls'] or 0) if d in rows else 0} for d in days]}
-    return render_template('home.html', counts=counts, recent=recent, ai_daily=ai_daily, cases_url=cases_url)
+        rate = pricing.usd_inr(c)
+        s, pl = budget.status(c, current_user()), budget.plan(c)
+        lim = s['org_limit_inr']
+        ai = {'days': [{'day': d, 'inr': round(float(rows[d]['cost'] or 0) * rate, 2) if d in rows else 0,
+                        'usd': round(float(rows[d]['cost'] or 0), 4) if d in rows else 0,
+                        'tokens': int(rows[d]['tokens'] or 0) if d in rows else 0,
+                        'calls': int(rows[d]['calls'] or 0) if d in rows else 0}
+                       for d in ((start + timedelta(days=i)).isoformat() for i in range(30))],
+              'used': budget.inr(s['org_used_inr']), 'limit': budget.inr(lim) if lim is not None else None,
+              'pct': min(100, round(s['org_used_inr'] / lim * 100)) if lim else None,
+              'balance': budget.inr(pl['balance_inr']) if pl['balance_inr'] is not None else None, 'resets_on': s['resets_on']}
+    return render_template('home.html', counts=counts, recent=recent, ai=ai, cases_url=cases_url)
 
 
 RUN_STATUSES = ('PASSED', 'FAILED', 'PARTIAL', 'ERROR', 'running', 'queued')
