@@ -13,30 +13,38 @@
   <a class="tile" href="{{ url_for('runs_list', status='other') }}"><span class="n t-ai">{{ counts.other }}</span><span>Partial / error</span></a>
 </div>
 
-{% if ai_daily %}
-<section class="panel mb-4 uc" id="usageChart" aria-labelledby="ucTitle">
-  <div class="uc-head">
-    <h2 class="uc-title" id="ucTitle">Daily AI Usage</h2>
-    <div class="uc-seg" role="group" aria-label="Measure">
-      <button type="button" class="on" data-m="cost" aria-pressed="true">Cost</button>
-      <button type="button" data-m="tokens" aria-pressed="false">Tokens</button>
-      <button type="button" data-m="calls" aria-pressed="false">Calls</button>
-    </div>
-    <div class="uc-legend">
-      <span><i class="uc-sw-bar"></i>Daily usage</span>
-      <span><i class="uc-sw-avg"></i><b id="ucAvg">-</b> avg / day</span>
-      <a href="{{ url_for('ai_usage') }}">View all usage →</a>
-    </div>
-  </div>
-  <div class="uc-plot" id="ucPlot"></div>
-  <div class="uc-tip" id="ucTip" role="status" hidden></div>
-  <details class="uc-table"><summary>Show as table</summary>
-    <table class="table table-sm mb-0"><thead><tr><th class="text-start">Day</th><th class="text-end">Cost (USD)</th><th class="text-end">Cost (₹)</th><th class="text-end">Tokens</th><th class="text-end">AI calls</th></tr></thead>
-      <tbody>{% for d in ai_daily.days|reverse if d.calls or d.cost %}<tr><td class="text-start">{{ d.day }}</td><td class="text-end">{{ d.cost|usd }}</td><td class="text-end">{{ d.cost|inr(ai_daily.inr) }}</td><td class="text-end">{{ '{:,}'.format(d.tokens) }}</td><td class="text-end">{{ d.calls }}</td></tr>{% else %}<tr><td colspan="5" class="text-secondary text-center">No AI usage in the last 30 days.</td></tr>{% endfor %}</tbody></table>
-  </details>
-  <script type="application/json" id="ucData">{{ ai_daily|tojson }}</script>
-</section>
+{% if ai_meter %}
+<a class="panel mb-3 ai-meter" href="{{ url_for('ai_usage') }}" title="AI Usage: credits, limits and cost by test case">
+  <span class="ai-meter-label">AI this month</span>
+  <span class="ai-meter-val"><b>{{ ai_meter.used }}</b>{% if ai_meter.limit %} of {{ ai_meter.limit }} team limit{% else %} used · no team limit set{% endif %}</span>
+  {% if ai_meter.pct is not none %}<span class="ai-meter-bar {{ 'is-warn' if ai_meter.pct >= 80 }}" role="meter" aria-valuemin="0" aria-valuemax="100"
+        aria-valuenow="{{ ai_meter.pct }}" aria-label="AI used this month: {{ ai_meter.pct }}% of the team limit"><i style="width: {{ ai_meter.pct }}%"></i></span>
+  <span class="ai-meter-pct">{{ ai_meter.pct }}%</span>{% endif %}
+  <span class="ai-meter-meta">{% if ai_meter.balance %}Credit balance {{ ai_meter.balance }} · {% endif %}resets {{ ai_meter.resets_on|dmy }}</span>
+  <span class="ai-meter-link">AI usage &rarr;</span>
+</a>
 {% endif %}
+
+<section class="panel mb-4 rc" id="runsChart" aria-labelledby="rcTitle">
+  <div class="rc-head">
+    <div>
+      <h2 class="rc-title" id="rcTitle">Test runs per day</h2>
+      <div class="rc-sub" id="rcSub"></div>
+    </div>
+    <div class="rc-seg" role="group" aria-label="Period">
+      <button type="button" data-d="14" aria-pressed="false">14 days</button>
+      <button type="button" class="on" data-d="30" aria-pressed="true">30 days</button>
+    </div>
+    <div class="rc-legend" id="rcLegend"></div>
+  </div>
+  <div class="rc-plot" id="rcPlot"></div>
+  <div class="rc-tip" id="rcTip" role="status" hidden></div>
+  <details class="rc-table"><summary>Show as table</summary>
+    <table class="table table-sm mb-0"><thead><tr><th class="text-start">Day</th><th class="text-end">Passed</th><th class="text-end">Failed</th><th class="text-end">Partial / error</th><th class="text-end">Pass rate</th></tr></thead>
+      <tbody>{% for d in runs_daily|reverse if d.passed or d.failed or d.other %}<tr><td class="text-start">{{ d.day }}</td><td class="text-end">{{ d.passed }}</td><td class="text-end">{{ d.failed }}</td><td class="text-end">{{ d.other }}</td><td class="text-end">{{ (100 * d.passed / (d.passed + d.failed + d.other))|round|int }}%</td></tr>{% else %}<tr><td colspan="5" class="text-secondary text-center">No test runs in the last 30 days.</td></tr>{% endfor %}</tbody></table>
+  </details>
+  <script type="application/json" id="rcData">{{ runs_daily|tojson }}</script>
+</section>
 
 <div class="d-flex justify-content-between align-items-center mb-2">
   <h2 class="h6 mb-0">Recent runs</h2>
@@ -59,96 +67,84 @@
 {% endblock %}
 {% block scripts %}
 <script>
-(function () {   // Daily AI usage: one smooth wave (line + gradient area) + dashed average line, hover tooltip, responsive SVG
-  var box = document.getElementById('usageChart');
+(function () {   // Test runs per day: stacked columns (passed / failed / partial), hover tooltip, 14 / 30 days, responsive SVG
+  var box = document.getElementById('runsChart');
   if (!box) return;
-  var data = JSON.parse(document.getElementById('ucData').textContent), days = data.days, inr = data.inr;
-  var plot = document.getElementById('ucPlot'), tip = document.getElementById('ucTip'), avgEl = document.getElementById('ucAvg');
-  var metric = 'cost', NS = 'http://www.w3.org/2000/svg', MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  function fmt(v, m, long) {
-    v = Number(v) || 0;
-    if (m === 'cost') return '$' + (v >= 1 ? v.toFixed(2) : v >= 0.01 ? v.toFixed(3) : v === 0 ? '0' : v.toFixed(4));
-    if (!long && v >= 1e6) return (v / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
-    if (!long && v >= 1e3) return (v / 1e3).toFixed(1).replace(/\.0$/, '') + 'K';
-    return Math.round(v).toLocaleString('en-IN');
-  }
-  function label(d) { var p = d.split('-'); return p[2] + ' ' + MON[+p[1] - 1]; }
-  function niceMax(v) { if (v <= 0) return 1; var e = Math.pow(10, Math.floor(Math.log10(v))), n = v / e; return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 4 ? 4 : n <= 8 ? 8 : 10) * e; }
+  var all = JSON.parse(document.getElementById('rcData').textContent);
+  var plot = document.getElementById('rcPlot'), tip = document.getElementById('rcTip');
+  var NS = 'http://www.w3.org/2000/svg', MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var SER = [['passed', 'Passed', 'rc-pass'], ['failed', 'Failed', 'rc-fail'], ['other', 'Partial / error', 'rc-other']];   // bottom -> top
+  var span = 30;
   function el(tag, attrs, parent) { var n = document.createElementNS(NS, tag); for (var k in attrs) n.setAttribute(k, attrs[k]); if (parent) parent.appendChild(n); return n; }
-  function curve(p) {   // monotone cubic through the points: smooth, never overshoots below 0 or above a peak
-    var n = p.length, d = [], m = [], i, s = 'M' + p[0][0] + ',' + p[0][1];
-    if (n < 2) return s;
-    for (i = 0; i < n - 1; i++) d[i] = (p[i + 1][1] - p[i][1]) / (p[i + 1][0] - p[i][0]);
-    m[0] = d[0]; m[n - 1] = d[n - 2];
-    for (i = 1; i < n - 1; i++) m[i] = d[i - 1] * d[i] <= 0 ? 0 : (d[i - 1] + d[i]) / 2;
-    for (i = 0; i < n - 1; i++) {
-      if (!d[i]) { m[i] = m[i + 1] = 0; continue; }
-      var a = m[i] / d[i], b = m[i + 1] / d[i], q = a * a + b * b;
-      if (q > 9) { q = 3 / Math.sqrt(q); m[i] = q * a * d[i]; m[i + 1] = q * b * d[i]; }
-    }
-    for (i = 0; i < n - 1; i++) {
-      var h = (p[i + 1][0] - p[i][0]) / 3;
-      s += 'C' + (p[i][0] + h) + ',' + (p[i][1] + m[i] * h) + ' ' + (p[i + 1][0] - h) + ',' + (p[i + 1][1] - m[i + 1] * h) + ' ' + p[i + 1][0] + ',' + p[i + 1][1];
-    }
-    return s;
+  function label(d) { var p = d.split('-'); return +p[2] + ' ' + MON[+p[1] - 1]; }
+  function ticks(v) {   // whole, round steps (1 / 2 / 5 x 10^n), at most 5 of them: 44 -> 0..50 by 10, 16 -> 0..20 by 5
+    var step = 1;
+    while (Math.ceil(Math.max(v, 1) / step) > 5) step = [1, 2, 5].map(function (m) { return m * Math.pow(10, Math.floor(Math.log10(step * 2))); }).filter(function (x) { return x > step; })[0] || step * 10;
+    var n = Math.max(1, Math.ceil(Math.max(v, 1) / step));
+    return { step: step, n: n, max: step * n };
   }
-  var redraw = false;
+  function total(d) { return d.passed + d.failed + d.other; }
+  function topPath(x, y, w, h, r) {   // rounded data-end on top, square at the baseline
+    r = Math.min(r, w / 2, h);
+    return 'M' + x + ',' + (y + h) + 'V' + (y + r) + 'Q' + x + ',' + y + ' ' + (x + r) + ',' + y + 'H' + (x + w - r) +
+      'Q' + (x + w) + ',' + y + ' ' + (x + w) + ',' + (y + r) + 'V' + (y + h) + 'Z';
+  }
   function draw() {
-    var W = Math.max(plot.clientWidth, 320), H = 240, L = 48, R = 12, T = 12, B = 28, iw = W - L - R, ih = H - T - B;
-    var vals = days.map(function (d) { return d[metric]; }), sum = vals.reduce(function (a, b) { return a + b; }, 0);
-    var avg = sum / days.length, max = niceMax(Math.max.apply(null, vals.concat([avg])));
-    avgEl.textContent = fmt(avg, metric);
+    var days = all.slice(-span);
+    var sums = { passed: 0, failed: 0, other: 0 };
+    days.forEach(function (d) { SER.forEach(function (s) { sums[s[0]] += d[s[0]]; }); });
+    var runs = sums.passed + sums.failed + sums.other;
+    document.getElementById('rcSub').textContent = runs
+      ? runs + ' runs in the last ' + span + ' days · ' + Math.round(100 * sums.passed / runs) + '% passed'
+      : 'No runs in the last ' + span + ' days';
+    document.getElementById('rcLegend').innerHTML = SER.map(function (s) {
+      return '<span><i class="rc-key ' + s[2] + '"></i>' + s[1] + ' <b>' + sums[s[0]] + '</b></span>'; }).join('');
+    var W = Math.max(plot.clientWidth, 320), H = 220, L = 34, R = 8, T = 10, B = 26, iw = W - L - R, ih = H - T - B, base = T + ih;
+    var tk = ticks(Math.max.apply(null, days.map(total))), max = tk.max;
     plot.innerHTML = '';
     var svg = el('svg', { width: W, height: H, viewBox: '0 0 ' + W + ' ' + H, role: 'img',
-      'aria-label': 'Daily AI ' + metric + ' for the last 30 days; average ' + fmt(avg, metric) + ' per day' }, plot);
-    for (var i = 0; i <= 4; i++) {   // recessive grid + y labels (4 even steps of a nice max)
-      var gv = max * i / 4, gy = T + ih - ih * i / 4;
-      el('line', { x1: L, x2: W - R, y1: gy, y2: gy, class: 'uc-grid' }, svg);
-      el('text', { x: L - 8, y: gy + 4, class: 'uc-axis', 'text-anchor': 'end' }, svg).textContent = fmt(gv, metric);
+      'aria-label': 'Test runs per day for the last ' + span + ' days: ' + sums.passed + ' passed, ' + sums.failed + ' failed, ' + sums.other + ' partial or error' }, plot);
+    for (var i = 0; i <= tk.n; i++) {   // recessive grid + whole, round y ticks
+      var gy = base - ih * i / tk.n;
+      el('line', { x1: L, x2: W - R, y1: gy, y2: gy, class: i ? 'rc-grid' : 'rc-base' }, svg);
+      el('text', { x: L - 8, y: gy + 4, class: 'rc-axis', 'text-anchor': 'end' }, svg).textContent = tk.step * i;
     }
-    var step = iw / days.length, every = Math.max(1, Math.ceil(46 / step)), base = T + ih;   // ~46px per date label
-    var pts = days.map(function (d, i) { return [L + (i + 0.5) * step, base - ih * d[metric] / max]; });
-    if (sum) {   // smooth wave: gradient area + line that draws itself in
-      var grad = el('linearGradient', { id: 'ucFill', x1: 0, y1: 0, x2: 0, y2: 1 }, el('defs', {}, svg));
-      el('stop', { offset: 0, class: 'uc-fill-a' }, grad); el('stop', { offset: 1, class: 'uc-fill-b' }, grad);
-      var line = curve(pts), anim = !redraw;
-      el('path', { class: 'uc-area' + (anim ? ' in' : ''), fill: 'url(#ucFill)',
-        d: line + 'L' + pts[pts.length - 1][0] + ',' + base + 'L' + pts[0][0] + ',' + base + 'Z' }, svg);
-      el('path', { class: 'uc-line' + (anim ? ' in' : ''), d: line, pathLength: 1 }, svg);
-    }
-    var guide = el('line', { y1: T, y2: base, class: 'uc-guide' }, svg), dot = el('circle', { r: 4.5, class: 'uc-dot' }, svg);
+    var step = iw / days.length, bw = Math.min(24, Math.max(4, step * 0.62)), every = Math.max(1, Math.ceil(44 / step));
     days.forEach(function (d, i) {
-      var v = d[metric], y = pts[i][1];
-      var hit = el('rect', { x: L + i * step, y: T, width: step, height: ih, class: 'uc-hit', tabindex: 0,
-        'aria-label': label(d.day) + ': ' + fmt(v, metric, true) }, svg);
+      var x = L + i * step + (step - bw) / 2, y = base, n = total(d), segs = [];
+      SER.forEach(function (s) { if (d[s[0]]) segs.push(s); });
+      segs.forEach(function (s, j) {   // 2px surface gap between stacked segments; rounded end only on the top one
+        var h = ih * d[s[0]] / max, gap = j ? 2 : 0, hh = Math.max(h - gap, 1);
+        y -= h;
+        if (j === segs.length - 1) el('path', { d: topPath(x, y, bw, hh, 4), class: s[2] }, svg);
+        else el('rect', { x: x, y: y, width: bw, height: hh, class: s[2] }, svg);
+      });
+      var hit = el('rect', { x: L + i * step, y: T, width: step, height: ih, class: 'rc-hit', tabindex: 0,
+        'aria-label': label(d.day) + ': ' + (n ? d.passed + ' passed, ' + d.failed + ' failed, ' + d.other + ' partial or error' : 'no runs') }, svg);
       var show = function () {
-        svg.querySelectorAll('.uc-hit.on').forEach(function (n) { n.classList.remove('on'); }); hit.classList.add('on');
-        tip.innerHTML = '<b>' + label(d.day) + '</b><span>Cost <em>' + fmt(d.cost, 'cost') + ' · ₹' + (d.cost * inr).toFixed(2) +
-          '</em></span><span>Tokens <em>' + fmt(d.tokens, 'tokens', true) + '</em></span><span>AI calls <em>' + d.calls + '</em></span>';
+        svg.querySelectorAll('.rc-hit.on').forEach(function (h) { h.classList.remove('on'); }); hit.classList.add('on');
+        tip.innerHTML = '<b>' + label(d.day) + '</b>' + (n ? SER.map(function (s) {
+          return '<span><i class="rc-key ' + s[2] + '"></i>' + s[1] + ' <em>' + d[s[0]] + '</em></span>'; }).join('') +
+          '<span class="rc-rate">' + Math.round(100 * d.passed / n) + '% passed of ' + n + '</span>' : '<span>No runs</span>');
         tip.hidden = false;
-        guide.setAttribute('x1', pts[i][0]); guide.setAttribute('x2', pts[i][0]); dot.setAttribute('cx', pts[i][0]); dot.setAttribute('cy', y);
-        svg.classList.add('hov');
         var bx = box.getBoundingClientRect(), px = plot.getBoundingClientRect(), cx = px.left - bx.left + L + (i + 0.5) * step;
         tip.style.left = Math.min(Math.max(cx - tip.offsetWidth / 2, 8), bx.width - tip.offsetWidth - 8) + 'px';
-        tip.style.top = (px.top - bx.top + Math.max(T, y) - tip.offsetHeight - 10) + 'px';
+        tip.style.top = (px.top - bx.top + Math.max(T, base - ih * n / max) - tip.offsetHeight - 10) + 'px';
       };
       hit.addEventListener('mouseenter', show); hit.addEventListener('focus', show);
-      if (i % every === 0) el('text', { x: L + (i + 0.5) * step, y: H - 8, class: 'uc-axis', 'text-anchor': 'middle' }, svg).textContent = label(d.day);
+      if ((days.length - 1 - i) % every === 0) el('text', { x: L + (i + 0.5) * step, y: H - 8, class: 'rc-axis', 'text-anchor': 'middle' }, svg).textContent = label(d.day);
     });
-    if (avg > 0) { var ay = T + ih - ih * avg / max; el('line', { x1: L, x2: W - R, y1: ay, y2: ay, class: 'uc-avg' }, svg); }
-    el('line', { x1: L, x2: W - R, y1: T + ih, y2: T + ih, class: 'uc-base' }, svg);
-    if (!sum) el('text', { x: L + iw / 2, y: T + ih / 2, class: 'uc-empty', 'text-anchor': 'middle' }, svg).textContent = 'No AI usage in the last 30 days';
-    redraw = false;
-    svg.addEventListener('mouseleave', function () { tip.hidden = true; svg.classList.remove('hov'); svg.querySelectorAll('.uc-hit.on').forEach(function (n) { n.classList.remove('on'); }); });
+    if (!runs) el('text', { x: L + iw / 2, y: T + ih / 2, class: 'rc-empty', 'text-anchor': 'middle' }, svg).textContent = 'No test runs in this period';
+    svg.addEventListener('mouseleave', function () { tip.hidden = true; svg.querySelectorAll('.rc-hit.on').forEach(function (h) { h.classList.remove('on'); }); });
   }
-  box.querySelectorAll('.uc-seg button').forEach(function (b) {
+  box.querySelectorAll('.rc-seg button').forEach(function (b) {
     b.addEventListener('click', function () {
-      metric = b.dataset.m; tip.hidden = true;
-      box.querySelectorAll('.uc-seg button').forEach(function (x) { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); });
+      span = +b.dataset.d; tip.hidden = true;
+      box.querySelectorAll('.rc-seg button').forEach(function (x) { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); });
       draw();
     });
   });
-  var t; window.addEventListener('resize', function () { clearTimeout(t); t = setTimeout(function () { redraw = true; draw(); }, 120); });   // no draw-in on resize
+  var t; window.addEventListener('resize', function () { clearTimeout(t); t = setTimeout(draw, 120); });
   draw();
 })();
 </script>
