@@ -209,7 +209,8 @@
   var proj = $('qsProj');
   var pk = casePicker({ body: $('qsBody'), data: JSON.parse($('qsData').textContent), form: $('qsForm'), requireOne: true,
                         search: $('qsSearch'), source: $('qsSource'), count: $('qsCount'), folders: $('qsFolders'),
-                        expand: $('qsExpand'), clear: $('qsClear'), project: +proj.value });
+                        expand: $('qsExpand'), clear: $('qsClear'), project: +proj.value,
+                        projectName: function () { return proj.selectedOptions[0] ? proj.selectedOptions[0].text : ''; } });
   proj.addEventListener('change', function () { pk.setProject(proj.value); });
   $('quickSched').addEventListener('show.bs.modal', function () {
     var t = new Date(Date.now() + 5 * 60000), p = function (n) { return String(n).padStart(2, '0'); };
