@@ -55,14 +55,38 @@ the server: `tester lessons <project> --json` (read them too - they are newer an
 23. **Wrong app at the URL.** Step 2 got the title "WinBrain — Knowledge Intelligence Platform": the URL pointed at
     another app on localhost. Avoid: kind `environment`; fix `--url` (check the login title first), not the test.
 24. **Date range picker presets.** "Last 30 Days" / "Custom Range" in `.daterangepicker` could not be clicked by
-    text or CSS hint (6 runs on 2026-10-03). Avoid: do not spend more than 2 runs on it; check the filtered rows with
-    SQL, or report that the picker needs a step shape the runner does not have yet.
-26. **Claude fixed a timing failure with a fixed Wait and called it fixed after one pass.** Run 110 failed on the
-    autocomplete; the fix Claude wrote was `Wait 2 seconds.` + ArrowDown + Enter, it passed once (run 116) and was
-    reported fixed; run 119 failed on the same pick. Avoid (agent_mistake): when a step failed because something had
-    not appeared yet, never fix it with a fixed `Wait N seconds.` - wait for the thing itself (`Assert the ... (css)
-    is visible.`). And a timing fix is proved only by TWO passing runs in a row; say "passed once, not proven" until then.
+    text or CSS hint (6 runs on 2026-10-03). Avoid: use `Set the date range (#picker_id) from 'DD-MM-YYYY' to
+    'DD-MM-YYYY'.` (sets it through the picker itself; works on eTail billing/list), then the screen's Search.
 25. **Fixed wait before an autocomplete pick is flaky.** TC-69 passed one day and failed the next on the same steps:
     `Wait 2 seconds.` then ArrowDown + Enter; the list came late, nothing was picked, the next dropdown was empty
     ("has no options to pick"). Applies to EVERY suggestion field. Avoid: `Assert the suggestion list
     (.ui-autocomplete li) is visible.` between typing and ArrowDown + Enter.
+26. **My runner bug: a hint with `:first-child` was not read as a selector** (TC-75, 2026-10-15; server lesson #35). `(#billing_list
+    tbody tr:first-child .btn-warning)` - the runner only took ids / classes / tag words, so the step looked for
+    the words "cancel (X) button..." on the page and failed although the button was there (asserts passed only
+    through AI). Fixed in lib/actions.js (`:first-child`, `:last-child`, `>` are read now). Avoid: when an assert
+    passes with "ai" but the same hint fails to click, the hint was not parsed - check `parseStep`, not the app.
+27. **Changed one step of a pick, not the steps after it** (server #27). Avoid: after changing how a record is
+    picked, re-read every later step that uses it and check the pick itself returns the row you expect.
+28. **Settings / data the test needs were found only by failed runs** (server #31). Avoid: before the first run read
+    the settings and permissions the action depends on (`tester settings`) and the data picks with read-only SQL;
+    a blocking setting -> tell the user which one (screen > field) and stop.
+29. **SQL compared a NULL column with `= 0`** (server #32): every row was filtered out. Avoid: `IFNULL(col, 0) = 0`
+    or `col IS NULL` for columns that can be empty.
+30. **A database record looked for on a list, one filter guessed at a time** (server #33, #34). Avoid: read the
+    screen's view + JS first, list EVERY filter (branch, date range, status, search box) and how it shows the
+    number; Remember all of them from the database (full display number, never only the last digits), set each one,
+    then Search.
+31. **A typed date was cleared by its datepicker** (TC-78, server #40). fill() sends no keyup, so a bootstrap
+    datepicker kept its empty date and cleared the field on blur; the form then refused Add Item. The runner now
+    updates the picker after Type. Avoid: after a date, `Assert the <label> field (.x) shows '<date>'.` before going on.
+32. **A server error while a page loads is not the cause** of a later failure (dashboard alert AJAX 500 on every
+    page). Only errors after the page opened (Search / Save / Add clicks) explain a failed step.
+33. **Guessed table name after a save** (TC-78, server #41): `ret_grn_item` instead of `ret_grn_items` /
+    `grn_item_grn_id`. The test saved a real GRN, then its check and Clean up failed and left the item row behind.
+    Avoid: every table / column from the code that writes it (`insertData($data, 'table')`, the model); child rows by
+    their parent-id column. `tester check` and the Run button now test every SQL step with LIMIT 0 first.
+34. **A filled-in value called hard-coded** (TC-79, server #43, agent_mistake). Run reports, events.ndjson and run
+    step texts show the steps after `{{variables}}` are filled: `Navigate to https://dev.../admin/...` was really
+    `Navigate to {{base_url}}...` in the case. Avoid: before saying a case hard-codes a URL, id or value, read the
+    saved case (`tester case pull <id>`), not the run.

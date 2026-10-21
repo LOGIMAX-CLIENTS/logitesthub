@@ -4,9 +4,15 @@ Written by people on the Lessons page or by an agent through the Tester CLI (`te
 agent before it writes or runs a test (`tester lessons`), and added to the Test Assistant / Generate with AI prompts so
 AI-written test cases avoid the same mistakes. One teammate's lesson reaches everyone.
 
+Every lesson counts straight away - a lesson the Test Assistant writes after explaining a failure is saved by itself
+(nobody has to remember to click Save), so no one's testing waits for a review. The admin reviews them afterwards
+(Lessons -> To review): keep it as a lesson, move it into the /tester skill or fix it in the code, or reject it (no
+longer sent to the AI). "Download for review" gives the list as Markdown to hand over. A lesson whose text changes
+goes back to To review.
+
 Registered from app.py with register(app, con, login_required, current_user, project_or_404).
 """
-from flask import Blueprint, abort, flash, redirect, render_template, request, url_for
+from flask import Blueprint, Response, abort, flash, redirect, render_template, request, url_for
 
 import db
 
@@ -33,10 +39,27 @@ CREATE TABLE IF NOT EXISTS lessons (
 """
 
 
+REVIEWS = [   # key, label, what it means
+    ('new', 'To review', 'Not reviewed yet. It is already sent to the AI.'),
+    ('keep', 'Keep', 'Reviewed: right, stays a lesson.'),
+    ('skill', 'Into skill', 'Reviewed: goes into the /tester skill (then it can be archived here).'),
+    ('code', 'Fix in code', 'Reviewed: the runner / prompt / app should handle it (then it can be archived here).'),
+    ('rejected', 'Rejected', 'Reviewed: wrong or not useful. Archived - no longer sent to the AI.'),
+]
+REVIEW_KEYS = [k for k, _, _ in REVIEWS]
+REVIEW_LABEL = {k: l for k, l, _ in REVIEWS}
+
+
 def migrate(con):
     for stmt in SCHEMA.split(';'):
         if stmt.strip():
             con.execute(stmt)
+    have = {r['COLUMN_NAME'] for r in con.execute(
+        "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='lessons'")}
+    if 'review' not in have:   # every lesson is reviewed later by the admin; existing ones start as To review
+        con.execute("ALTER TABLE lessons ADD COLUMN review VARCHAR(16) NOT NULL DEFAULT 'new', "
+                    "ADD COLUMN review_note VARCHAR(500) NULL, ADD COLUMN reviewed_by VARCHAR(64) NULL, "
+                    "ADD COLUMN reviewed_at VARCHAR(32) NULL")
 
 
 def clean(data):
@@ -64,14 +87,21 @@ def clean(data):
 
 def add(con, pid, v, username, source):
     """Adds a lesson, or - when the project already has an active one with the same title - counts it again
-    and refreshes its text (the same mistake twice should be one lesson, louder). Returns (id, created)."""
-    old = con.execute('SELECT id FROM lessons WHERE project_id=? AND active=1 AND LOWER(title)=LOWER(?)',
+    and refreshes its text (the same mistake twice should be one lesson, louder). Returns (id, created).
+    A changed text goes back to To review. A lesson the admin rejected is only counted again: it stays rejected."""
+    rej = con.execute("SELECT id FROM lessons WHERE project_id=? AND active=0 AND review='rejected' AND LOWER(title)=LOWER(?)",
+                      (pid, v['title'])).fetchone()
+    old = con.execute('SELECT id, fix, avoid FROM lessons WHERE project_id=? AND active=1 AND LOWER(title)=LOWER(?)',
                       (pid, v['title'])).fetchone()
     now = db.now()
+    if rej and not old:
+        con.execute('UPDATE lessons SET hits=hits+1 WHERE id=?', (rej['id'],))
+        return rej['id'], False
     if old:
+        changed = (v['fix'] and v['fix'] != old['fix']) or (v['avoid'] and v['avoid'] != old['avoid'])
         con.execute('UPDATE lessons SET hits=hits+1, kind=?, symptom=COALESCE(?, symptom), fix=COALESCE(?, fix), '
                     'avoid=COALESCE(?, avoid), case_id=COALESCE(?, case_id), run_id=COALESCE(?, run_id), '
-                    'updated_by=?, updated_at=? WHERE id=?',
+                    'updated_by=?, updated_at=?' + (", review='new'" if changed else '') + ' WHERE id=?',
                     (v['kind'], v['symptom'], v['fix'], v['avoid'], v['case_id'], v['run_id'], username, now, old['id']))
         return old['id'], False
     lid = con.execute('INSERT INTO lessons(project_id, kind, title, symptom, fix, avoid, case_id, run_id, source, '
@@ -126,12 +156,72 @@ def register(app, con, login_required, current_user, project_or_404):
         p = project_or_404(pid)
         show_all = request.args.get('all') == '1'
         kind = request.args.get('kind', '')
-        rs = rows(con(), pid, active_only=not show_all)
+        review = request.args.get('review', '')
+        rs = rows(con(), pid, active_only=not show_all and review != 'rejected')
         counts = {k: sum(1 for r in rs if r['kind'] == k) for k in KIND_KEYS}
+        to_review = con().execute("SELECT COUNT(*) AS n FROM lessons WHERE project_id=? AND review='new'", (pid,)).fetchone()['n']
         if kind in KIND_KEYS:
             rs = [r for r in rs if r['kind'] == kind]
+        if review in REVIEW_KEYS:
+            rs = [r for r in rs if r['review'] == review]
         return render_template('lessons.html', p=p, lessons=rs, kinds=KINDS, kind_label=KIND_LABEL, kind=kind,
-                               counts=counts, show_all=show_all, edit_id=request.args.get('edit', type=int))
+                               counts=counts, show_all=show_all, edit_id=request.args.get('edit', type=int),
+                               reviews=REVIEWS, review_label=REVIEW_LABEL, review=review, to_review=to_review)
+
+    def _admin():   # reviewing / downloading lessons is the super admin's
+        import settings
+        if not settings.is_super(current_user()['role']):
+            abort(403)
+
+    @bp.route('/projects/<int:pid>/lessons/<int:lid>/review', methods=['POST'])
+    @login_required
+    def set_review(pid, lid):
+        """Admin's review of one lesson. Rejected = archived (no longer sent to the AI); any other keeps it active."""
+        _admin()
+        _lesson(pid, lid)
+        st = request.form.get('review', '')
+        if st not in REVIEW_KEYS:
+            abort(400)
+        note = ' '.join(request.form.get('note', '').split())[:500] or None
+        c = con()
+        with c:
+            c.execute('UPDATE lessons SET review=?, review_note=COALESCE(?, review_note), reviewed_by=?, reviewed_at=?, active=? '
+                      'WHERE id=?', (st, note, current_user()['username'], db.now(), 0 if st == 'rejected' else 1, lid))
+        flash(f'Lesson #{lid}: {REVIEW_LABEL[st]}.' + (' Archived: no longer sent to the AI.' if st == 'rejected' else ''), 'success')
+        return redirect(request.form.get('next') or url_for('lessons.page', pid=pid, review='new'))
+
+    @bp.route('/projects/<int:pid>/lessons/review.md')
+    @login_required
+    def download(pid):
+        """The lessons to review (or ?review=all / keep / skill / ...) as one Markdown file to hand over for review."""
+        _admin()
+        p = project_or_404(pid)
+        st = request.args.get('review', 'new')
+        rs = con().execute(
+            'SELECT l.*, c.tc_no, c.title AS case_title FROM lessons l LEFT JOIN cases c ON c.id=l.case_id WHERE l.project_id=?'
+            + ('' if st == 'all' else ' AND l.review=?') + ' ORDER BY l.hits DESC, l.id', (pid,) if st == 'all' else (pid, st)).fetchall()
+        import pmtasks
+        server = pmtasks.public_base() or request.host_url.rstrip('/')
+        out = [f'# LogiTestHub lessons - {REVIEW_LABEL.get(st, "all")} ({len(rs)})', '',
+               f'Server: {server} · Project: {p["name"]} (#{pid}) · Exported {db.now()[:16]} by {current_user()["username"]}', '',
+               'For each lesson decide: **keep** (stays a lesson) / **skill** (move into the /tester skill) / '
+               '**code** (fix in the runner, prompt or app) / **reject** (wrong). Mark it on the Lessons page '
+               f'({server}/projects/{pid}/lessons?review=new).', '']
+        for r in rs:
+            out += [f'## L{r["id"]} · {KIND_LABEL.get(r["kind"], r["kind"])} · {r["title"]}', '',
+                    f'- Review: {REVIEW_LABEL.get(r["review"], r["review"])}' + (f' ({r["review_note"]})' if r['review_note'] else '')
+                    + f' · {"sent to the AI" if r["active"] else "archived"} · seen {r["hits"]}x',
+                    f'- From: {r["source"]} · by {r["created_by"] or "-"} {(r["created_at"] or "")[:16]}'
+                    + (f' · updated by {r["updated_by"]} {(r["updated_at"] or "")[:16]}' if r['updated_at'] != r['created_at'] else ''),
+                    *([f'- Test case: TC-{r["tc_no"]} {r["case_title"]} ({server}/cases/{r["case_id"]}'
+                       + (f'?run={r["run_id"]}' if r['run_id'] else '') + ')'] if r['case_id'] and r['tc_no'] else []),
+                    '']
+            for label, k in (('How it showed up', 'symptom'), ('Fix', 'fix'), ('How to avoid it', 'avoid')):
+                if r[k]:
+                    out += [f'**{label}:** {r[k].strip()}', '']
+        name = f'lessons-{st}-{p["name"].lower().replace(" ", "-")}-{db.now()[:10]}.md'
+        return Response('\n'.join(out), mimetype='text/markdown; charset=utf-8',
+                        headers={'Content-Disposition': f'attachment; filename="{name}"'})
 
     @bp.route('/projects/<int:pid>/lessons/new', methods=['POST'])
     @login_required
@@ -174,10 +264,11 @@ def register(app, con, login_required, current_user, project_or_404):
             for e in errs:
                 flash(e, 'danger')
             return redirect(url_for('lessons.page', pid=pid, edit=lid))
+        import settings   # an edit by someone other than the super admin is reviewed again
         with c:
             c.execute('UPDATE lessons SET kind=?, title=?, symptom=?, fix=?, avoid=?, case_id=?, run_id=?, updated_by=?, '
-                      'updated_at=? WHERE id=?', (v['kind'], v['title'], v['symptom'], v['fix'], v['avoid'], v['case_id'],
-                                                  v['run_id'], u, db.now(), lid))
+                      'updated_at=?' + ('' if settings.is_super(current_user()['role']) else ", review='new'") + ' WHERE id=?',
+                      (v['kind'], v['title'], v['symptom'], v['fix'], v['avoid'], v['case_id'], v['run_id'], u, db.now(), lid))
         flash('Lesson updated.', 'success')
         return redirect(url_for('lessons.page', pid=pid))
 

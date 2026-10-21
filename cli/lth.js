@@ -9,10 +9,50 @@ const path = require('path');
 const { spawn, execFileSync } = require('child_process');
 
 const PKG = require('../package.json');
+// The version with the code it runs: package.json keeps one number across changes, so "+<fingerprint>" (the same hash the
+// server compares for auto-update) shows whether two installs run the same code.
+let VERSION = PKG.version;
 const HOME = process.env.LTH_HOME || path.join(os.homedir(), '.lth');
 const CONFIG = path.join(HOME, 'config.json');
 const RUNS = path.join(HOME, 'runs');
 const RUN_JS = path.join(__dirname, '..', 'run.js');
+
+// ---------------------------------------------------------------- self-update
+// The server sends the hash of the CLI code it hands out (X-Tester-CLI). When it differs from this install's,
+// `npm install -g <server>/cli/tester.tgz` runs once the command has ended (stderr only: --json stays clean).
+// LTH_NO_AUTO_UPDATE=1 turns it off. The skill files count too: a new rule for the agent reaches every tester.
+const CLI_CODE = ['run.js', 'cli/*.js', 'lib/*.js', 'cli/skill/*.md', 'cli/skill/references/*.md'];   // = manager/clitool.py CODE
+function cliFingerprint() {
+  const root = path.join(__dirname, '..');
+  const files = [];
+  for (const p of CLI_CODE) {
+    if (!p.includes('*')) { if (fs.existsSync(path.join(root, p))) files.push(p); continue; }
+    const dir = path.posix.dirname(p), ext = path.posix.extname(p);
+    const full = path.join(root, dir);
+    for (const f of fs.existsSync(full) ? fs.readdirSync(full) : []) {
+      if (f.endsWith(ext) && fs.statSync(path.join(full, f)).isFile()) files.push(`${dir}/${f}`);
+    }
+  }
+  files.sort();
+  const h = require('crypto').createHash('sha256');
+  for (const f of files) h.update(Buffer.concat([Buffer.from(f + '\n'), fs.readFileSync(path.join(root, f)), Buffer.from('\n')]));
+  return h.digest('hex').slice(0, 16);
+}
+try { VERSION = `${PKG.version}+${cliFingerprint().slice(0, 7)}`; } catch { /* files not readable: the plain number */ }
+let pendingUpdate = null;   // server URL to update from
+function noteServerCli(server, fp) {
+  if (!fp || pendingUpdate || process.env.LTH_NO_AUTO_UPDATE === '1') return;
+  try { if (fp !== cliFingerprint()) pendingUpdate = server.replace(/\/+$/, ''); } catch { /* not comparable: skip */ }
+}
+process.on('exit', () => {
+  if (!pendingUpdate) return;
+  const url = `${pendingUpdate}/cli/tester.tgz`;
+  process.stderr.write(`\nA newer Tester CLI is on ${pendingUpdate}: updating (npm install -g ${url}) ...\n`);
+  const r = require('child_process').spawnSync('npm', ['install', '-g', url],
+    { stdio: ['ignore', 'ignore', 'inherit'], shell: process.platform === 'win32', timeout: 180000 });
+  process.stderr.write(r.status === 0 ? 'Tester CLI updated: the next command uses it.\n'
+    : `Update failed: run it yourself: npm install -g ${url}\n`);
+});
 
 // ---------------------------------------------------------------- small helpers
 
@@ -64,11 +104,51 @@ function saveConfig(c) {
   fs.mkdirSync(HOME, { recursive: true });
   fs.writeFileSync(CONFIG, JSON.stringify(c, null, 2), { mode: 0o600 });
 }
+// shown when the CLI is installed but not set up yet (tester --version / help / any command that needs LogiTestHub)
+const NEXT_SETUP = `Tester CLI is not set up on this PC yet. Next, in your own terminal (not in a chat - the access key is secret):
+  tester setup        (one time: the headless browser)
+  tester login --server <LogiTestHub URL: the site you installed tester from> --username <you> --key <access key>
+  (access key: LogiTestHub -> Profile -> Username and Access Key). Then start a new Claude chat.`;
+function loggedIn() {
+  const c = loadConfig();
+  return !!(c.server && c.username && c.key);
+}
 function needLogin() {
   const c = loadConfig();
-  if (!c.server || !c.username || !c.key) fail('not logged in. Run: tester login --server <url> --username <you> --key <access key>');
+  if (!c.server || !c.username || !c.key) fail('not logged in. ' + NEXT_SETUP, 2, { not_logged_in: true });
   if (wsGet('project')) c.project = wsGet('project');   // inside a workspace its project is the default
   return c;
+}
+
+// One HTTP request with Node's http / https module. Not the built-in fetch(): on Windows (Node 24), process.exit() after
+// two or more fetch() calls aborts with "Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)" and exit code 127, so
+// every failing command (fail -> process.exit) crashed and lost its exit code.
+async function request(url, { method = 'GET', headers = {}, body, timeout = 20 * 60 * 1000 } = {}) {
+  let data = null;
+  if (body instanceof FormData) {   // multipart: let Response encode it (no network), then send the bytes
+    const r = new Response(body);
+    headers = { ...headers, 'Content-Type': r.headers.get('content-type') };
+    data = Buffer.from(await r.arrayBuffer());
+  } else if (body != null) data = Buffer.from(body);
+  if (data) headers = { ...headers, 'Content-Length': data.length };
+  const u = new URL(url);
+  const mod = u.protocol === 'http:' ? require('http') : require('https');
+  return new Promise((resolve, reject) => {
+    const req = mod.request(u, { method, headers, timeout }, res => {
+      const chunks = [];
+      res.on('data', d => chunks.push(d));
+      res.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode,
+          headers: { get: k => res.headers[String(k).toLowerCase()] ?? null }, json: async () => JSON.parse(text) });
+      });
+      res.on('error', reject);
+    });
+    req.on('timeout', () => req.destroy(Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' })));
+    req.on('error', e => reject(Object.assign(e, { cause: { code: e.code } })));
+    if (data) req.write(data);
+    req.end();
+  });
 }
 
 async function api(c, method, p, body, isForm, soft = false) {   // soft: throw instead of ending the command
@@ -76,15 +156,15 @@ async function api(c, method, p, body, isForm, soft = false) {   // soft: throw 
   if (body && !isForm) headers['Content-Type'] = 'application/json';
   let res;
   try {
-    res = await fetch(c.server.replace(/\/+$/, '') + '/api/v1' + p, {
+    res = await request(c.server.replace(/\/+$/, '') + '/api/v1' + p, {
       method, headers, body: body ? (isForm ? body : JSON.stringify(body)) : undefined,
-      signal: AbortSignal.timeout(20 * 60 * 1000),
     });
   } catch (e) {
     const msg = `cannot reach LogiTestHub at ${c.server} (${e.cause?.code || e.message})`;
     if (soft) throw new Error(msg);
     fail(msg, 2, { outcome: 'not_completed', category: 'logitesthub_unreachable' });
   }
+  noteServerCli(c.server, res.headers.get('x-tester-cli'));
   let j = {};
   try { j = await res.json(); } catch { /* not JSON */ }
   if (!res.ok || j.ok === false) {
@@ -107,10 +187,28 @@ const ask = q => new Promise(resolve => {
 
 const WS_DIR = 'tests';
 const WS_FILE = 'tester.json';
+// The test cases may also live in a folder of their own, outside the code repo (e.g. C:\xampp\htdocs\etail-tests,
+// shown as a second folder in the IDE workspace). This PC remembers it per code repo in ~/.lth/config.json
+// ("tests_dirs": { "<code repo root>": "<tests folder>" }); the folder's tester.json says which code repo it is for.
+const samePath = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+function testsDirFor(root) {
+  const m = (loadConfig().tests_dirs || {});
+  const k = Object.keys(m).find(x => samePath(x, root));
+  return k && fs.existsSync(path.join(m[k], WS_FILE)) ? m[k] : null;
+}
 
-function findWorkspace(from = process.cwd()) {   // the nearest folder above with tests/tester.json
+// The workspace for the current folder: { root (code repo), dir (where tester.json and the cases are) } or null.
+// Inside a code repo: its own folder of tests (testsDirFor) or <repo>/tests/. Inside the tests folder itself: that.
+function findWorkspace(from = process.cwd()) {
   for (let d = path.resolve(from); ; d = path.dirname(d)) {
-    if (fs.existsSync(path.join(d, WS_DIR, WS_FILE))) return d;
+    const ext = testsDirFor(d);
+    if (ext) return { root: d, dir: ext };
+    if (fs.existsSync(path.join(d, WS_DIR, WS_FILE))) return { root: d, dir: path.join(d, WS_DIR) };
+    if (fs.existsSync(path.join(d, WS_FILE))) {   // inside a tests folder of its own: its code repo, as this PC knows it
+      const m = loadConfig().tests_dirs || {};
+      const k = Object.keys(m).find(x => samePath(m[x], d));
+      if (k) return { root: k, dir: d };
+    }
     if (path.dirname(d) === d) return null;
   }
 }
@@ -124,16 +222,17 @@ function projectRoot(from = process.cwd()) {   // the code project we are in: gi
     if (path.dirname(d) === d || d === os.homedir()) return null;
   }
 }
-function readWs(root) {
-  try { return JSON.parse(fs.readFileSync(path.join(root, WS_DIR, WS_FILE), 'utf8')); } catch { return {}; }
+function readWs(dir) {   // dir = the folder with tester.json
+  try { return JSON.parse(fs.readFileSync(path.join(dir, WS_FILE), 'utf8')); } catch { return {}; }
 }
-function createWs(root, settings = {}) {
-  const dir = path.join(root, WS_DIR);
+function createWs(dir, settings = {}) {
   // helpers/: @import files (login.md ...). variables/: test data (base_url, username, password ...) - not committed
   fs.mkdirSync(path.join(dir, 'helpers'), { recursive: true });
   fs.mkdirSync(path.join(dir, 'variables'), { recursive: true });
-  const ws = { format: 'tester.workspace/v1', variables: 'variables/variables.json', ...readWs(root), ...settings };
-  fs.writeFileSync(path.join(dir, WS_FILE), JSON.stringify(ws, null, 2) + '\n');
+  const old = readWs(dir);
+  const ws = { format: 'tester.workspace/v1', variables: 'variables/variables.json', ...old, ...settings };
+  // written only when it changes: a shared tests repo (git, CRLF on Windows) must not show it as modified
+  if (JSON.stringify(ws) !== JSON.stringify(old)) fs.writeFileSync(path.join(dir, WS_FILE), JSON.stringify(ws, null, 2) + '\n');
   const vfile = path.join(dir, ws.variables);
   if (!fs.existsSync(vfile)) fs.writeFileSync(vfile, JSON.stringify({
     base_url: { value: '' }, username: { value: '' }, password: { value: '', secret: true } }, null, 2) + '\n');
@@ -144,7 +243,7 @@ function createWs(root, settings = {}) {
 
 Each \`*_test.md\` here is one test case in plain English, one step per line. Commit them with the code they test.
 
-    tester run --file ${WS_DIR}/<name>_test.md     run one case
+    tester run --file <module>/<sub-module>/<name>_test.md     run one case
     tester test                          run every case in this folder
     tester run "<what to test>"          new case: runs it and saves it here
     tester case pull <id>                copy a LogiTestHub case here
@@ -158,25 +257,85 @@ the file to its LogiTestHub case, so its runs are saved under that case.
 `);
   return ws;
 }
-// The workspace for this command. First use inside a code project: create tests/ there (no --no-save, not a dry run).
+// The workspace for this command. A folder for the test cases is chosen with tester init (the user picks where); a
+// command run before that saves no file and says so.
 let WS;
 function workspace(create = false) {
   if (WS !== undefined && !(create && !WS)) return WS;
-  const root = findWorkspace();
-  if (root) return (WS = { root, dir: path.join(root, WS_DIR), ...readWs(root) });
-  const proj = create && !argv.includes('--no-save') && projectRoot();
-  if (!proj) return (WS = null);
-  createWs(proj);
-  if (!JSON_OUT) console.error(`Created ${path.join(proj, WS_DIR)}${path.sep} for this project's test cases (first use here).`);
-  return (WS = { root: proj, dir: path.join(proj, WS_DIR), created: true });
+  const found = findWorkspace();
+  if (found) return (WS = { ...found, ...readWs(found.dir) });
+  if (create && !argv.includes('--no-save') && projectRoot() && !JSON_OUT)
+    console.error('Note: no folder for test cases yet, so this case is not saved as a file. Run tester init (it suggests a folder).');
+  return (WS = null);
 }
 const wsGet = key => (workspace() || {})[key];
 function wsSet(settings) {   // remember project / url for the next command in this workspace
   const ws = workspace();
   if (!ws) return;
-  const cur = readWs(ws.root);
+  const cur = readWs(ws.dir);
   if (Object.entries(settings).every(([k, v]) => v == null || cur[k] === v)) return;
-  createWs(ws.root, Object.fromEntries(Object.entries(settings).filter(([, v]) => v != null)));
+  createWs(ws.dir, Object.fromEntries(Object.entries(settings).filter(([, v]) => v != null)));
+}
+
+// ---------------------------------------------------------------- the tests folder in the IDE
+// Adds the tests folder to the IDE window that has the code repo open, as a second folder. VS Code / Cursor: the
+// .code-workspace file of an open window that holds the repo gets a "folders" entry (the IDE reloads it by itself);
+// a window with only the repo folder open gets it with `code --add`. Other IDEs: the user opens it. Never stops init.
+function ideStorageFiles() {
+  const base = process.platform === 'win32' ? process.env.APPDATA
+    : process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support') : path.join(os.homedir(), '.config');
+  return ['Code', 'Cursor', 'Code - Insiders'].map(n => path.join(base || '', n, 'User', 'globalStorage', 'storage.json')).filter(f => fs.existsSync(f));
+}
+function fileUrlPath(u) {
+  try { return require('url').fileURLToPath(u); } catch { return null; }
+}
+// text of a .code-workspace (JSON with comments) with { "path": rel } added as the last entry of "folders", or null
+function appendFolder(text, rel) {
+  const m = /"folders"\s*:\s*\[/.exec(text);
+  if (!m) return null;
+  let i = m.index + m[0].length, depth = 1, inStr = false, end = -1;
+  for (; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) { if (ch === '\\') i++; else if (ch === '"') inStr = false; continue; }
+    if (ch === '"') inStr = true;
+    else if (ch === '/' && text[i + 1] === '/') { const n = text.indexOf('\n', i); i = n < 0 ? text.length : n; }
+    else if (ch === '/' && text[i + 1] === '*') { const n = text.indexOf('*/', i + 2); i = n < 0 ? text.length : n + 1; }
+    else if (ch === '[' || ch === '{') depth++;
+    else if ((ch === ']' || ch === '}') && --depth === 0) { end = i; break; }
+  }
+  if (end < 0) return null;
+  const before = text.slice(0, end).replace(/\s+$/, '');
+  const last = before[before.length - 1];
+  const entry = `{\n\t\t\t"path": ${JSON.stringify(rel)}\n\t\t}`;
+  return before + (last === '[' || last === ',' ? '\n\t\t' : ',\n\t\t') + entry + '\n\t' + text.slice(end);
+}
+function addToIde(testsDir, codeRoot) {
+  const seen = new Set();
+  for (const sf of ideStorageFiles()) {
+    let st;
+    try { st = JSON.parse(fs.readFileSync(sf, 'utf8')); } catch { continue; }
+    const w = st.windowsState || {};
+    for (const win of [w.lastActiveWindow, ...(w.openedWindows || [])].filter(Boolean)) {
+      const cfg = win.workspaceIdentifier && fileUrlPath(win.workspaceIdentifier.configURIPath);
+      if (!cfg || seen.has(cfg.toLowerCase()) || !fs.existsSync(cfg)) continue;
+      seen.add(cfg.toLowerCase());
+      const text = fs.readFileSync(cfg, 'utf8');
+      const folders = [...text.matchAll(/"path"\s*:\s*"([^"]+)"/g)].map(m => path.resolve(path.dirname(cfg), m[1].replace(/\\\\/g, '\\')));
+      if (!folders.some(f => samePath(f, codeRoot))) continue;
+      if (folders.some(f => samePath(f, testsDir))) return { ide: 'workspace', file: cfg, added: false };
+      const rel = path.relative(path.dirname(cfg), testsDir).split(path.sep).join('/');
+      // a text insert at the end of "folders" keeps the file's comments and puts the tests below the code
+      const out = appendFolder(text, rel);
+      if (!out) continue;
+      fs.writeFileSync(cfg, out);
+      return { ide: 'workspace', file: cfg, added: true };
+    }
+  }
+  if (process.env.VSCODE_PID || process.env.TERM_PROGRAM === 'vscode') {   // a window with just the repo folder
+    const r = require('child_process').spawnSync('code', ['--add', testsDir], { shell: process.platform === 'win32', stdio: 'ignore', timeout: 30000 });
+    if (r.status === 0) return { ide: 'code --add', added: true };
+  }
+  return { ide: 'manual', added: false };
 }
 
 // The workspace's test data (tests/variables/...): values that are filled in, as { key: { value, secret } }
@@ -194,7 +353,7 @@ function wsVars() {
 async function reportWs(c) {
   const ws = workspace();
   if (!ws || !c || !c.server) return;
-  try { await api(c, 'POST', '/workspace', { tests_dir: ws.dir, root: ws.root, project: Number(readWs(ws.root).project) || undefined }, false, true); }
+  try { await api(c, 'POST', '/workspace', { tests_dir: ws.dir, root: ws.root, project: Number(readWs(ws.dir).project) || undefined }, false, true); }
   catch { /* old server or no permission: nothing to do */ }
 }
 
@@ -204,6 +363,11 @@ function urlOpt() {   // --url, else the workspace's site URL
 }
 
 // front matter: read / set one "key: value" line (case_id links a file to its LogiTestHub case)
+// A _test.md as text. Windows PowerShell 5.1 (Set-Content / Out-File -Encoding utf8) starts files with a BOM: the
+// front matter was then not seen, ran as steps and was saved twice (TC-8). Every read of a case file goes through this.
+function readText(file) {
+  return fs.readFileSync(file, 'utf8').replace(/^﻿/, '');
+}
 function frontGet(text, key) {
   const fm = (text.match(/^---\s*\n([\s\S]*?)\n---\s*\n/) || [])[1] || '';
   const m = fm.match(new RegExp(`^\\s*${key}\\s*:\\s*['"]?([^'"\\n]*?)['"]?\\s*$`, 'm'));
@@ -220,37 +384,277 @@ function frontSet(text, key, value) {
 const frontDel = (text, key) => text.replace(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*\r?\n/, (all, fm) =>
   `---\n${fm.split('\n').filter(l => !new RegExp(`^\\s*${key}\\s*:`).test(l)).join('\n')}\n---\n`);
 
+// ---------------------------------------------------------------- review before run (team Rule 1)
+// A _test.md runs only in the version the user approved: a new or changed file stops with "review first" and its steps
+// (for the agent to show), and runs after the user's ok with --approved. The approved text is kept per file (sha256 of
+// the content without case_id, which a run adds by itself), so the next unchanged run needs nothing.
+// Cases pulled from / run from LogiTestHub and the user's own plain-English runs count as approved.
+const APPROVED = path.join(HOME, 'approved.json');
+function caseHash(text) {
+  const t = frontDel(String(text).replace(/^﻿/, '').replace(/\r\n/g, '\n'), 'case_id').trim();
+  return require('crypto').createHash('sha256').update(t).digest('hex').slice(0, 20);
+}
+function approvedList() {
+  try { return JSON.parse(fs.readFileSync(APPROVED, 'utf8')); } catch { return {}; }
+}
+function approve(file, text) {
+  fs.mkdirSync(HOME, { recursive: true });
+  fs.writeFileSync(APPROVED, JSON.stringify({ ...approvedList(), [path.resolve(file).toLowerCase()]: caseHash(text) }, null, 2));
+}
+function isApproved(file, text) {
+  return approvedList()[path.resolve(file).toLowerCase()] === caseHash(text);
+}
+// What the user reviews: the steps as they will run, and whether the run writes data.
+function reviewOf(file, text) {
+  const { parseCase } = require(path.join(__dirname, '..', 'lib', 'testcase.js'));
+  let tc;
+  try { tc = parseCase(text, path.dirname(path.resolve(file)), ''); } catch (e) { tc = { title: '', steps: [] }; }
+  const steps = (tc.steps || []).map((x, i) => ({ n: i + 1, section: x.section || '', text: x.text }));
+  const writes = steps.filter(x => /^set ?up sql\b/i.test(x.text) || /\b(save|submit|delete|cancel|approve|update)\b.*\bbutton\b/i.test(x.text));
+  return { file: path.resolve(file), title: tc.title, steps, saves_data: writes.length > 0,
+    saves_data_steps: writes.map(x => x.n) };
+}
+
 function slug(s) {
   return String(s || 'test').toLowerCase().replace(/\{\{.*?\}\}/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 50) || 'test';
 }
+// A project's own folder inside the tests folder (one tests folder can hold several projects): its LogiTestHub name,
+// safe for a path - "Retail", "Retail_POS".
+function projectFolder(name) {
+  return String(name || 'project').trim().replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^[._]+|[._]+$/g, '').slice(0, 60) || 'project';
+}
 // The file in tests/ for a case: the one already linked to it (case_id), else a new name that is not taken.
-function caseFile(dir, name, caseId) {
+// (a case linked by case_id is found in any sub-folder; a new one goes in tests/<module>/<sub-module>/ when its module
+// is known - the same tree as LogiTestHub's modules)
+function caseFile(dir, name, caseId, mod) {
   if (caseId && fs.existsSync(dir)) {
-    for (const f of fs.readdirSync(dir).filter(x => x.endsWith('_test.md'))) {
-      try { if (Number(frontGet(fs.readFileSync(path.join(dir, f), 'utf8'), 'case_id')) === Number(caseId)) return path.join(dir, f); } catch { /* skip */ }
-    }
+    const walk = d => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory() && !['helpers', 'variables'].includes(e.name) && !e.name.startsWith('.')) { const f = walk(p); if (f) return f; }
+        else if (e.isFile() && e.name.endsWith('_test.md')) {
+          try { if (Number(frontGet(readText(p), 'case_id')) === Number(caseId)) return p; } catch { /* skip */ }
+        }
+      }
+      return null;
+    };
+    const found = walk(dir);
+    if (found) return found;
   }
-  let p = path.join(dir, `${name}_test.md`);
-  for (let n = 2; fs.existsSync(p); n++) p = path.join(dir, `${name}_${n}_test.md`);
+  const has = mod && mod.module && mod.module !== 'CLI runs';
+  const d = has ? path.join(dir, slug(mod.module), ...(mod.sub_module ? [slug(mod.sub_module)] : [])) : dir;
+  fs.mkdirSync(d, { recursive: true });
+  let p = path.join(d, `${name}_test.md`);
+  for (let n = 2; fs.existsSync(p); n++) p = path.join(d, `${name}_${n}_test.md`);
   return p;
+}
+// front matter module / sub_module from the case's folder in LogiTestHub
+function withModule(text, mod) {
+  if (!mod || !mod.module || mod.module === 'CLI runs') return text;
+  const t = frontSet(text, 'module', mod.module);
+  return mod.sub_module ? frontSet(t, 'sub_module', mod.sub_module) : t;
 }
 const rel = p => path.relative(process.cwd(), p) || p;
 
-// tester init [--project <id|name>] [--url <site>]: make tests/ in this project now (it is also made on first use)
+// ---------------------------------------------------------------- repo setup (tester init)
+// The repo's git remote: LogiTestHub keeps "this repo's tests go to project X" by it, so only the first developer of a
+// repo is asked which project; everyone after gets it from the server.
+function gitTop(dir) {
+  try {
+    return path.resolve(execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim());
+  } catch { return null; }
+}
+function gitRemote(root) {
+  try {
+    return execFileSync('git', ['remote', 'get-url', 'origin'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch { return ''; }
+}
+const NEXT_STEP = {
+  login_helper: 'Login helper: ask the user for the app\'s login steps (or read the login page code), show them, then ' +
+    'tester login-helper set --file <login.md>  (it runs before every test of the project)',
+  modules: 'Modules: tester modules read --url <app menu page> --out logitesthub.modules.json, show the user the ' +
+    'menu -> sub-menu list, then tester modules push logitesthub.modules.json',
+};
+
+// tester init [--project <id|name>] [--create] [--tests-dir <folder>] [--url <site>]: set this repo up for LogiTestHub.
+//  1. which project: linked on the server for this repo -> used, nobody is asked; else --project (an id or a name;
+//     a name that does not exist is made with --create); else stop with the project list (exit 7) for the user to pick
+//  2. the repo is linked to that project for every next developer
+//  3. where the test cases go on this PC: a folder of their own (suggested next to the repo, the user says yes or gives
+//     another path) - stop with the suggestion (exit 8) until --tests-dir is given; it is made, remembered for this
+//     repo and added to the IDE window as a second folder
+//  4. what the project still needs: login helper, modules (todo + the command for each)
 async function init() {
-  const root = findWorkspace() || projectRoot() || process.cwd();
-  const settings = {};
-  if (flag('--project')) settings.project = (await resolveProject(needLogin(), flag('--project'))).id;
+  const found = findWorkspace();
+  const root = found ? found.root : (projectRoot() || process.cwd());
+  const c = needLogin();
+  const remote = gitRemote(root);
+  const want = typeof flag('--project') === 'string' ? flag('--project') : '';
+  let project = null, linkedBy = null, testsRemote = null;
+  if (want) {
+    if (/^\d+$/.test(want)) project = { id: Number(want) };
+    else {
+      const all = (await api(c, 'GET', '/projects')).projects;
+      project = all.find(x => x.name.toLowerCase() === want.toLowerCase()) || null;
+      if (!project && !argv.includes('--create'))
+        fail(`LogiTestHub has no project named "${want}". Ask the user: create it (tester init --project "${want}" --create) ` +
+          `or pick one of: ${all.map(x => `${x.name} (${x.id})`).join(', ') || 'none yet'}`, 7,
+          { error: 'no_such_project', name: want, projects: all.map(x => ({ id: x.id, name: x.name })) });
+      if (!project) {
+        const j = await api(c, 'POST', '/projects', { name: want });
+        project = j.project;
+        if (!JSON_OUT) console.error(`Created the LogiTestHub project "${project.name}" (${project.id}).`);
+      }
+    }
+  } else if (remote) {
+    const r = await api(c, 'GET', `/repo?remote=${encodeURIComponent(remote)}`, null, false, true).catch(() => ({}));   // older server: no repo links
+    if (r.linked) { project = r.project; linkedBy = r.linked_by; testsRemote = r.tests_remote || null; }
+  }
+  if (argv.includes('--unlink')) {   // a repo linked to the wrong project: the next init asks again
+    if (!remote) fail('this folder has no git remote: nothing to unlink.');
+    const j = await api(c, 'DELETE', `/repo?remote=${encodeURIComponent(remote)}`);
+    return print({ ok: true, repo: j.repo, unlinked: j.unlinked },
+      j.unlinked ? `This repo (${j.repo}) is no longer linked to a LogiTestHub project. tester init asks again.` : `This repo (${j.repo}) was not linked.`);
+  }
+  // tester.json's project is used for this run only: it may have been set for something else (the repo is linked for
+  // every developer only when the user names the project: tester init --project ...)
+  let fromWs = false;
+  if (!project && found && readWs(found.dir).project) { project = { id: Number(readWs(found.dir).project) }; fromWs = true; }
+  if (!project) {
+    const all = (await api(c, 'GET', '/projects')).projects;
+    fail('This repo is not linked to a LogiTestHub project yet. Ask the user which one (once: the next developer of ' +
+      'this repo gets it by itself), then: tester init --project <id or name>  (a new name: add --create)', 7,
+      { error: 'project_needed', repo: remote || null, projects: all.map(x => ({ id: x.id, name: x.name, cases: x.cases })) });
+  }
+  if (remote && !linkedBy && !fromWs) {   // the next developer of this repo is not asked again
+    const j = await api(c, 'POST', '/repo', { remote, project_id: project.id }, false, true).catch(() => null);
+    if (j) linkedBy = c.username;
+  }
+
+  // where the test cases go on this PC. The team may keep them in a git repo of their own: the first developer pushes
+  // it, LogiTestHub remembers its URL for this code repo, and the next developer is offered to clone it.
+  // One tests folder can hold several projects: each one's cases, tester.json, helpers/ and variables/ are in a folder
+  // named after the LogiTestHub project - <tests folder>/<Project>/<module>/<sub-module>/<name>_test.md.
+  const pname = project.name || (await api(c, 'GET', `/projects/${project.id}/setup`)).project.name;
+  const pfolder = projectFolder(pname);
+  const isOutside = d => !samePath(path.dirname(d), root) || path.basename(d) !== WS_DIR;
+  let dir = found ? found.dir : null, ide = null, cloned = false, container = null, moved = null;
+  const given = typeof flag('--tests-dir') === 'string' ? path.resolve(flag('--tests-dir')) : null;
+  if (dir && (!given || samePath(given, dir)) && isOutside(dir) && path.basename(dir) !== pfolder) {
+    // an older tests folder with this project's cases at its top: they go into its project folder (nothing is deleted;
+    // in a git repo it shows as renames). Other projects' folders already there are left alone.
+    const to = path.join(dir, pfolder);
+    if (!argv.includes('--move'))
+      fail(`This project's test cases are at the top of ${dir}. Each project now has a folder of its own there (the tests ` +
+        `folder can hold several projects): ${to}. Ask the user: move them into it? Then: tester init --move  ` +
+        '(tester.json, helpers, variables and the module folders move; nothing is deleted; in git it shows as renames)', 8,
+        { error: 'project_folder_needed', dir, project_dir: to, project: { id: project.id, name: pname } });
+    fs.mkdirSync(to, { recursive: true });
+    moved = [];
+    for (const e of fs.readdirSync(dir)) {
+      if (['.git', '.gitignore', pfolder].includes(e) || fs.existsSync(path.join(dir, e, WS_FILE))) continue;
+      fs.renameSync(path.join(dir, e), path.join(to, e));
+      moved.push(e);
+    }
+    container = dir;
+    dir = to;
+  }
+  if (!dir && !given) {
+    const suggested = path.join(path.dirname(root), testsRemote ? path.basename(testsRemote).replace(/\.git$/i, '') : 'Tester_CLI');
+    fail(testsRemote
+      ? `The team keeps this repo's test cases in ${testsRemote}. Ask the user: clone it to ${suggested} (or another path)? ` +
+        `Then: tester init --tests-dir "<folder>"  (it is cloned there and added to the IDE workspace as a second folder; ` +
+        `this project's cases go in <folder>${path.sep}${pfolder}${path.sep})`
+      : `Where should this repo's test cases be kept on this PC? Suggest a folder of their own: ${suggested} ` +
+        `(it can hold several projects: this one's cases go in ${path.join(suggested, pfolder)}${path.sep}; the folder is added ` +
+        'to the IDE workspace as a second folder). Ask the user to say yes or give another path, then: ' +
+        `tester init --tests-dir "<folder>"`, 8,
+      { error: 'tests_dir_needed', repo_root: root, suggested, project_dir: path.join(suggested, pfolder), tests_remote: testsRemote,
+        inside_repo: path.join(root, WS_DIR), project: { id: project.id, name: pname } });
+  }
+  if (!dir) {
+    container = given;
+    // a whole drive or the home folder would put the tests at its top and add all of it to the IDE: never, even --force
+    if (path.parse(container).root.toLowerCase() === (container.endsWith(path.sep) ? container : container + path.sep).toLowerCase()
+        || samePath(container, os.homedir()))
+      fail(`${container} is a whole drive / your home folder. Ask the user for a folder inside it, e.g. ` +
+        `${path.join(container, 'Tester_CLI')}`, 2, { error: 'tests_dir_too_wide', dir: container });
+    if (fs.existsSync(path.join(container, WS_FILE)))   // another project's cases are at its top (the older layout)
+      fail(`${container} has another project's test cases at its top. In that project's code repo run tester init --move ` +
+        `first (they go into a folder of their own), then run this again.`, 8, { error: 'tests_dir_flat', dir: container });
+    const entries = fs.existsSync(container) ? fs.readdirSync(container) : [];
+    const ours = e => e === '.git' || e === '.gitignore' || e === 'README.md' || fs.existsSync(path.join(container, e, WS_FILE));
+    if (!entries.length && testsRemote) {   // the team's tests repo: clone it (the user's own git login is used)
+      fs.mkdirSync(path.dirname(container), { recursive: true });
+      const r = require('child_process').spawnSync('git', ['clone', testsRemote, container], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 600000 });
+      if (r.status !== 0) fail(`git clone ${testsRemote} failed: ${(r.stderr || '').trim().split('\n').pop()}. Check that you can open that repo ` +
+        '(GitHub login / access), or clone it yourself to that folder and run tester init --tests-dir again.', 2, { error: 'clone_failed', tests_remote: testsRemote });
+      cloned = true;
+    } else if (!entries.every(ours) && !argv.includes('--force'))   // other projects' folders are fine; anything else: ask
+      fail(`${container} already has other files. Ask the user: use it anyway (--force) or give an empty / new folder.`, 2,
+        { error: 'tests_dir_not_empty', dir: container });
+    dir = path.join(container, pfolder);
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  const outside = isOutside(dir);
+  if (outside && !container && path.basename(dir) === pfolder) container = path.dirname(dir);
+  // tester.json is shared (committed in the tests repo): project and site URL only, never a path of this PC
+  const settings = { project: project.id };
   if (urlOpt()) settings.url = urlOpt();
-  const ws = createWs(root, settings);
+  const old = readWs(dir);
+  if (old.code_root) { delete old.code_root; fs.writeFileSync(path.join(dir, WS_FILE), JSON.stringify(old, null, 2) + '\n'); }
+  const ws = createWs(dir, settings);
+  if (outside) {   // remember it for this repo on this PC, and show it next to the code in the IDE
+    const cfg = loadConfig();
+    const m = Object.fromEntries(Object.entries(cfg.tests_dirs || {}).filter(([k]) => !samePath(k, root)));
+    saveConfig({ ...cfg, tests_dirs: { ...m, [root]: dir } });
+    ide = addToIde(container || dir, root);   // the whole tests folder: every project in it shows next to the code
+  }
+  // the tests folder is a git repo with a remote: tell LogiTestHub, so the next developer is offered to clone it
+  const own = outside && gitRemote(dir);
+  let shared = false;
+  if (own && remote && !samePath(gitTop(dir) || '', root)) {
+    const j = await api(c, 'POST', '/repo/tests', { remote, tests_remote: own }, false, true).catch(() => null);
+    shared = !!j;
+  }
   WS = undefined;   // read it again: it exists now
-  const c = loadConfig();
-  if (c.server && c.username && c.key) await reportWs(c);
-  print({ ok: true, dir: path.join(root, WS_DIR), ...ws },
-    `Test cases folder: ${path.join(root, WS_DIR)}${path.sep}` +
-    `${ws.project ? `\n  LogiTestHub project: ${ws.project}` : '\n  Add the LogiTestHub project: tester init --project <id|name>'}` +
-    `${ws.url ? `\n  Site URL: ${ws.url}` : '\n  Add the site URL:            tester init --url <site>'}` +
-    `\nNext: tester run "<what to test, in plain English>"   (saved in ${WS_DIR}/ and in LogiTestHub)`);
+  await reportWs(c);
+  const st = await api(c, 'GET', `/projects/${project.id}/setup`);
+  const next = st.todo.map(t => NEXT_STEP[t]);
+  const ideLine = !ide ? '' : ide.ide === 'workspace' ? `  IDE: ${ide.added ? 'added to' : 'already in'} the workspace ${ide.file}\n`
+    : ide.ide === 'code --add' ? '  IDE: added to the open VS Code window\n' : `  IDE: open this folder in your IDE next to the code: ${dir}\n`;
+  const share = !outside ? '' : cloned ? `  Cloned the team's tests repo ${testsRemote}\n`
+    : shared ? `  Team tests repo: ${own} (the next developer of this repo is offered to clone it)\n`
+    : '  Not shared yet: to share these cases with the team, make this folder a git repo, push it, then run tester init again\n';
+  print({ ok: true, dir, tests_root: container, moved, repo_root: root, repo: remote || null, linked_by: linkedBy, ide, cloned,
+    tests_remote: own || testsRemote || null, shared: shared || cloned, ...ws, ...st, next },
+    `Test cases folder: ${dir}${path.sep}\n` +
+    (moved ? `  Moved into the project folder: ${moved.join(', ') || 'nothing'}${gitTop(dir) ? ' (commit it: git shows renames)' : ''}\n` : '') +
+    ideLine + share +
+    `  LogiTestHub project: ${st.project.name} (${st.project.id})${linkedBy ? `  - this repo is linked to it (by ${linkedBy})` : ''}\n` +
+    `  Login helper: ${st.login_helper ? 'yes' : 'NOT SET'}\n` +
+    `  Modules: ${st.modules} modules, ${st.sub_modules} sub-modules\n` +
+    `${ws.url ? `  Site URL: ${ws.url}\n` : '  Site URL: not set (tester init --url <site>)\n'}` +
+    (next.length ? `To do:\n${next.map(n => '  - ' + n).join('\n')}` : `Ready: write a test (saved in ${dir}${path.sep}<module>${path.sep}<sub-module>${path.sep}).`));
+}
+
+// tester login-helper [show] | set --file <steps.md> [--force]: the project's login steps (run before every case)
+async function loginHelperCmd() {
+  const c = needLogin();
+  const sub = positional()[0] || 'show';
+  const p = await resolveProject(c, flag('--project') || wsGet('project') || c.project);
+  if (sub === 'show') {
+    const j = await api(c, 'GET', `/projects/${p.id}/login-helper`);
+    return print({ ok: true, project: p.id, login_helper: j.login_helper }, j.login_helper || '(no login helper yet)');
+  }
+  if (sub !== 'set') fail('usage: tester login-helper [show] | set --file <login steps .md> [--force]');
+  const file = flag('--file');
+  if (!file || file !== String(file) || !fs.existsSync(file)) fail('--file <login steps .md> is needed (one step per line, {{username}} / {{password}}).');
+  const steps = readText(file).replace(/^---[\s\S]*?\n---\s*\n/, '').split('\n')
+    .filter(l => !/^#\s/.test(l.trim())).join('\n').trim();   // the steps only: no front matter / title
+  // an existing helper comes back (409) with its steps, for the user to compare: replaced only with --force
+  const j = await api(c, 'PUT', `/projects/${p.id}/login-helper`, { login_helper: steps, force: argv.includes('--force') });
+  print({ ok: true, project: p.id, ...j }, `Login helper ${j.replaced ? 'replaced' : 'saved'}: it runs before every test case of project ${p.id}.`);
 }
 
 // ---------------------------------------------------------------- commands
@@ -340,7 +744,7 @@ function gitDiff(base) {
 
 async function generate() {
   const c = needLogin();
-  const task = positional().join(' ').trim() || (flag('--file') && fs.readFileSync(flag('--file'), 'utf8'));
+  const task = positional().join(' ').trim() || (flag('--file') && readText(flag('--file')));
   const pid = Number(flag('--project') || c.project);
   if (!task || !pid) fail('usage: tester generate "<the task / bug / requirement>" --project <id> [--count 6] [--diff [base-branch]]');
   const body = { project_id: pid, task, count: Number(flag('--count')) || 6 };
@@ -360,8 +764,8 @@ async function generate() {
     for (const x of j.cases) {
       try {
         const full = (await api(c, 'GET', `/cases/${x.id}`, null, false, true)).case;
-        const file = caseFile(ws.dir, `${x.tc.replace('-', '')}_${slug(x.title)}`, x.id);
-        fs.writeFileSync(file, frontSet(full.content.replace(/\r\n/g, '\n'), 'case_id', x.id));
+        const file = caseFile(ws.dir, `${x.tc.replace('-', '')}_${slug(x.title)}`, x.id, full);
+        fs.writeFileSync(file, withModule(frontSet(full.content.replace(/\r\n/g, '\n'), 'case_id', x.id), full));
         x.file = file;
       } catch (e) { x.file_error = e.message; }
     }
@@ -454,7 +858,17 @@ function analyse(runDir, status) {
     : outcome === 'partial' ? `${counts.needs_ai} step(s) needed AI and did not run; the others passed.`
     : f ? `Step ${f.n} ${outcome === 'not_completed' ? 'could not run' : 'failed'}: ${f.text} - ${f.error || 'no error text'}`
     : 'The run did not finish.';
-  return { outcome, category, summary, counts, failed_step };
+  // what the agent shows the user after every run: title, how long, and each step's result (skill: section 4)
+  const ms = end.durationMs ?? steps.reduce((t, s) => t + (s.ms || 0), 0);
+  const steps_run = steps.map(s => ({ n: s.n, section: s.section || null, text: s.text, status: s.status,
+    sec: Math.round((s.ms || 0) / 100) / 10, ...(s.error ? { error: s.error } : {}) }));
+  return { title: end.test || null, outcome, category, summary, counts, duration: fmtDuration(ms), duration_ms: ms,
+    failed_step, steps: steps_run };
+}
+
+function fmtDuration(ms) {
+  const s = Math.round((ms || 0) / 1000);
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
 }
 
 async function run() {
@@ -474,14 +888,23 @@ async function run() {
     // keep a copy in the workspace tests/ the first time (a file already linked to the case is left as it is)
     const ws = workspace(true);
     if (ws) {
-      const f = caseFile(ws.dir, `${j.case.tc.replace('-', '')}_${slug(j.case.title)}`, caseId);
-      if (!fs.existsSync(f)) fs.writeFileSync(f, frontSet(content.replace(/\r\n/g, '\n'), 'case_id', caseId));
+      const f = caseFile(ws.dir, `${j.case.tc.replace('-', '')}_${slug(j.case.title)}`, caseId, j.case);
+      if (!fs.existsSync(f)) {
+        const t = withModule(frontSet(content.replace(/\r\n/g, '\n'), 'case_id', caseId), j.case);
+        fs.writeFileSync(f, t);
+        approve(f, t);   // the saved LogiTestHub case, as it is there
+      }
       savedFile = f;
     }
     if (/@import\s/.test(content)) console.error('Note: this case uses @import helpers; they must exist next to it on this PC, or run it from the LogiTestHub web page.');
   } else if (file && file !== true) {
-    content = fs.readFileSync(file, 'utf8');
+    content = readText(file);
     savedFile = path.resolve(file);
+    if (argv.includes('--approved')) approve(file, content);
+    else if (!isApproved(file, content)) {
+      fail(`${rel(file)} is new or changed since it was last approved. Show it to the user for review (steps below); ` +
+        'run it after their ok with --approved.', 6, { error: 'review_first', review: reviewOf(file, content) });
+    }
     // a file from tests/ that is linked to its LogiTestHub case: the run is saved under that case
     const linked = Number(frontGet(content, 'case_id'));
     if (linked && !argv.includes('--new-case')) caseId = linked;
@@ -491,6 +914,7 @@ async function run() {
     if (ws) {
       savedFile = caseFile(ws.dir, slug(title || text.split(/[.;\n]/)[0]));
       fs.writeFileSync(savedFile, content);
+      approve(savedFile, content);   // the user typed this test themselves
       if (!JSON_OUT) console.error(`Saved the test case as ${rel(savedFile)}`);
     }
   } else {
@@ -546,7 +970,10 @@ async function run() {
   fs.writeFileSync(varsPath, JSON.stringify(vars), { mode: 0o600 });
   const loginPath = loginText ? path.join(tmp, 'login.md') : null;
   if (loginPath) fs.writeFileSync(loginPath, loginText);
+  const live = (running) => api(c, 'POST', '/task/running',
+    { running, ...(flag('--task') && flag('--task') !== true ? { task: flag('--task') } : {}) }, false, true).catch(() => null);
   let res;
+  await live(true);   // PM's Tester CLI button blinks while this runs (a task started from PM only)
   try {
     res = await runRunner(mdPath, varsPath, {
       LTH_RUNS_DIR: RUNS, LTH_SERVER: c.server, LTH_USER: c.username, LTH_KEY: c.key, LTH_CASE_ID: caseId || '',
@@ -556,6 +983,7 @@ async function run() {
     }, loginPath, savedFile ? path.dirname(savedFile) : null);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });   // the vars file can hold passwords
+    await live(false);
   }
   const m = res.out.match(/REPORT : (.+)/);
   if (!m) {
@@ -574,6 +1002,8 @@ async function run() {
       if (!JSON_OUT) console.log('\nNot saved to LogiTestHub: add --project <id> (tester projects) to keep this run there.');
     } else {
       const fields = caseId ? { case_id: caseId } : { project_id: pid, content: frontDel(content, 'case_id'), title };
+      // the case's module / sub-module (front matter): a new case is filed there, an existing one in "CLI runs" moves there
+      for (const k of ['module', 'sub_module']) { const v = frontGet(content, k); if (v) fields[k] = v; }
       if (flag('--task') && flag('--task') !== true) fields.task = flag('--task');   // else the server uses your active task
       if (envName) fields.env = envName;   // the environment whose data the run used (kept-data questions follow it)
       if (cleared.length) fields.cleared = cleared.join(',');   // kept data this run removed first
@@ -583,7 +1013,7 @@ async function run() {
       if (result.upload.ok && pid) saveConfig({ ...loadConfig(), project: pid });
       // link the new file to the case LogiTestHub just made, so its next runs go under the same case
       if (result.upload.ok && savedFile && !caseId && result.case_id && fs.existsSync(savedFile))
-        fs.writeFileSync(savedFile, frontSet(fs.readFileSync(savedFile, 'utf8'), 'case_id', result.case_id));
+        fs.writeFileSync(savedFile, frontSet(readText(savedFile), 'case_id', result.case_id));
     }
   }
   if (savedFile) result.file = savedFile;
@@ -592,7 +1022,13 @@ async function run() {
                            url: typeof flag('--url') === 'string' ? flag('--url') : undefined });
   await reportWs(c);
   if (!JSON_OUT && savedFile) console.log(` FILE   : ${rel(savedFile)}`);
-  if (!JSON_OUT) console.log(` RESULT : ${result.outcome.toUpperCase()}${result.category ? ' (' + result.category + ')' : ''} - ${result.summary}`);
+  if (!JSON_OUT) {
+    const k = result.counts;
+    console.log(` STEPS  : ${k.total} total - ${k.passed} passed, ${k.failed} failed, ${k.skipped} skipped${k.needs_ai ? `, ${k.needs_ai} needed AI` : ''}`);
+    console.log(` TIME   : ${result.duration}`);
+    console.log(` RESULT : ${result.outcome.toUpperCase()}${result.category ? ' (' + result.category + ')' : ''} - ${result.summary}`);
+    if (result.url) console.log(` LTH    : ${result.url}`);
+  }
   print(result);
   process.exitCode = result.outcome === 'not_completed' ? 5 : ({ PASSED: 0, FAILED: 1, PARTIAL: 3 }[status] ?? 2);
 }
@@ -615,7 +1051,7 @@ async function testAll() {
     } else files.push(g);
   }
   if (!files.length) fail(ws ? `no *_test.md in ${rel(ws.dir)} yet. Make one: tester run "<what to test>"`
-    : `no ${WS_DIR}/ folder here. Run inside your project (tester init), or: tester test <folder>`);
+    : 'no tests folder for this repo yet. Run tester init (it suggests one), or: tester test <folder>');
   files.sort();
   // the options for every run: everything except the command, its folder / file words and --json
   const skip = new Set(given);
@@ -631,7 +1067,8 @@ async function testAll() {
     });
     let r;
     try { r = JSON.parse(out.s.slice(out.s.indexOf('{'))); } catch { r = { outcome: 'not_completed', summary: 'no result (see above)' }; }
-    results.push({ file: f, exit: out.code, outcome: r.outcome || (r.ok === false ? 'error' : 'not_completed'),
+    results.push({ file: f, exit: out.code, outcome: r.outcome || (r.error === 'review_first' ? 'review_first' : r.ok === false ? 'error' : 'not_completed'),
+      ...(r.review ? { review: r.review } : {}),
       summary: r.summary || r.error || '', url: r.url, case_id: r.case_id });
     if (!JSON_OUT) console.log(`  ${(r.outcome || 'error').toUpperCase()} - ${r.summary || r.error || ''}${r.url ? `\n  ${r.url}` : ''}`);
   }
@@ -648,7 +1085,7 @@ async function testAll() {
 async function uploadRun(c, runDir, fields, result) {
   try {
     const up = await upload(c, runDir, fields);
-    Object.assign(result, { run_id: up.run_id, case_id: up.case_id, url: up.url });
+    Object.assign(result, { run_id: up.run_id, case_id: up.case_id, url: up.url }, up.folder_note ? { folder_note: up.folder_note } : {});
     if (!JSON_OUT) console.log(` VIEW   : ${up.url}`);
     return { ok: true };
   } catch (e) {
@@ -686,25 +1123,49 @@ function setup() {
 function skill() {
   const sub = positional()[0] || 'install';
   if (sub !== 'install') fail('usage: tester skill install');
-  const os = require('os');
-  const dest = path.join(os.homedir(), '.claude', 'skills', 'tester');
+  installSkill();
+  console.log(`Installed the /tester skill for Claude Code in ${SKILL_DEST}
+Restart Claude Code (or start a new chat), then type /tester.`);
+}
+
+const SKILL_SRC = path.join(__dirname, 'skill');
+const SKILL_DEST = path.join(require('os').homedir(), '.claude', 'skills', 'tester');
+function skillFiles(root) {   // SKILL.md + references/*.md, relative paths
+  const ref = path.join(root, 'references');
+  return ['SKILL.md', ...(fs.existsSync(ref) ? fs.readdirSync(ref).filter(f => f.endsWith('.md')).map(f => `references/${f}`) : [])];
+}
+function installSkill() {
+  const dest = SKILL_DEST;
   fs.mkdirSync(dest, { recursive: true });
   fs.copyFileSync(path.join(__dirname, 'skill', 'SKILL.md'), path.join(dest, 'SKILL.md'));
   // references/ (write-case, debug, lessons ...): read by the agent only when it needs them; replaced as a whole
   fs.rmSync(path.join(dest, 'references'), { recursive: true, force: true });
   fs.cpSync(path.join(__dirname, 'skill', 'references'), path.join(dest, 'references'), { recursive: true });
-  console.log(`Installed the /tester skill for Claude Code in ${dest}
-Restart Claude Code (or start a new chat), then type /tester.`);
   // the old /lth skill (before the rename) would show twice in the / menu
   const old = path.join(os.homedir(), '.claude', 'skills', 'lth');
   if (fs.existsSync(path.join(old, 'SKILL.md'))) fs.rmSync(old, { recursive: true, force: true });
 }
 
+// Every command: a Claude Code user's /tester skill is kept the same as this CLI's (after an auto-update too), so
+// the team's agents follow the same rules (review before run, how to report). LTH_NO_SKILL_SYNC=1 turns it off.
+function syncSkill() {
+  if (process.env.LTH_NO_SKILL_SYNC === '1') return;
+  try {
+    if (!fs.existsSync(path.dirname(path.dirname(SKILL_DEST)))) return;   // no ~/.claude: Claude Code not used here
+    const want = skillFiles(SKILL_SRC), have = fs.existsSync(SKILL_DEST) ? skillFiles(SKILL_DEST) : [];
+    const same = want.length === have.length && want.every(f => fs.existsSync(path.join(SKILL_DEST, f))
+      && fs.readFileSync(path.join(SKILL_SRC, f)).equals(fs.readFileSync(path.join(SKILL_DEST, f))));
+    if (same) return;
+    installSkill();
+    process.stderr.write(`The /tester skill for Claude Code was ${have.length ? 'updated' : 'installed'} (${SKILL_DEST}); start a new chat to use it.\n`);
+  } catch { /* never stop a command over the skill */ }
+}
+
 function help() {
-  console.log(`Tester CLI ${PKG.version} - LogiTestHub
+  if (!loggedIn()) console.error(`${NEXT_SETUP}\n`);
+  console.log(`Tester CLI ${VERSION} - LogiTestHub
 
   tester login [--server <url>] [--username <u>] [--key <access key>]   connect to LogiTestHub
-  tester init [--project <id|name>] [--url <site>]  make ${WS_DIR}/ in this project for its test cases (also made on first use)
   tester setup                                      install the headless browser (once)
   tester whoami | tester logout
   tester projects                                    list projects
@@ -715,8 +1176,11 @@ function help() {
   tester run "<test in plain English>" --url <site> [--project <id>]
   tester run --case <case id> --url <site>           run a saved test case
   tester run --case <id> ... --clean | --keep          a passed run kept its test data: delete it first, or leave it
-  tester run --file my_test.md --url <site>          run a test case file
-  tester test [folder | files]                       run every *_test.md in ${WS_DIR}/ (same options as run)
+  tester check --case <id> | --file x_test.md --env <name>   before a run: settings + test data there? (read-only)
+  tester settings --project <id> --env <name>        live profile / retail settings: is the action allowed?
+  tester brain [words] [--path <repo or knowledge_brain>]   the app's knowledge brain docs for a test + out-of-date check
+  tester run --file my_test.md --url <site>          run a test case file (new / changed: review first, then --approved)
+  tester test [folder | files]                       run every *_test.md in the tests folder (same options as run)
         [--headed] [--no-ai] [--no-upload] [--no-login] [--no-save] [--env <name>] [--var k=v] [--secret k=v] [--vars file.json]
         (--env: the LogiTestHub environment whose read-only database "Assert SQL" / "Remember SQL" steps use)
         (the project's login helper runs first; --no-login, or "login: none" in the case, skips it)
@@ -729,6 +1193,14 @@ function help() {
   tester lesson add --project <id|name> --kind <app_bug|test_outdated|environment|test_data|agent_mistake>
         --title "<what went wrong>" --avoid "<rule for next time>" [--symptom ..] [--fix ..] [--case <id>] [--run <id>]
   tester skill install                               add the /tester skill to Claude Code (~/.claude/skills/tester)
+  tester init [--project <id|name>] [--create] [--tests-dir <folder>] [--url <site>]
+                                                     set this repo up: project (asked once per repo), tests folder
+                                                     (added to the IDE workspace; the cases go in <folder>/<Project>/), what is missing
+  tester init --move                                 an older tests folder: move this project's cases into <folder>/<Project>/
+  tester init --unlink                                           this repo was linked to the wrong project: unlink it
+  tester login-helper [show] | set --file <login.md> [--force]   the project's login steps (run before every case)
+  tester modules read --url <menu page> [--var/--secret ..]      read the app's menu -> sub-menus on this PC (no AI) into a file
+  tester modules add "<Module>" ["<Sub-module>"]                 add a module the app has but LogiTestHub does not
   tester modules pull --project <id|name> [--out logitesthub.modules.json]     save the module tree as a file
   tester modules push <file> [--project <id|name>] [--dry-run]                  add the file's NEW modules (never deletes)
   tester modules build --rows menu.tsv --project <name> [--out file]            menu-table rows -> modules file
@@ -736,11 +1208,14 @@ function help() {
 
   --json   machine-readable output (for AI agents and CI)
   Exit codes: 0 passed, 1 failed, 3 partial (some steps need AI), 4 AI limit reached,
-              5 not completed (site / network / server problem, or the run stopped: not a test result), 2 other errors.
+              5 not completed (site / network / server problem, or the run stopped: not a test result),
+              6 review first (a new / changed _test.md: show it to the user, run with --approved after their ok), 2 other errors.
   A run's JSON: status, outcome (passed|failed|partial|not_completed), category (environment|needs_review|...),
-              summary, counts, failed_step {n, text, error, screenshot, screenshot_before}, url, upload {ok, error, retry}.
-  Inside a project, test cases are saved as files in ${WS_DIR}/ (made the first time; ${WS_DIR}/${WS_FILE} keeps the
-  LogiTestHub project and site URL, so --project / --url can be left out). --no-save: do not write a file.
+              title, summary, counts, duration, failed_step {n, text, error, screenshot, screenshot_before},
+              steps [{n, section, text, status, sec, error}], url, upload {ok, error, retry}.
+  Test cases are files in the repo's tests folder, chosen with tester init --tests-dir (a folder of its own, shown next
+  to the code in the IDE; or <repo>/tests). Its ${WS_FILE} keeps the LogiTestHub project and site URL, so --project /
+  --url can be left out. --no-save: do not write a file.
   Runs are kept in ${RUNS}`);
 }
 
@@ -761,7 +1236,7 @@ async function resolveProject(c, want) {
 }
 
 function readRows(file) {   // JSON array, or TSV / CSV with a header line (e.g. mysql -B output)
-  const text = fs.readFileSync(file, 'utf8').replace(/^﻿/, '');
+  const text = readText(file);
   if (/^\s*[\[{]/.test(text)) {
     const j = JSON.parse(text);
     return Array.isArray(j) ? j : (j.rows || j.data || []);
@@ -839,6 +1314,59 @@ async function modules() {
   }
 
   const c = needLogin();
+  // tester modules read --url <menu page or site> [--var/--secret ...] [--out file]: signs in to the app on THIS PC
+  // (so a developer's localhost works) with the project's login helper, reads the menu -> sub-menus (no AI) and
+  // writes a modules file. Nothing is sent: show the list to the user, then tester modules push <file>.
+  if (sub === 'read') {
+    const p = await resolveProject(c, flag('--project') || wsGet('project') || c.project);
+    const vars = buildVars();
+    const url = urlOpt();
+    if (!url || url === true) fail('--url <the app page that shows the menu, e.g. http://localhost/etail/admin/index.php/admin/dashboard> is needed.');
+    const loginSteps = (await api(c, 'GET', `/projects/${p.id}/login-helper`)).login_helper || '';
+    const flat = {}, secrets = [];
+    for (const [k, v] of Object.entries(vars)) { flat[k] = String(v && typeof v === 'object' ? v.value ?? '' : v ?? ''); if (v && v.secret) secrets.push(flat[k]); }
+    const { fill, makeMasker } = require(path.join(__dirname, '..', 'lib', 'vars.js'));
+    for (let i = 0; i < 5; i++) for (const k of Object.keys(flat)) flat[k] = fill(flat[k], flat);
+    const { readMenu } = require(path.join(__dirname, '..', 'lib', 'menu.js'));
+    const { chromium } = require('playwright');
+    const browser = await chromium.launch({ headless: !argv.includes('--headed') }).catch(e => {
+      if (/Executable doesn't exist|playwright install/i.test(e.message)) fail('the browser is not installed yet. Run: tester setup');
+      throw e;
+    });
+    let r;
+    try {
+      const page = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
+      r = await readMenu(page, { vars: flat, loginSteps, menuUrl: url, mask: makeMasker(secrets.filter(x => x.length >= 3)),
+        etailLogin: path.join((workspace() || {}).dir || WS_DIR, 'helpers', 'login.md') });
+    } finally { await browser.close().catch(() => {}); }
+    if (!r.ok || !(r.modules || []).length)
+      fail(`could not read the menu (${r.stage || 'open'}): ${r.reason || 'no menu found on ' + url}. ` +
+        (r.stage === 'login' ? 'Check the login helper / username / password.' : 'Give the page that shows the full menu with --url.'), 2, r);
+    const file = { format: FILE_FORMAT, project: p.name || String(p.id), source: `menu of ${url} (tester modules read)`,
+      generated_at: new Date().toISOString(), modules: r.modules };
+    const out = flag('--out') && flag('--out') !== true ? flag('--out') : MODULES_FILE;
+    fs.writeFileSync(out, JSON.stringify(file, null, 2) + '\n');
+    const plan = await api(c, 'POST', `/projects/${p.id}/modules?dry_run=1`, file);
+    const ns = r.modules.reduce((a, m) => a + (m.subs || []).length, 0);
+    return print({ ok: true, file: out, modules: r.modules.length, subs: ns, menu: r.modules.map(m => ({ name: m.name, subs: (m.subs || []).map(x => x.name || x) })),
+      new_modules: plan.new_modules, new_subs: plan.new_subs, warning: r.warning || null },
+      `Read ${r.modules.length} menus, ${ns} sub-menus from ${url} -> ${out}\n` +
+      r.modules.map(m => `  ${m.name}${(m.subs || []).length ? ': ' + m.subs.map(x => x.name || x).join(', ') : ''}`).join('\n') +
+      `\nNew in LogiTestHub: ${plan.new_modules.length} modules, ${plan.new_subs.length} sub-modules. Show the user, then: tester modules push ${out}`);
+  }
+
+  // tester modules add "<Module>" ["<Sub-module>"]: a module the app has but LogiTestHub does not yet (a new screen)
+  if (sub === 'add') {
+    const [, mod, subName] = positional();
+    if (!mod) fail('usage: tester modules add "<Module>" ["<Sub-module>"]   (adds only what is missing, never renames)');
+    const p = await resolveProject(c, flag('--project') || wsGet('project') || c.project);
+    const file = { format: FILE_FORMAT, source: 'tester modules add', modules: [{ name: mod, subs: subName ? [{ name: subName }] : [] }] };
+    const j = await api(c, 'POST', `/projects/${p.id}/modules`, file);
+    return print({ ok: true, project: p.id, module: mod, sub_module: subName || null, added_modules: j.added_modules, added_subs: j.added_subs },
+      j.added_modules + j.added_subs ? `Added ${[j.added_modules && `module "${mod}"`, j.added_subs && `sub-module "${subName}"`].filter(Boolean).join(' and ')} to project ${p.id}.`
+        : `"${mod}${subName ? ' > ' + subName : ''}" is already in project ${p.id}.`);
+  }
+
   if (sub === 'pull') {
     const p = await resolveProject(c, flag('--project') || c.project);
     const j = await api(c, 'GET', `/projects/${p.id}/modules`);
@@ -904,8 +1432,10 @@ async function caseCmd() {
   if (sub === 'pull') {
     const ws = workspace(true);
     const out = (flag('--out') !== true && flag('--out'))
-      || (ws ? rel(caseFile(ws.dir, `${cur.tc.replace('-', '')}_${slug(cur.title)}`, id)) : `${cur.tc}_test.md`);
-    fs.writeFileSync(out, ws ? frontSet(cur.content.replace(/\r\n/g, '\n'), 'case_id', id) : cur.content);
+      || (ws ? rel(caseFile(ws.dir, `${cur.tc.replace('-', '')}_${slug(cur.title)}`, id, cur)) : `${cur.tc}_test.md`);
+    const pulledText = ws ? withModule(frontSet(cur.content.replace(/\r\n/g, '\n'), 'case_id', id), cur) : cur.content;
+    fs.writeFileSync(out, pulledText);
+    approve(out, pulledText);   // pulled from LogiTestHub: approved as it is; a change to it is reviewed again
     fs.mkdirSync(HOME, { recursive: true });
     fs.writeFileSync(PULLED, JSON.stringify({ ...pulled, [id]: cur.updated_at }, null, 2));
     await reportWs(c);
@@ -916,7 +1446,7 @@ async function caseCmd() {
   const file = flag('--file');
   if (!file || file === true) fail(`tester case push ${id} --file <the fixed _test.md>`);
   let content;
-  try { content = frontDel(fs.readFileSync(file, 'utf8'), 'case_id').replace(/^﻿/, '').replace(/\r\n/g, '\n').trim() + '\n'; } catch (e) { fail(`cannot read ${file}: ${e.message}`); }
+  try { content = frontDel(readText(file), 'case_id').replace(/\r\n/g, '\n').trim() + '\n'; } catch (e) { fail(`cannot read ${file}: ${e.message}`); }
   const force = argv.includes('--force');
   const base = pulled[id];
   if (base && base !== cur.updated_at && !force)
@@ -960,12 +1490,129 @@ async function taskCmd() {
   print(j, j.task ? `Active task: ${j.task} (tester task stop to end it)` : 'No active task. Start one: tester task start PM-LMX-1741');
 }
 
-const COMMANDS = { init, test: testAll, task: taskCmd, login, logout, whoami, projects, cases, case: caseCmd, usage, generate, run, setup, help, modules, skill, lessons, lesson, upload: uploadCmd };
+// Precondition check + test data validation (fail fast): the case's leading database steps - settings, permissions,
+// the data it picks - run read-only on the environment before a run. Exit 0 passed, 1 failed (do not run), 2 error.
+async function check() {
+  const c = needLogin();
+  const caseRef = flag('--case'), file = flag('--file');
+  const env = flag('--env') && flag('--env') !== true ? flag('--env') : (loadConfig().env || '');
+  if (!env) fail('say which environment: tester check --case <id> --env <name> (its database is checked).');
+  let body;
+  if (caseRef && caseRef !== true) body = { case_id: Number(String(caseRef).replace(/^#/, '')) };
+  else if (file && file !== true) body = { content: readText(file) };
+  else fail('usage: tester check --case <id> --env <name>   |   tester check --file x_test.md --env <name>');
+  const j = await api(c, 'POST', '/check', { ...body, env });
+  const lines = (j.checks || []).map(x => `  ${x.ok ? 'OK  ' : 'FAIL'} step ${String(x.n).padStart(2)}  ${x.text.slice(0, 90)}` +
+    (x.ok ? (x.got != null ? `  = ${String(x.got).slice(0, 40)}` : '') : `\n             ${x.problem}`));
+  const el = j.elements || {};
+  const elLine = el.checked ? (el.missing.length ? `  FAIL elements: ${el.missing.map(e => `step ${e.n} ${e.problem || e.missing.join(' ') + ' not in the code'}`).join('; ')}`
+    : `  OK   elements: all ${el.checked} ids / classes found in the code`) : '';
+  print(j, [`Precondition check on ${j.env}: ${String(j.status).toUpperCase()}`, ...lines, elLine, j.message].filter(Boolean).join('\n'));
+  process.exitCode = j.status === 'failed' ? 1 : j.status === 'no_database' ? 2 : 0;
+}
+
+// Settings / permissions that decide whether a test can run (knowledge_brain/<project>/settings.json), read now
+async function settingsCmd() {
+  const c = needLogin();
+  const env = flag('--env') && flag('--env') !== true ? flag('--env') : '';
+  if (!env) fail('usage: tester settings --project <id|name> --env <name>');
+  const p = await resolveProject(c, flag('--project') || c.project);
+  const j = await api(c, 'GET', `/projects/${p.id}/settings?env=${encodeURIComponent(env)}`);
+  print(j, j.text);
+}
+
+// The app repo's own knowledge_brain (inside the code the developer works on): which module / flow docs to read for a
+// test, and whether they are out of date (code files of that module changed after the doc's source_ref, or not
+// committed yet = a feature in progress). Found from the current folder upward; else the saved path (--path).
+const BRAIN_READ = ['FUNCTIONAL_BRAIN.md', 'PERMISSION_MAP.md', 'SETTINGS_REGISTER.md', 'SCREENS.md', 'BUSINESS_RULES.md',
+  'FIELD_DICTIONARY.md', 'MODULE_BRAIN.md'];
+const BRAIN_ALIAS = { sale: ['Billing'], sales: ['Billing'], bill: ['Billing'], invoice: ['Billing'], billing: ['Billing'],
+  cancel: ['_cancel_master'], tag: ['Tagging'], tagging: ['Tagging'], lot: ['Lot', 'lot_inward'],
+  estimation: ['Estimation', 'estimation_billing'], chit: ['scheme', 'payment'], scheme: ['scheme'], installment: ['payment'],
+  instalment: ['payment'], transfer: ['Branch Transfer', 'branch_transfer'], grn: ['GRN'],
+  karigar: ['Smith_Metal_Issue', 'Purchase_Order'], order: ['customer_order', 'Purchase_Order'] };
+const BRAIN_STOP = new Set(['the', 'and', 'for', 'pannu', 'panni', 'check', 'test', 'oru', 'list', 'page', 'screen', 'add', 'new']);
+function findBrain() {
+  let d = process.cwd();
+  for (let i = 0; i < 6; i++) {
+    if (fs.existsSync(path.join(d, 'knowledge_brain'))) return path.join(d, 'knowledge_brain');
+    const up = path.dirname(d); if (up === d) break; d = up;
+  }
+  const saved = loadConfig().brain;
+  return saved && fs.existsSync(saved) ? saved : null;
+}
+function brainWords(t) { return new Set((String(t).toLowerCase().replace(/_/g, ' ').match(/[a-z]{3,}/g) || []).filter(w => !BRAIN_STOP.has(w))); }
+function brainMatch(names, want, boost) {
+  return names.map(n => {
+    const ws = brainWords(n); let sc = boost[n] || 0;
+    for (const w of ws) { if (want.has(w)) sc += 1; else for (const v of want) if (w.length > 3 && (w.startsWith(v) || v.startsWith(w))) sc += 0.5; }
+    return [sc, n];
+  }).filter(x => x[0] > 0).sort((a, b) => b[0] - a[0]).slice(0, 2).map(x => x[1]);
+}
+function brainFront(file) {
+  try { const m = fs.readFileSync(file, 'utf8').slice(0, 4000).match(/^---\s*\n([\s\S]*?)\n---/); const o = {};
+    (m ? m[1].split('\n') : []).forEach(l => { const i = l.indexOf(':'); if (i > 0) o[l.slice(0, i).trim()] = l.slice(i + 1).split('#')[0].trim(); }); return o;
+  } catch { return {}; }
+}
+function brainStale(brain, mod) {
+  const repo = path.dirname(brain);
+  const meta = brainFront(path.join(brain, mod, 'PERMISSION_MAP.md'));
+  const meta2 = Object.keys(meta).length ? meta : brainFront(path.join(brain, mod, 'MODULE_BRAIN.md'));
+  const out = { source_ref: meta2.source_ref || '', last_updated: meta2.last_updated || '', changed_since: [], uncommitted: [] };
+  let files = [];
+  try {
+    for (const line of fs.readFileSync(path.join(brain, '_SYSTEM', 'FILE_MODULE_MAP.md'), 'utf8').split('\n')) {
+      const c = line.split('|').map(x => x.trim());
+      if (c.length > 3 && c[1].startsWith('`') && c[2].split(',').map(x => x.trim().toLowerCase()).includes(mod.toLowerCase())) files.push(c[1].replace(/`/g, ''));
+    }
+  } catch { /* no map */ }
+  if (!files.length || !fs.existsSync(path.join(repo, '.git'))) return out;
+  const git = args => { try { return execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); } catch { return ''; } };
+  if (/^[0-9a-f]{7,40}$/.test(out.source_ref)) out.changed_since = git(['diff', '--name-only', `${out.source_ref}..HEAD`, '--', ...files]).split('\n').filter(Boolean);
+  out.uncommitted = git(['status', '--porcelain', '--', ...files]).split('\n').filter(x => x.length > 3).map(x => x.slice(3));
+  return out;
+}
+async function brainCmd() {
+  if (flag('--path') && flag('--path') !== true) {
+    const want = path.resolve(flag('--path'));
+    const dir = fs.existsSync(path.join(want, 'knowledge_brain')) ? path.join(want, 'knowledge_brain') : want;
+    if (!fs.existsSync(dir)) fail(`no such folder: ${dir}`);
+    saveConfig({ ...loadConfig(), brain: dir });
+    if (!positional().length) return print({ ok: true, brain: dir }, `Saved: the knowledge brain is ${dir}`);
+  }
+  const brain = findBrain();
+  if (!brain) fail('no knowledge_brain found here. Run this inside the app repo, or ask the user where it is and save it: tester brain --path <folder>', 3);
+  const dirs = fs.readdirSync(brain).filter(x => !x.startsWith('_') && fs.statSync(path.join(brain, x)).isDirectory());
+  const fdir = path.join(brain, '_SYSTEM', 'FLOW_CHECKLISTS');
+  const flowsAll = fs.existsSync(fdir) ? fs.readdirSync(fdir).filter(x => x.endsWith('.md')).map(x => x.slice(0, -3)) : [];
+  const text = positional().join(' ');
+  if (!text) return print({ ok: true, brain, modules: dirs, flows: flowsAll }, `Knowledge brain: ${brain}\nModules: ${dirs.join(', ')}\nFlow checklists: ${flowsAll.join(', ')}`);
+  const want = brainWords(text), boost = {};
+  for (const w of want) for (const t of (BRAIN_ALIAS[w] || [])) boost[t] = (boost[t] || 0) + 2;
+  const mods = brainMatch(dirs, want, boost), fls = brainMatch(flowsAll, want, boost);
+  const res = { ok: true, brain, modules: mods.map(m => ({ module: m, read: BRAIN_READ.filter(f => fs.existsSync(path.join(brain, m, f))).map(f => path.join(brain, m, f)), ...brainStale(brain, m) })),
+    flows: fls.map(f => path.join(fdir, f + '.md')) };
+  const lines = [`Knowledge brain: ${brain}`];
+  if (!mods.length && !fls.length) lines.push(`No module matched "${text}". Modules: ${dirs.join(', ')}`);
+  for (const m of res.modules) {
+    lines.push(`Module ${m.module}  (measured at ${m.source_ref || '?'}, ${m.last_updated || '?'})`);
+    m.read.forEach(f => lines.push(`  read ${f}`));
+    if (m.changed_since.length || m.uncommitted.length)
+      lines.push(`  ! OUT OF DATE: ${m.changed_since.length} code file(s) changed since, ${m.uncommitted.length} not committed (feature in progress): ` +
+        [...m.uncommitted, ...m.changed_since].slice(0, 8).join(', ') + '\n    -> read those files; where the doc and the code disagree, the code is right; tell the user which doc is out of date');
+    else lines.push('  current: no code change since the doc');
+  }
+  res.flows.forEach(f => lines.push(`Flow checklist: ${f}`));
+  print(res, lines.join('\n'));
+}
+
+const COMMANDS = { init, 'login-helper': loginHelperCmd, test: testAll, task: taskCmd, check, settings: settingsCmd, brain: brainCmd, login, logout, whoami, projects, cases, case: caseCmd, usage, generate, run, setup, help, modules, skill, lessons, lesson, upload: uploadCmd };
 (async () => {
   const cmd = argv[0];
   if (!cmd || cmd === '--help' || cmd === '-h') return help();
-  if (cmd === '--version' || cmd === '-v') return console.log(PKG.version);
+  if (cmd === '--version' || cmd === '-v') { console.log(VERSION); if (!loggedIn()) console.error(NEXT_SETUP); return; }
   const fn = COMMANDS[cmd];
   if (!fn) fail(`unknown command "${cmd}". Try: tester help`);
+  if (cmd !== 'skill') syncSkill();
   await fn();
 })().catch(e => fail(e.message));

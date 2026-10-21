@@ -79,6 +79,91 @@ def resolve_cases(con, tr, ignore_ready=False):
     return con.execute(q + ' ORDER BY c.tc_no', params).fetchall()
 
 
+def picker_data(con, project_id=None, me=None):
+    """Test case picker: every case (web, Tester Assistant, Tester CLI) under the folder it is in, shown as
+    "Module › Sub-module"; only folders that have cases. source: assistant / cli / manual.
+    With me (a username) each case also says whether it is that user's (made, linked to a PM task or run by them) and
+    when they last worked on it, so the picker can show "My test cases" first, newest first, with their PM task codes
+    and whether they have run on a server environment yet (a developer's own PC / localhost does not count)."""
+    live = '(c.folder_id IS NULL OR c.folder_id NOT IN (SELECT id FROM folders WHERE archived=1))'
+    rows = con.execute(
+        "SELECT c.id, c.tc_no, c.title, c.folder_id, c.project_id, c.qa_status, c.created_by, c.created_at, c.updated_at, "
+        "lr.status AS last, "
+        "CASE WHEN c.content LIKE '%tags: [assistant]%' THEN 'assistant' WHEN f.name='CLI runs' OR c.source_path IS NOT NULL "
+        "THEN 'cli' ELSE 'manual' END AS source FROM cases c LEFT JOIN folders f ON f.id=c.folder_id "
+        'LEFT JOIN runs lr ON lr.id=(SELECT MAX(id) FROM runs WHERE case_id=c.id) '
+        f'WHERE {live}' + (' AND c.project_id=?' if project_id else '') + ' ORDER BY c.tc_no',
+        (project_id,) if project_id else ()).fetchall()
+    used = {r['folder_id'] for r in rows if r['folder_id']}
+    allf = {f['id']: f for f in con.execute('SELECT id, name, parent_id, project_id FROM folders WHERE archived=0'
+                                            + (' AND project_id=?' if project_id else ''), (project_id,) if project_id else ())}
+    def full(f):
+        p = allf.get(f['parent_id']) if f['parent_id'] else None
+        return f"{p['name']} › {f['name']}" if p else f['name']
+    folders = sorted(({'id': i, 'name': full(allf[i]), 'project': allf[i]['project_id']} for i in used if i in allf),
+                     key=lambda f: f['name'].lower())
+    ids = [r['id'] for r in rows]
+    tasks, mine_at, server = {}, {}, {}
+    if ids:
+        marks = ','.join('?' * len(ids))
+        for t in con.execute(f'SELECT case_id, task_code, added_by FROM case_tasks WHERE case_id IN ({marks}) ORDER BY added_at', ids):
+            tasks.setdefault(t['case_id'], []).append(t['task_code'])
+            if me and t['added_by'] == me:
+                mine_at.setdefault(t['case_id'], '')
+        if me:
+            for r in con.execute(f'SELECT case_id, MAX(started_at) AS at FROM runs WHERE run_by=? AND case_id IN ({marks}) '
+                                 'GROUP BY case_id', [me, *ids]):
+                mine_at[r['case_id']] = max(mine_at.get(r['case_id']) or '', r['at'] or '')
+        # latest run on a server environment: not a CLI run on a PC, not an environment whose site is localhost
+        for r in con.execute(
+                'SELECT r.case_id, r.status, r.started_at, r.env_name FROM runs r JOIN environments e ON e.id=r.env_id '
+                f"WHERE r.case_id IN ({marks}) AND r.env_name NOT LIKE '%(CLI)%' AND e.base_url NOT LIKE '%localhost%' "
+                "AND e.base_url NOT LIKE '%127.0.0.1%' AND r.status NOT IN ('running', 'queued') ORDER BY r.id", ids):
+            server[r['case_id']] = {'status': r['status'], 'at': (r['started_at'] or '')[:16], 'env': r['env_name']}
+    out = []
+    for x in rows:
+        mine = bool(me) and (x['created_by'] == me or x['id'] in mine_at)
+        at = max(mine_at.get(x['id']) or '', x['updated_at'] or '', x['created_at'] or '') if mine else ''
+        out.append({'id': x['id'], 'tc': x['tc_no'], 'title': x['title'], 'folder': x['folder_id'], 'project': x['project_id'],
+                    'ready': x['qa_status'] == 'ready', 'last': x['last'], 'source': x['source'], 'by': x['created_by'],
+                    'tasks': tasks.get(x['id'], []), 'mine': mine, 'at': at, 'server': server.get(x['id'])})
+    return {'folders': folders, 'cases': out, 'me': me}
+
+
+SQL_STEP = re.compile(r'^\s*(?:\d+\.|[-*])?\s*(?:remember sql|assert sql|set ?up sql)\b', re.I | re.M)
+
+
+def db_gap(cases, env):
+    """Cases with database steps (Remember / Assert / Set up SQL) when env has no database: they would stop at their
+    first SQL step, so a schedule is refused up front instead of failing at run time. -> 'TC-79, TC-80' or ''."""
+    if not env or envs.db_configured(env):
+        return ''
+    return ', '.join(f"TC-{c['tc_no']}" for c in cases if SQL_STEP.search(c['content'] or ''))
+
+
+def schedule_values(f):
+    """The "how often / when" boxes of a schedule form -> (kind, run_at, at_time, weekdays, error)."""
+    kind, at_time = f.get('kind'), f.get('at_time', '').strip()
+    run_at = weekdays = None
+    if kind not in ('once', 'daily', 'weekly'):
+        return kind, None, at_time, None, 'Pick how often it runs.'
+    if not TIME_RE.match(at_time):
+        return kind, None, at_time, None, 'Pick a time (HH:MM).'
+    if kind == 'once':
+        try:
+            run_at = datetime.strptime(f"{f.get('run_date', '')} {at_time}", '%Y-%m-%d %H:%M').strftime('%Y-%m-%d %H:%M:%S')
+        except ValueError:
+            return kind, None, at_time, None, 'Pick the date for the run.'
+        if run_at <= db.now():
+            return kind, run_at, at_time, None, 'That date and time is already past.'
+    elif kind == 'weekly':
+        days = sorted({int(x) for x in f.getlist('weekdays') if x.isdigit() and 0 <= int(x) <= 6})
+        if not days:
+            return kind, None, at_time, None, 'Pick at least one day of the week.'
+        weekdays = ','.join(map(str, days))
+    return kind, run_at, at_time, weekdays, None
+
+
 def exec_summary(con, exec_ids):
     """{exec_id: {total, passed, failed, other, running, status}} from the runs of each execution."""
     if not exec_ids:
@@ -199,7 +284,7 @@ def make_blueprint(deps):
         folders = c.execute('SELECT id, project_id, name FROM folders WHERE archived=0 ORDER BY name').fetchall()
         creators = [r[0] for r in c.execute('SELECT DISTINCT created_by FROM test_runs WHERE created_by IS NOT NULL ORDER BY 1')]
         all_runs = c.execute('SELECT id, name FROM test_runs WHERE archived=0 ORDER BY name').fetchall()
-        return render_template('test_runs.html', tab=tab, runs=runs, summ=summ, counts=counts, scheds=scheds,
+        return render_template('test_runs.html', tab=tab, runs=runs, summ=summ, counts=counts, scheds=scheds, picker=picker_data(c, me=current_user()['username']),
                                s_summ=s_summ, describe=describe, projects=projects, folders=folders, q=q, by=creator,
                                status=status, creators=creators, all_runs=all_runs, days=DAYS,
                                today=date.today().isoformat(), total=len(runs))
@@ -223,14 +308,7 @@ def make_blueprint(deps):
                            'WHERE s.test_run_id=? ORDER BY s.id', (tid,)).fetchall()
         any_running = any(r['status'] in ('running', 'queued') for r in results.values())
         folders = c.execute('SELECT id, name FROM folders WHERE project_id=? AND archived=0 ORDER BY name', (tr['project_id'],)).fetchall()
-        pick_cases = c.execute(
-            'SELECT c.id, c.tc_no, c.title, c.folder_id, c.qa_status, lr.status AS last FROM cases c '
-            'LEFT JOIN runs lr ON lr.id=(SELECT MAX(id) FROM runs WHERE case_id=c.id) '
-            'WHERE c.project_id=? AND (c.folder_id IS NULL OR c.folder_id NOT IN (SELECT id FROM folders WHERE archived=1)) '
-            'ORDER BY c.tc_no', (tr['project_id'],)).fetchall()
-        picker = {'folders': [{'id': f['id'], 'name': f['name']} for f in folders],
-                  'cases': [{'id': x['id'], 'tc': x['tc_no'], 'title': x['title'], 'folder': x['folder_id'],
-                             'ready': x['qa_status'] == 'ready', 'last': x['last']} for x in pick_cases],
+        picker = {**picker_data(c, tr['project_id'], me=current_user()['username']),
                   'selected': [x['id'] for x in cases] if tr['mode'] == 'fixed' else [x['id'] for x in cases if x['id'] not in skip_ids]}
         return render_template('test_run.html', tr=tr, folders=folders, picker=picker, skip_ids=skip_ids, n_run=n_run, cases=cases, execs=execs, summ=summ, sel=sel, results=results,
                                scheds=scheds, describe=describe, any_running=any_running, days=DAYS,
@@ -344,30 +422,9 @@ def make_blueprint(deps):
         tid = f.get('test_run_id', type=int)
         tr = con().execute('SELECT * FROM test_runs WHERE id=? AND archived=0', (tid,)).fetchone() if tid else None
         back = f.get('back') if (f.get('back') or '').startswith('/') else url_for('testruns.index', tab='scheduled')
-        kind = f.get('kind')
-        at_time = f.get('at_time', '').strip()
-        run_at, weekdays = None, None
+        kind, run_at, at_time, weekdays, err = schedule_values(f)
         if not tr:
             err = 'Pick the Test Run to schedule.'
-        elif kind not in ('once', 'daily', 'weekly'):
-            err = 'Pick how often it runs.'
-        elif not TIME_RE.match(at_time):
-            err = 'Pick a time (HH:MM).'
-        else:
-            err = None
-            if kind == 'once':
-                d = f.get('run_date', '')
-                try:
-                    run_at = datetime.strptime(f'{d} {at_time}', '%Y-%m-%d %H:%M').strftime('%Y-%m-%d %H:%M:%S')
-                except ValueError:
-                    err = 'Pick the date for the run.'
-                if run_at and run_at <= db.now():
-                    err = 'That date and time is already past.'
-            elif kind == 'weekly':
-                days = sorted({int(x) for x in f.getlist('weekdays') if x.isdigit() and 0 <= int(x) <= 6})
-                weekdays = ','.join(map(str, days))
-                if not days:
-                    err = 'Pick at least one day of the week.'
         if err:
             flash(err, 'danger')
             return redirect(back)
@@ -375,12 +432,64 @@ def make_blueprint(deps):
         if env_id and not con().execute('SELECT 1 FROM environments WHERE id=? AND owner IS NULL', (env_id,)).fetchone():
             flash('Schedules run on their own, so they need a shared environment (Dev / QA ...), not a personal one.', 'danger')
             return redirect(back)
+        env = envs.get(con(), env_id)
+        gap = db_gap(resolve_cases(con(), tr, ignore_ready=True), env)
+        if gap:
+            flash(f'{gap} check the database, but "{env["name"]}" has no database set. Add it in Settings -> Environments -> '
+                  f'{env["name"]} -> Database, or pick an environment that has one.', 'danger')
+            return redirect(back)
         nxt = next_run(kind, run_at, at_time, weekdays, datetime.now())
         with con():
             con().execute('INSERT INTO schedules(test_run_id, kind, run_at, at_time, weekdays, env_id, active, next_run_at, '
                           'created_by, created_at) VALUES (?,?,?,?,?,?,1,?,?,?)',
                           (tid, kind, run_at, at_time, weekdays, env_id, nxt, current_user()['username'], db.now()))
         flash(f'Scheduled "{tr["name"]}": next run {nxt[:16] if nxt else "-"}. This PC / server must be on at that time.', 'success')
+        return redirect(back)
+
+    @bp.route('/schedules/quick', methods=['POST'])
+    @login_required
+    def schedule_quick():
+        """Scheduled Run in one step: name + test cases + environment + when. A Test Run with exactly those cases is
+        made behind it (it shows in the Test Runs tab too, so its results and history work the same)."""
+        f = request.form
+        back = url_for('testruns.index', tab='scheduled')
+        name = f.get('name', '').strip()[:160]
+        pid = f.get('project_id', type=int)
+        ids = [int(x) for x in f.getlist('ids') if x.isdigit()]
+        env_id = f.get('env_id', type=int)
+        kind, run_at, at_time, weekdays, err = schedule_values(f)
+        c = con()
+        ok = [r['id'] for r in c.execute(f'SELECT id FROM cases WHERE project_id=? AND id IN ({",".join("?" * len(ids))})',
+                                         [pid, *ids]).fetchall()] if ids and pid else []
+        if not name:
+            err = 'Give the Scheduled Run a name (e.g. "Test domain - Supplier").'
+        elif not pid or not c.execute('SELECT 1 FROM projects WHERE id=?', (pid,)).fetchone():
+            err = 'Pick a project.'
+        elif not ok:
+            err = 'Select at least one test case.'
+        elif not env_id or not c.execute('SELECT 1 FROM environments WHERE id=? AND owner IS NULL', (env_id,)).fetchone():
+            err = 'Pick the environment it runs on (a shared one: Dev / QA / Test domain ...).'
+        else:
+            env = envs.get(c, env_id)
+            gap = db_gap(c.execute(f'SELECT tc_no, content FROM cases WHERE id IN ({",".join("?" * len(ok))}) ORDER BY tc_no', ok).fetchall(), env)
+            if gap:
+                err = (f'{gap} check the database, but "{env["name"]}" has no database set. Add it in Settings -> Environments -> '
+                       f'{env["name"]} -> Database, or pick an environment that has one.')
+        if err:
+            flash(err, 'danger')
+            return redirect(back)
+        user = current_user()['username']
+        nxt = next_run(kind, run_at, at_time, weekdays, datetime.now())
+        with c:
+            tid = c.execute('INSERT INTO test_runs(project_id, name, description, mode, folder_id, only_ready, env_id, created_by, '
+                            "created_at, updated_by, updated_at) VALUES (?,?,?,'fixed',NULL,0,?,?,?,?,?)",
+                            (pid, name, 'Made with its Scheduled Run', env_id, user, db.now(), user, db.now())).lastrowid
+            c.executemany('INSERT INTO test_run_cases(test_run_id, case_id) VALUES (?,?)', [(tid, i) for i in ok])
+            c.execute('INSERT INTO schedules(test_run_id, kind, run_at, at_time, weekdays, env_id, active, next_run_at, '
+                      'created_by, created_at) VALUES (?,?,?,?,?,?,1,?,?,?)',
+                      (tid, kind, run_at, at_time, weekdays, env_id, nxt, user, db.now()))
+        flash(f'Scheduled "{name}" with {len(ok)} test case(s): next run {nxt[:16] if nxt else "-"}. '
+              'This PC / server must be on at that time.', 'success')
         return redirect(back)
 
     @bp.route('/schedules/<int:sid>/<action>', methods=['POST'])

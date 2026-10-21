@@ -1,8 +1,28 @@
 # Writing a test case that runs the first time
 
-Before writing: run `tester lessons <project> --json` and follow every lesson. If the LogiTestHub folder has a flow
-doc for the screen (`knowledge_brain/<project>/*.md`, e.g. `knowledge_brain/retail/chit-scheme.md`), read it: it lists
-the rules, branches and tables. Branches the user did not choose (payment mode ...): ask them. Then read the screen's code.
+Before writing: run `tester lessons <project> --json` and follow every lesson.
+
+Step 1 - the app's knowledge brain lives INSIDE the app repo the developer works in (e.g.
+`C:\xampp\htdocs\etail_development_src\knowledge_brain`). From the repo run `tester brain <words of the test> --json`:
+it lists the module docs to read (FUNCTIONAL_BRAIN, PERMISSION_MAP, SETTINGS_REGISTER, SCREENS, BUSINESS_RULES ...) and
+the flow checklist, and says when a doc is OUT OF DATE (code changed after its source_ref, or a feature not committed
+yet). Not found -> ask the user where knowledge_brain is, then `tester brain --path <folder>` (it is saved). No doc for
+the module -> say so and work from the code. Out of date -> read the changed files; where the doc and the code disagree
+the code is right; tell the user in one line which doc is out of date. Branches the user did not choose (payment
+mode ...): ask them. Then read the screen's code.
+
+**Brain gap -> tell the developer.** The developer keeps the brain up to date (their brain-update script, before they
+test). When the test needed something the module's docs do not say, or say wrongly, and you took it from the code (a
+mandatory field or row check, a setting, a filter, a message, a form order, a table), do not edit the brain yourself.
+End your report with one block per gap:
+```
+📘 Brain gap - <Module>/<DOC>.md
+Missing: <one line, general: "Touch and UOM are mandatory in every ticked item row">
+Code: <file:line>
+Add: <the table row or 2-4 lines to paste, in that doc's style>
+```
+Also when a failure was caused by a wrong / missing doc. After they update the brain, read the doc again before the
+next run.
 
 ## 1. Take everything from the code, never guess
 
@@ -14,6 +34,27 @@ For the screen under test open (Glob / Grep / Read):
 
 Use the real id in the step: `Type '10.500' into the Gross Weight field (#gross_wt).` A `(#id)` hint makes the step
 exact and AI-free. Never invent an id; if the element has no id, use its visible label / button text.
+A hint may use ids, classes (`.a.b`), tag names, `:first-child` / `:last-child` / `:nth-child(n)` and `>` only, e.g.
+`(#billing_list tbody tr:first-child .btn-warning)`. Never `[attr]` or quotes: the runner fails such a step, and
+`tester check` reports it before the run.
+
+**Pick the most stable hint, in this order** (TC-13: a `*` found by `.col-sm-12 > .row > .col-sm-2:nth-child(5) > label
+> .error` could have matched the item row's `*` and passed while the fix was missing):
+1. `(#id)` of the element itself.
+2. A class that only that element has (check with Grep in the view / JS that it is unique on the page).
+3. A short path from the nearest id: `(#lot_form .category_req)`, `(#billing_list tbody tr:first-child .btn-warning)`.
+4. Only when nothing else exists: a position path (`nth-child`, long `>` chains). Then say in the review, on that step:
+   "position-based: a new field or another column order breaks it, and it may match another row".
+When the element has no id and it is in code the developer is changing now (their own uncommitted fix, a new screen),
+ask: "Add `id="<name>"` to it in your change? The test then finds exactly that element." Add it only after their yes,
+and show the diff with the test. Never add ids to code nobody is changing for this task.
+
+**A test for a bug fix must check the fix itself.** Before writing it, say in one line what the fix changes on the
+screen (e.g. "Non-Tagged now shows `*` on Category, Purity, Gold Smith"). Put steps that check exactly that, and mark
+them in the review: "⭐ steps 7-9 prove the fix: they fail without it". Steps that only check what worked before the fix
+(an old validation message) may stay, but never as the only checks - such a test passes on the old code too.
+Do not switch the developer's working tree to the old code to prove it (no `git stash` / checkout of their changes):
+their uncommitted work could be lost.
 
 ## 2. Step shapes that run without AI
 
@@ -24,6 +65,7 @@ Type the keys '<text>' into the <label> field (#id).   one key at a time: for fi
 Press Enter in the <label> field (#id).                real key events: keyup-driven autocompletes
 Select '<option>' from the <label> dropdown.           Select2 aware (+ (#id))
 Select the first available option in the <label> dropdown (#id).
+Set the date range (#picker_id) from 'DD-MM-YYYY' to 'DD-MM-YYYY'.   list / report date filter (bootstrap daterangepicker)
 Click the <text> button.                               (+ (#id))
 Click the <text> radio button.  /  Click the <text> checkbox.   by the text next to it (eTail radios share one id)
 Wait 2 seconds.                                        only after an action that reloads / AJAX-fills a list
@@ -52,6 +94,24 @@ when credits are not available, use only the shapes above.
 
 ## 3. Rules
 
+- **Records taken from the database and then looked for on a list / report screen:** also Remember the record's
+  date (DATE_FORMAT(<date col>,'%d-%m-%Y')), then set the screen's date filter to it before searching -
+  lists default to today / this month / last 7 days, so an older record is not shown otherwise:
+  Set the date range (#rpt_date_picker) from '{{rec_date}}' to '{{rec_date}}'.  then the screen's Search button.
+- **Order before writing (stop when a step says it cannot run):** 1) `tester brain <words>` (app repo docs, out-of-date check); 2) `tester settings --project <id>
+  --env <name> --json` - is the action allowed for this user here? If not, tell the user which setting to change
+  (screen > field: now -> needed) and stop; 3) test data; 4) view / JS (the screen as those settings show it);
+  5) write the case, then `tester check`.
+- **Settings and permissions first.** Find in the code what the action depends on (profile permissions such as
+  previous_bill_cancel, retail settings, the day-close date). Put an `Assert SQL ... returns '1'` per setting at the
+  top of the case, and before the first run check them and the data picks with the read-only SQL. If a setting
+  blocks it, tell the user in one line where to change it (screen > field) and the no-change alternative. eTail's
+  "today" is the branch day-close date (ret_day_closing.entry_date), not CURDATE().
+- **Finding a database record on a screen:** Before writing the steps that find a database record on a screen, read that screen's view + JS and list EVERY filter
+  and search it applies (branch, date range, status, type, the list's own search box) and how it shows the record's
+  number. Remember ALL of them from the database first - the record's branch, its date, and its number exactly as the
+  screen shows it (e.g. CONCAT(branch short_name,'-',fin_year_code,'-SA-',sales_ref_no) = 'ATM-25-SA-00010', never only
+  '00010': numbers repeat per branch) - then set each filter, Search, and check the row's Id.
 - **Form fill order:** fill fields in the order a user does on screen (top to bottom, parent before child). A parent
   dropdown (Branch, Customer ...) often reloads and clears the fields after it. Find the order: 1) the flow doc's
   "Form fill order"; 2) not there → the code (view field order, JS handlers that reload / empty other fields);

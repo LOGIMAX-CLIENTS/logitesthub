@@ -1,0 +1,30 @@
+{
+  "about": "Settings and permissions the Tester Assistant reads (read-only, on the Run-on environment) BEFORE it writes a test: they decide which options and buttons a screen shows. {{username}} = the environment's login user.",
+  "sources": [
+    {
+      "label": "Profile permissions of the login user (Settings > Profile > Edit)",
+      "sql": "SELECT p.* FROM employee emp JOIN profile p ON p.id_profile = emp.id_profile WHERE emp.username = '{{username}}'"
+    },
+    {
+      "label": "Employee settings of the login user (Settings > Employee settings)",
+      "sql": "SELECT es.* FROM employee emp JOIN employee_settings es ON es.id_employee = emp.id_employee WHERE emp.username = '{{username}}'"
+    },
+    {
+      "label": "Login user (branch: NULL or 0 = all branches)",
+      "sql": "SELECT emp.id_employee, emp.username, emp.id_branch, emp.id_profile FROM employee emp WHERE emp.username = '{{username}}'"
+    },
+    {
+      "label": "Retail settings (Settings > Retail settings), name = value",
+      "sql": "SELECT name, value FROM ret_settings ORDER BY name",
+      "pairs": true
+    },
+    {
+      "label": "Chit / scheme settings (Settings > Chit settings)",
+      "sql": "SELECT * FROM chit_settings LIMIT 1"
+    },
+    {
+      "label": "Business date per branch (day-close date = eTail's 'today')",
+      "sql": "SELECT GROUP_CONCAT(CONCAT(id_branch, '=', DATE_FORMAT(entry_date, '%d-%m-%Y')) ORDER BY id_branch SEPARATOR ', ') FROM ret_day_closing"
+    }
+  ]
+}

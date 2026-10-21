@@ -12,6 +12,7 @@ import os
 import re
 import subprocess
 import threading
+import time
 
 from flask import Blueprint, abort, flash, jsonify, redirect, render_template, request, url_for
 
@@ -105,9 +106,140 @@ def project_context(con, p, env_id=None, code_env=None, user=None):
     return '\n'.join(lines)
 
 
+# ---------------------------------------------------------------- draft preflight (read-only, seconds, no browser)
+
+SQL_STEP = re.compile(r'^(?:remember sql "(?P<rq>.+)" as (?P<name>[A-Za-z_]\w*)'
+                      r'|assert sql "(?P<aq>.+)" returns (?:(?P<cmp>contains )?(?P<qt>[\'"])(?P<val>.*)(?P=qt)|(?P<rows>a row|no rows)))\.?$', re.I)
+
+
+def preflight(draft, env):
+    """Runs the draft's leading database checks (Remember SQL / Assert SQL, in order, until the first step that needs
+    the screen or a value not known yet) on env's database, read-only. Returns [{n, text, ok, got, problem}]."""
+    import envs
+    if not draft or not env or not envs.db_configured(env):
+        return []
+    # the environment's own values ({{username}}, {{branch}} ...), never its passwords
+    vals = {k: str(v) for k, v in (('username', env['username']), ('branch', env['branch']), ('base_url', env['base_url'])) if v}
+    out = []
+    for n, st in enumerate(draft.get('steps') or [], 1):
+        text = str(st.get('text') or '').strip()
+        m = SQL_STEP.match(text)
+        if not m:
+            break      # the first screen step: data after it is made by the test itself, so stop checking
+        sql = m.group('rq') or m.group('aq')
+        names = re.findall(r'\{\{\s*([\w.-]+)\s*\}\}', sql)
+        if any(x not in vals for x in names):
+            break      # needs a value the run makes on screen: stop here
+        for x in names:
+            sql = re.sub(r'\{\{\s*' + re.escape(x) + r'\s*\}\}', vals[x], sql)
+        try:
+            r = envs.db_query(env, sql)
+        except envs.DbError as e:
+            out.append({'n': n, 'text': text[:300], 'ok': False, 'got': None, 'problem': f'SQL error: {e}'})
+            break
+        got = r.get('value')
+        if m.group('name'):
+            ok = got is not None
+            if ok:
+                vals[m.group('name')] = str(got)
+            problem = None if ok else f'returned nothing on {env["name"]}: there is no such data there'
+        elif m.group('rows'):
+            want_some = m.group('rows').lower() == 'a row'
+            ok = (r.get('count', 0) > 0) == want_some
+            problem = None if ok else f'returned {r.get("count", 0)} row(s) on {env["name"]}'
+        else:
+            g = '' if got is None else str(got)
+            ok = (m.group('val') in g) if m.group('cmp') else g == m.group('val')
+            problem = None if ok else f'returned "{g}", expected "{m.group("val")}" on {env["name"]}'
+        out.append({'n': n, 'text': text[:300], 'ok': ok, 'got': got, 'problem': problem})
+        if not ok:
+            break
+    if not out or out[-1]['ok']:   # then every SQL step of the case: tables / columns must exist (LIMIT 0, no data read)
+        bad = schema_check(draft, env)
+        if bad:
+            b = bad[0]
+            out.append({'n': b['n'], 'text': b['text'], 'ok': False, 'got': None,
+                        'problem': f'uses a table / column that is not in the database: {b["problem"]}'
+                                   + (f' (also steps {", ".join(str(x["n"]) for x in bad[1:6])})' if len(bad) > 1 else '')
+                                   + '. Take the names from the model / controller code (insertData / ->insert table).'})
+    return out
+
+
+SETUP_STEP = re.compile(r'^set ?up sql "(?P<q>.+)"\.?$', re.I)
+
+
+def _as_select(sql):
+    """The SELECT that touches the same tables / columns as sql (DELETE / UPDATE ... WHERE), else None (INSERT ...)."""
+    s = sql.strip().rstrip(';')
+    m = re.match(r'(?is)^delete\s+(?:\w+\s+)?from\s+(.+)$', s)
+    if m:
+        return f'SELECT 1 FROM {m.group(1)}'
+    m = re.match(r'(?is)^update\s+(.+?)\s+set\s+.+?(\swhere\s.+)?$', s)
+    if m:
+        return f'SELECT 1 FROM {m.group(1)}{m.group(2) or ""}'
+    return s if re.match(r'(?is)^\s*(select|with)\b', s) else None
+
+
+def schema_check(draft, env):
+    """Every SQL step of the draft (also after the screen steps: the checks after Save, the Clean up) run with LIMIT 0
+    on env's database, read-only: a wrong table or column name fails here in a second instead of after a real save
+    (TC-78: ret_grn_item / grn_id instead of ret_grn_items / grn_item_grn_id). {{values}} become 0. [{n, text, problem}]."""
+    import envs
+    if not draft or not env or not envs.db_configured(env):
+        return []
+    out = []
+    for n, st in enumerate(draft.get('steps') or [], 1):
+        text = str(st.get('text') or '').strip()
+        m, w = SQL_STEP.match(text), SETUP_STEP.match(text)
+        sql = (m.group('rq') or m.group('aq')) if m else (w.group('q') if w else None)
+        sel = _as_select(sql) if sql else None
+        if not sel:
+            continue
+        sel = re.sub(r"'\{\{\s*[\w.-]+\s*\}\}'", "''", sel)
+        sel = re.sub(r'\{\{\s*[\w.-]+\s*\}\}', '0', sel)
+        sel = re.sub(r'(?is)\s+limit\s+\d+(\s*,\s*\d+)?\s*$', '', sel)
+        try:
+            envs.db_query(env, f'SELECT * FROM ({sel}) AS _lth_check LIMIT 0')
+        except envs.DbError as e:
+            msg = str(e)
+            if re.search(r"doesn't exist|Unknown column|Unknown table|syntax", msg, re.I):
+                out.append({'n': n, 'text': text[:300], 'problem': msg[:300]})
+    return out
+
+
+def steps_of(content):
+    """A _test.md -> [{'section', 'text'}] (front matter, title and blank lines left out), for preflight()."""
+    body = re.sub(r'^---\s*\n.*?\n---\s*\n', '', (content or '').replace('\r\n', '\n'), count=1, flags=re.S)
+    out, sec = [], ''
+    for raw in body.split('\n'):
+        line = raw.strip()
+        if not line or line.startswith('# '):
+            continue
+        if line.startswith('##'):
+            sec = line.lstrip('#').strip()
+            continue
+        out.append({'section': sec, 'text': re.sub(r'^(\d+\.|[-*])\s+', '', line)})
+    return out
+
+
+def preflight_note(checks, env_name):
+    bad = next((c for c in checks if not c['ok']), None)
+    return (f'PREFLIGHT on {env_name} (the draft\'s database steps were run read-only just now): step {bad["n"]} '
+            f'"{bad["text"]}" {bad["problem"]}. Fix the draft so it does not depend on data that is not there (make the '
+            'data in the test, or pick it differently), or - when a setting / permission blocks it - keep the check, '
+            'and tell the user in 1-2 lines exactly which setting to change (screen > field) and that they can run '
+            'after that. Do not ask them to debug.') if bad else ''
+
+
 RUNNING = {}            # request key -> Popen of the AI turn in progress (the Stop button ends it)
+PROGRESS = {}           # request key -> what the turn is doing now, in plain English (the page shows it instead of "Thinking...")
 _RUN_LOCK = threading.Lock()
 STOPPED = 'stopped'
+
+
+def set_progress(key, text):
+    if key:
+        PROGRESS[key] = {'text': text, 'at': time.time()}
 
 
 def _kill_tree(proc):
@@ -142,11 +274,30 @@ def ask_ai(messages, context, code_dir=None, key=None):
     if key:
         with _RUN_LOCK:
             RUNNING[key] = proc
+
+    def steps():   # "STEP <text>" lines from the bridge: what the AI is reading / searching now
+        for line in proc.stderr:
+            if line.startswith('STEP '):
+                set_progress(key, line[5:].strip()[:200])
+    reader = threading.Thread(target=steps, daemon=True)
+    reader.start()
     try:
-        stdout, _ = proc.communicate(json.dumps(req), timeout=480)
+        try:
+            proc.stdin.write(json.dumps(req))
+            proc.stdin.close()
+        except OSError:   # stopped before it read the request
+            pass
+        done = threading.Event()
+        box = {}
+        threading.Thread(target=lambda: (box.update(out=proc.stdout.read()), done.set()), daemon=True).start()
+        if not done.wait(660):
+            raise subprocess.TimeoutExpired(proc.args, 660)
+        proc.wait()
+        reader.join(5)
+        stdout = box.get('out')
     except subprocess.TimeoutExpired:
         _kill_tree(proc)
-        return None, None, None, 'The AI took longer than 8 minutes, so it was stopped. Please try again.'
+        return None, None, None, 'The AI took longer than 11 minutes, so it was stopped. Please try again.'
     finally:
         if key:
             with _RUN_LOCK:
@@ -224,6 +375,14 @@ def _payload():
 
 
 def register(app, con, login_required, current_user, project_or_404, start_case_run):
+    try:   # element index of every environment's code, built in the background so the first chat does not wait
+        import coderepo
+        import elementcheck
+        with db.connect() as cw:
+            for e in cw.execute('SELECT * FROM environments WHERE repo_url IS NOT NULL').fetchall():
+                elementcheck.index(coderepo.code_dir(e))
+    except Exception:
+        pass
     c0 = db.connect()
     try:
         cur = c0._raw.cursor()
@@ -272,8 +431,17 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
         import budget
         import coderepo
         import envs
-        p = project_or_404(pid)
+        import pmtasks
         me = current_user()
+        if request.args.get('task') and not request.args.get('t'):   # PM's Test Assistant button: the chat for that task
+            code = pmtasks.norm(request.args['task'])
+            if not code:
+                flash(f'"{request.args["task"]}" is not a PM task code.', 'warning')
+            elif not con().execute('SELECT 1 FROM projects WHERE id=?', (pid,)).fetchone():
+                return redirect(url_for('pmtasks.assistant', code=code))   # that project is not here: pick one
+            else:
+                return redirect(url_for('assistant.page', pid=pid, t=pmtasks.task_thread(con(), me['username'], code, pid)))
+        p = project_or_404(pid)
         # admins (the top role) can see everyone's conversations, read-only; others see only their own
         import settings
         is_admin = settings.is_admin(me['role'])
@@ -302,7 +470,11 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
         folders = con().execute('SELECT * FROM folders WHERE project_id=? AND archived=0 ORDER BY sort, name', (pid,)).fetchall()
         b = budget.status(con(), me)
         all_envs = envs.all_envs(con(), me)
+        review_block = pmtasks.review_check(con(), me['username'], thread['task_code']) \
+            if thread and thread['task_code'] and not readonly else None
+        thread_case = con().execute('SELECT id, tc_no FROM cases WHERE id=?', (thread['case_id'],)).fetchone()             if thread and thread['case_id'] else None
         return render_template('assistant.html', p=p, threads=threads, thread=thread, readonly=readonly, who=who, users=users,
+                               thread_case=thread_case, review_task=thread['task_code'] if thread else None, review_block=review_block,
                                msgs=messages_of(thread['id']) if thread else [], folders=folders,
                                envs=all_envs, ai_ok=b['ok'], ai_msg=b['message'],
                                code_envs=[e for e in all_envs if coderepo.code_dir(e)],
@@ -391,18 +563,26 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
         import coderepo
         import envs
         key = f"{me['username']}:{str(body.get('req') or '')[:40]}"
+        set_progress(key, 'Reading the notes and settings for this screen')
         env_id = body.get('env_id') if str(body.get('env_id') or '').isdigit() else None
         # the code picked in the Code dropdown ('' = none); older pages without it: the Run on environment's code
         ce = body.get('code_env_id', env_id)
         code_env = envs.get(con(), ce, me) if str(ce or '').isdigit() else (None if ce == '' else envs.get(con(), None, me))
         code = coderepo.code_dir(code_env)
         import knowledge   # flow docs (knowledge_brain) that match what the user is talking about
-        flows = knowledge.for_conversation(p['name'], '\n'.join(h['text'] for h in hist if h['role'] == 'user'))
+        talk = '\n'.join(h['text'] for h in hist if h['role'] == 'user')
+        import brain   # the app repo's own knowledge_brain (code under test), with "is it out of date?" from git
+        flows = brain.context(coderepo.code_dir(envs.get(con(), env_id, me)) or code, talk) \
+            or knowledge.for_conversation(p['name'], talk)
+        live =knowledge.settings_text(p['name'], envs.get(con(), env_id, me))   # profile / retail settings, read now
+        if live:
+            flows = (flows + '\n' if flows else '') + live
         context = project_context(con(), p, env_id, code_env if code else None, me) + ('\n' + flows if flows else '')
         tc = con().execute('SELECT task_code FROM chat_threads WHERE id=?', (tid,)).fetchone()
         if tc and tc['task_code']:   # opened from a PM task (reviewer's button): the tests are for that task
             context += (f"\nThis chat writes test cases for PM task {tc['task_code']} (they are linked to it when saved). "
                         "If the user has not said what the task changed, ask what to check for this task.")
+        set_progress(key, 'Understanding your request' + (' and looking at the application code' if code else ''))
         data, usage, model, err = ask_ai(hist, context, code, key)
         if err == STOPPED:
             return jsonify({'ok': False, 'stopped': True, 'thread_id': tid})
@@ -411,11 +591,78 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
             add_message(tid, 'system', msg)
             return jsonify({'ok': False, 'thread_id': tid, 'error': msg})
         draft = data.get('draft')
+        run_env = envs.get(con(), env_id, me)
+        import elementcheck
+        code_root = coderepo.code_dir(run_env) or code   # the code of the site the test runs on, else the one it read
+        def check(draft):
+            if draft and run_env:
+                set_progress(key, f"Checking the database steps on {run_env['name']}")
+            checks = preflight(draft, run_env)
+            if draft and code_root:
+                set_progress(key, 'Checking that the field ids are in the code')
+            return checks, elementcheck.check(draft, code_root)
+        checks, elems = check(draft)
+        for _round in range(2):   # auto-heal: what the database / the code says goes back to the assistant, up to 2 times
+            notes = []
+            if checks and not checks[-1]['ok']:
+                notes.append(preflight_note(checks, run_env['name']))
+            bad_el = [e for e in elems if not e['ok']]
+            if bad_el:
+                notes.append('ELEMENT CHECK (looked up in the application code just now): ' + '; '.join(
+                    f'step {e["n"]} {e.get("problem") or "uses " + ", ".join(e["missing"]) + " which is not in the code"}'
+                    for e in bad_el[:8]) +
+                    '. Take the real id / class from the view / JS of that screen (in a selector the runner reads), '
+                    'or use the visible label without a hint.')
+            if not notes or not draft:
+                break
+            set_progress(key, 'Fixing the draft: ' + ' and '.join(w for w, bad in [
+                ('a database check failed', checks and not checks[-1]['ok']), ('a field id is not in the code', bad_el)] if bad))
+            hist2 = hist + [{'role': 'assistant', 'text': (data.get('reply') or '') + '\nDRAFT: ' + draft.get('title', '') + '\n' +
+                             draft_to_text(draft)}, {'role': 'user', 'text': '\n'.join(notes)}]
+            data2, usage2, model2, err2 = ask_ai(hist2, context, code, key)
+            if err2 or not data2:
+                break
+            for k in ('input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'):
+                usage[k] = (usage or {}).get(k, 0) + (usage2 or {}).get(k, 0)
+            data, draft = data2, data2.get('draft') or draft
+            hist = hist2
+            checks, elems = check(draft)
+        PROGRESS.pop(key, None)
         u = data.get('understanding') or {}
-        out = {'understanding': u, 'questions': data.get('questions') or [], 'choices': data.get('choices') or [], 'draft': draft,
+        out = {'preflight': {'env': run_env['name'] if run_env else None, 'checks': checks} if checks else None,
+               'elements': {'checked': len(elems), 'missing': [e for e in elems if not e['ok']]} if elems else None,
+               'readiness': data.get('readiness') if isinstance(data.get('readiness'), dict) else None,
+               'understanding': u, 'questions': data.get('questions') or [], 'choices': data.get('choices') or [], 'draft': draft,
                'lesson': data.get('lesson') if isinstance(data.get('lesson'), dict) else None,
                'draft_text': draft_to_text(draft) if draft else '',
                'folder_id': match_folder(con(), pid, u.get('module'), u.get('sub_module'))}
+        if out['lesson']:   # saved by itself (nobody has to remember Save, testing never waits); the admin reviews it later
+            try:
+                import lessons
+                tc = con().execute('SELECT case_id FROM chat_threads WHERE id=?', (tid,)).fetchone()
+                v, errs = lessons.clean(dict(out['lesson'], case_id=tc['case_id'] if tc else None))
+                if not errs:
+                    c0 = con()
+                    with c0:
+                        out['lesson_saved'], out['lesson_new'] = lessons.add(c0, pid, v, me['username'], 'assistant')
+            except Exception as e:   # a lesson must never break the chat
+                print(f' * auto-save of a lesson from chat #{tid}: {e}')
+        gap = data.get('brain_gap') if isinstance(data.get('brain_gap'), dict) else None
+        if gap:   # the app's knowledge_brain lacked what this test needed: listed for the brain team (Brain gaps page)
+            try:
+                import brain_gaps
+                v, errs = brain_gaps.clean(gap)
+                if not errs:
+                    benv = run_env if brain.find(coderepo.code_dir(run_env)) else code_env
+                    tc = con().execute('SELECT case_id FROM chat_threads WHERE id=?', (tid,)).fetchone()
+                    c0 = con()
+                    with c0:
+                        out['brain_gap'] = v
+                        out['brain_gap_saved'], out['brain_gap_new'] = brain_gaps.add(
+                            c0, pid, v, me['username'], 'assistant', env_id=benv['id'] if benv else None, thread_id=tid,
+                            case_id=tc['case_id'] if tc else None, brain_dir=brain.find(coderepo.code_dir(benv)))
+            except Exception as e:   # a brain gap must never break the chat
+                print(f' * brain gap from chat #{tid}: {e}')
         mid = add_message(tid, 'assistant', data.get('reply') or '', out)
         c = con()
         with c:
@@ -428,6 +675,17 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
                                note=f'Test Assistant chat #{tid}' + (' (Claude subscription via Claude Code)' if u.get('via') == 'claude-code' else ''))
         return jsonify({'ok': True, 'thread_id': tid, 'message': {'id': mid, 'role': 'assistant', 'text': data.get('reply') or '', 'data': out},
                         'warn': b['message'] if b.get('warn') else ''})
+
+    @bp.route('/projects/<int:pid>/assistant/progress', methods=['POST'])
+    @login_required
+    def progress(pid):
+        """What this user's AI turn is doing now (the page asks every few seconds while it waits)."""
+        req = str(_payload().get('req') or '')[:40]
+        now = time.time()
+        for k in [k for k, v in list(PROGRESS.items()) if now - v['at'] > 900]:   # turns that ended with an error
+            PROGRESS.pop(k, None)
+        p = PROGRESS.get(f"{current_user()['username']}:{req}")
+        return jsonify({'ok': True, 'text': p['text'] if p else None})
 
     @bp.route('/projects/<int:pid>/assistant/stop', methods=['POST'])
     @login_required
@@ -483,8 +741,16 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
             return jsonify({'ok': False, 'error': 'Your role cannot run tests. Save it, and ask a Tester to run it.'}), 403
         content = case_content(title, steps)
         c = con()
+        # the chat's own test case is updated (no new TC per fix); "Save as new test case" makes another one
+        own = c.execute('SELECT id FROM cases WHERE id=? AND project_id=?', (t['case_id'], pid)).fetchone() \
+            if t and t['case_id'] and not body.get('as_new') else None
         with c:
-            cid = db.add_case(c, pid, fid, title, content, me['username'])
+            if own:
+                cid = own['id']
+                c.execute('UPDATE cases SET title=?, content=?, folder_id=COALESCE(?, folder_id), updated_by=?, updated_at=? WHERE id=?',
+                          (title[:180], content, fid, me['username'], db.now(), cid))
+            else:
+                cid = db.add_case(c, pid, fid, title, content, me['username'])
             c.execute('UPDATE chat_threads SET case_id=? WHERE id=?', (cid, tid))
             import pmtasks   # a chat opened from a PM task links to that task; otherwise the user's active task
             pmtasks.tag(c, cid, me['username'], 'assistant', t['task_code'] if t else None)
@@ -495,15 +761,48 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
             run_id, bud = start_case_run(case, body.get('env_id'))
             if not bud['ok']:
                 note = ' AI limit reached: AI steps are skipped, the other steps still run.'
-        add_message(tid, 'system', f'Saved as TC-{case["tc_no"]}' + (' and started a run.' if run_id else '.') + note,
+        add_message(tid, 'system', ('Updated' if own else 'Saved as') + f' TC-{case["tc_no"]}' + (' and started a run.' if run_id else '.') + note,
                     {'type': 'saved', 'case_id': cid, 'tc_no': case['tc_no'], 'run_id': run_id})
-        return jsonify({'ok': True, 'case_id': cid, 'tc_no': case['tc_no'], 'run_id': run_id, 'note': note,
+        return jsonify({'ok': True, 'case_id': cid, 'tc_no': case['tc_no'], 'run_id': run_id, 'note': note, 'updated': bool(own),
                         'case_url': url_for('case', cid=cid), 'run_url': url_for('case', cid=cid, run=run_id) if run_id else None})
+
+    @bp.route('/projects/<int:pid>/assistant/<int:tid>/rerun', methods=['POST'])
+    @login_required
+    def rerun(pid, tid):
+        """Run again: the chat's test case, on the environment picked in "Run on" (checks database steps and kept data)."""
+        import cleanup
+        import envs
+        import settings
+        project_or_404(pid)
+        thread_or_404(pid, tid)
+        me = current_user()
+        if not settings.can(con(), me['role'], 'runs.run'):
+            return jsonify({'ok': False, 'error': 'Your role cannot run tests.'}), 403
+        body = _payload()
+        case = con().execute('SELECT * FROM cases WHERE id=? AND project_id=?', (body.get('case_id'), pid)).fetchone()
+        if not case:
+            return jsonify({'ok': False, 'error': 'Test case not found.'}), 404
+        if con().execute("SELECT 1 FROM runs WHERE case_id=? AND status IN ('running', 'queued')", (case['id'],)).fetchone():
+            return jsonify({'ok': False, 'error': f'TC-{case["tc_no"]} is already running.'})
+        env = envs.get(con(), body.get('env_id'), me)
+        if re.search(r'(?im)^\s*(remember|assert|set\s*up) sql\b', case['content'] or '') and not envs.db_configured(env):
+            return jsonify({'ok': False, 'need_db': True})
+        choice = body.get('cleanup')
+        if choice not in ('delete', 'keep'):
+            kept = cleanup.pending(con(), case['id'], env['id'] if env else None)
+            if kept:
+                return jsonify({'ok': False, 'kept': cleanup.describe(kept)})
+        run_id, _ = start_case_run(case, env['id'] if env else None, choice)
+        add_message(tid, 'system', f'Ran TC-{case["tc_no"]} again on {env["name"] if env else "the default environment"}.',
+                    {'type': 'saved', 'case_id': case['id'], 'tc_no': case['tc_no'], 'run_id': run_id})
+        return jsonify({'ok': True, 'run_id': run_id})
 
     @bp.route('/projects/<int:pid>/assistant/<int:tid>/lesson', methods=['POST'])
     @login_required
     def save_lesson(pid, tid):
-        """The lesson the assistant wrote after explaining a failure -> the project's lessons (same title = counted again)."""
+        """The lesson the assistant wrote after explaining a failure -> the project's lessons (same title = counted again).
+        New lessons are saved by themselves when the assistant answers; this saves older ones, and action "remove" is the
+        card's "Not right": no longer sent to the AI, left in To review with that note for the admin."""
         import lessons
         import settings
         project_or_404(pid)
@@ -511,13 +810,27 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
         me = current_user()
         if t['created_by'] != me['username']:
             abort(403)
-        if not settings.can(con(), me['role'], 'runs.run'):
-            return jsonify({'ok': False, 'error': 'Your role cannot record lessons.'}), 403
-        mid = int(_payload().get('message_id') or 0)
+        body = _payload()
+        mid = int(body.get('message_id') or 0)
         m = con().execute("SELECT id, data FROM chat_messages WHERE id=? AND thread_id=? AND role='assistant'", (mid, tid)).fetchone()
         data = json.loads(m['data']) if m and m['data'] else {}
         if not data.get('lesson'):
             return jsonify({'ok': False, 'error': 'No lesson in that message.'}), 404
+        if body.get('action') == 'remove':
+            lid = data.get('lesson_saved')
+            if lid and not data.get('lesson_removed'):
+                c = con()
+                with c:
+                    if data.get('lesson_new'):   # this chat made it: take it out of the AI's lessons, the admin still sees it
+                        c.execute("UPDATE lessons SET active=0, review='new', review_note=? WHERE id=? AND project_id=?",
+                                  (f'{me["username"]} said "not right" in Test Assistant chat #{tid}', lid, pid))
+                    else:   # it only counted an existing lesson again: undo the count, leave that lesson alone
+                        c.execute('UPDATE lessons SET hits=GREATEST(hits-1, 1) WHERE id=? AND project_id=?', (lid, pid))
+                    data['lesson_removed'] = True
+                    c.execute('UPDATE chat_messages SET data=? WHERE id=?', (json.dumps(data), mid))
+            return jsonify({'ok': True, 'removed': True})
+        if not settings.can(con(), me['role'], 'runs.run'):
+            return jsonify({'ok': False, 'error': 'Your role cannot record lessons.'}), 403
         if data.get('lesson_saved'):
             return jsonify({'ok': True, 'id': data['lesson_saved'], 'created': False, 'already': True})
         v, errs = lessons.clean(dict(data['lesson'], case_id=t['case_id']))
@@ -526,7 +839,7 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
         c = con()
         with c:
             lid, created = lessons.add(c, pid, v, me['username'], 'assistant')
-            data['lesson_saved'] = lid
+            data['lesson_saved'], data['lesson_new'] = lid, created
             c.execute('UPDATE chat_messages SET data=? WHERE id=?', (json.dumps(data), mid))
         return jsonify({'ok': True, 'id': lid, 'created': created})
 
@@ -539,9 +852,27 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
                           'FROM runs r JOIN cases c ON c.id=r.case_id WHERE r.id=? AND c.project_id=?', (rid, pid)).fetchone()
         if not r:
             abort(404)
+        import pmtasks
         # why it did not pass, in the chat: the failing step and its reason (filled when the run finishes)
         return jsonify({'ok': True, **r, 'done': r['status'] not in ('running', 'queued'),
-                        'url': url_for('case', cid=r['case_id'], run=rid)})
+                        'url': url_for('case', cid=r['case_id'], run=rid), 'pm': pmtasks.run_pm(con(), rid)})
+
+    @bp.route('/projects/<int:pid>/assistant/<int:tid>/pm-send', methods=['POST'])
+    @login_required
+    def pm_send(pid, tid):
+        """Reviewer's "Send to PM" on a run card: a passed run, or a failure the assistant found to be an app bug."""
+        import pmtasks
+        project_or_404(pid)
+        t = thread_or_404(pid, tid)
+        me = current_user()
+        if t['created_by'] != me['username'] or not t['task_code']:
+            abort(403)
+        body = _payload()
+        bug = re.sub(r'\s+', ' ', str(body.get('bug') or '')).strip()[:1500] or None
+        ok, msg = pmtasks.push_run(int(body.get('run_id') or 0), me['username'], bug)
+        if ok:
+            add_message(tid, 'system', f'Run #{body.get("run_id")} sent to PM ({t["task_code"]})' + (' as an app bug.' if bug else '.'))
+        return jsonify({'ok': ok, 'message': msg})
 
     @bp.route('/projects/<int:pid>/assistant/<int:tid>/delete', methods=['POST'])
     @login_required

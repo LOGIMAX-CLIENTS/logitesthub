@@ -1,0 +1,78 @@
+{% extends 'base.html' %}
+{% block title %}Integrations{% endblock %}
+{% block crumbs %}<span class="tm-crumbs"><b>Settings</b> <span>/</span> Integrations</span>{% endblock %}
+{% block content %}
+{% include '_settings_tabs.html' %}
+
+<div class="row g-3">
+  <div class="col-lg-7">
+    <form class="panel h-100" method="post" action="{{ url_for('settings.integrations_save') }}" autocomplete="off">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <h2 class="h6 mb-1">PM (Project Management)</h2>
+      <div class="small text-secondary mb-3">When a member clicks <b>Tester CLI</b> on a PM task, LogiTestHub starts that task for the account with the same email
+        and attaches each of their test runs to the PM task as them; PM lists the links at Review. Without that click nothing is
+        sent to PM. Saved changes apply straight away; no restart.</div>
+
+      <div class="mb-3">
+        <label class="form-label fw-semibold mb-1" for="pm_url">PM MCP URL</label>
+        <input class="form-control form-control-sm" id="pm_url" name="pm_url" value="{{ pm.url }}" spellcheck="false"
+               placeholder="{{ pm.in_use_url }}">
+        <div class="form-text">The <code>/api/mcp/rpc/</code> address PM gave you, e.g. <code>http://192.168.1.65:8005/api/mcp/rpc/</code> for the local PM.
+          {% if not pm.url %}Empty: <code>{{ pm.in_use_url }}</code>{% if pm.in_use_url == pm.default_url %} (default){% else %} (from the server's LTH_PM_MCP_URL){% endif %}.{% endif %}</div>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label fw-semibold mb-1" for="pm_token">PM key</label>
+        <input class="form-control form-control-sm" id="pm_token" name="pm_token" type="password" value="" spellcheck="false"
+               placeholder="{{ 'Saved - type a new key to replace it' if pm.has_key else 'pmk_...' }}">
+        <div class="form-text">The key PM created for "LogiTestHub server" (tools {% for t in need %}{{ t }}{{ ', ' if not loop.last }}{% endfor %}).
+          It is stored encrypted and never shown again.
+          {% if pm.has_key %}Saved{% if pm.key_set_at %} {{ pm.key_set_at|dmy }}{% endif %}. PM keys can expire: if attaching starts failing with "key not accepted", ask PM for a new one.
+          {% elif pm.env_key %}Now using the server's LTH_PM_MCP_KEY.
+          {% else %}<span class="t-warn">No key yet: test report links are not sent to PM.</span>{% endif %}</div>
+        {% if pm.has_key %}<label class="form-text"><input class="form-check-input me-1" type="checkbox" name="remove_key">Remove saved key</label>{% endif %}
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label fw-semibold mb-1" for="public_url">LogiTestHub address for PM users</label>
+        <input class="form-control form-control-sm" id="public_url" name="public_url" value="{{ pm.public }}" spellcheck="false"
+               placeholder="{{ pm.in_use_public or request.host_url.rstrip('/') }}">
+        <div class="form-text">The link sent to PM is <code>{{ (pm.in_use_public or request.host_url.rstrip('/')) }}/tasks/PM-LMX-1741</code>.
+          Use an address other people can open (e.g. <code>http://192.168.1.x:5050</code>), not 127.0.0.1 or localhost.
+          {% if not pm.in_use_public %}Empty: the address the browser used.{% endif %}</div>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-check-label"><input class="form-check-input me-1" type="checkbox" name="cli_poll" {{ 'checked' if pm.cli_poll }}>
+          <b>Pick up Tester CLI and Test Assistant clicks from PM</b></label>
+        <div class="form-text">PM's <b>Tester CLI</b> button queues the task and who clicked it in PM; this server reads that queue
+          every few seconds, starts the task for that person's LogiTestHub account and attaches their link. Their work then
+          reaches PM as them. PM's <b>Test Assistant</b> button (the task's reviewer, task in Review) opens the Tester Assistant
+          here for the task; the reviewer sends a <b>passed</b> run, or a failure the assistant found to be an <b>app bug</b>,
+          to PM with <b>Send to PM</b> on the run.
+          Switch it on in <b>one</b> LogiTestHub server only (the one PM users use), and set the address above.
+          {% if pm.cli_poll %}Read up to {{ pm.cli_since or 'nothing yet' }}.{% endif %}</div>
+      </div>
+
+      <div class="d-flex gap-2">
+        <button class="btn btn-primary btn-sm">Save</button>
+        <button class="btn btn-outline-secondary btn-sm" formaction="{{ url_for('settings.integrations_test') }}">Test connection</button>
+      </div>
+    </form>
+  </div>
+  <div class="col-lg-5">
+    <div class="panel h-100">
+      <h2 class="h6 mb-1">How to connect</h2>
+      <ol class="small mb-0 ps-3">
+        <li>Get the PM MCP URL and key from the PM team (the key privately, not in a group chat).</li>
+        <li>Paste them, then <b>Test connection</b>: it lists the tools the key may call. {% for t in need %}<code>{{ t }}</code>{{ ' and ' if not loop.last }}{% endfor %} must be there.</li>
+        <li>Set the LogiTestHub address to one PM users can open, then <b>Save</b>.</li>
+        <li>Fill each tester's email in <b>Users</b> exactly as in PM, and switch on <b>Pick up Tester CLI clicks</b> on one server.</li>
+        <li>On a PM task, click <b>Tester CLI</b>: the task's page here shows the click and whether each run's link was attached.</li>
+        <li>Reviewer: on a PM task in Review, click <b>Test Assistant</b>: the Tester Assistant opens here for that task. Save and
+          run the test cases there. A passed run, or an app bug the assistant found, has <b>Send to PM</b>; a test-side failure is fixed and run again.</li>
+      </ol>
+    </div>
+  </div>
+</div>
+{% endblock %}

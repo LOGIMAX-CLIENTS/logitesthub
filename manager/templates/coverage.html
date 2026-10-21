@@ -1,0 +1,73 @@
+{% extends 'base.html' %}
+{% block title %}Coverage · {{ p.name }}{% endblock %}
+{% block crumbs %}<span class="tm-crumbs"><a href="{{ url_for('project', pid=p.id) }}">{{ p.name }}</a> <span>/</span> <b>Coverage</b></span>{% endblock %}
+{% block content %}
+{% macro badge(state) %}<span class="badge text-bg-{{ {'none': 'light border', 'failing': 'danger', 'notrun': 'warning', 'partial': 'info', 'ok': 'success'}[state] }}">{{
+  {'none': 'No tests', 'failing': 'Failing', 'notrun': 'Not run', 'partial': 'Partial', 'ok': 'Passing'}[state] }}</span>{% endmacro %}
+{% macro cells(s) %}
+  <td class="text-end">{{ s.cases or '–' }}</td>
+  <td class="text-end text-success">{{ s.passed or '' }}</td>
+  <td class="text-end text-danger">{{ s.failed or '' }}</td>
+  <td class="text-end text-info">{{ s.partial or '' }}</td>
+  <td class="text-end text-warning-emphasis">{{ s.never or '' }}</td>
+  <td class="text-end text-secondary">{{ s.stale or '' }}</td>
+  <td class="text-start small text-nowrap">{{ s.last|dmy if s.last else '' }}</td>
+{% endmacro %}
+
+<div class="d-flex flex-wrap gap-2 align-items-end justify-content-between mb-3">
+  <div><h1 class="h4 mb-0">Test coverage</h1>
+    <div class="text-secondary small">Per module of the application's menu: how many test cases it has and how they did in their
+      latest run. Start with <b>No tests</b> and <b>Failing</b>.</div></div>
+</div>
+
+<div class="row g-2 mb-3">
+  {% for label, value, sub in [
+      ('Modules with tests', tiles.tested ~ ' / ' ~ tiles.modules, (100 * tiles.tested // tiles.modules) ~ '% of the menu' if tiles.modules else ''),
+      ('Test cases', tiles.cases, tiles.ran ~ ' have run'),
+      ('Latest run passing', (tiles.pass_pct ~ '%') if tiles.pass_pct is not none else '–', tiles.passed ~ ' passed · ' ~ tiles.failed ~ ' failed'),
+      ('Never run', tiles.never, 'cases'),
+      ('Not run in ' ~ stale_days ~ ' days', tiles.stale, 'cases')] %}
+  <div class="col-6 col-md"><div class="panel h-100"><div class="small text-secondary">{{ label }}</div>
+    <div class="h4 mb-0">{{ value }}</div><div class="small text-secondary">{{ sub }}</div></div></div>
+  {% endfor %}
+</div>
+
+<div class="d-flex flex-wrap gap-2 align-items-center mb-2 small">
+  {% for k, label, help in filters %}<a class="btn btn-sm {{ 'btn-primary' if want == k else 'btn-outline-secondary' }}" title="{{ help }}"
+     href="{{ url_for('coverage.page', pid=p.id, show=k or None) }}">{{ label }}</a>{% endfor %}
+</div>
+
+<div class="panel p-0">
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead><tr><th class="text-start">Module</th><th class="text-start">State</th><th class="text-end">Cases</th>
+        <th class="text-end" title="Latest run passed">Passed</th><th class="text-end" title="Latest run failed">Failed</th>
+        <th class="text-end" title="Latest run partial (steps needed AI)">Partial</th><th class="text-end">Never run</th>
+        <th class="text-end" title="Latest run older than {{ stale_days }} days">Old</th><th class="text-start">Last run</th></tr></thead>
+      <tbody>
+      {% for m in mods %}
+      <tr class="fw-semibold">
+        <td class="text-start">{% if m.kids %}<button class="btn btn-sm btn-link p-0 me-1 text-decoration-none" type="button" data-bs-toggle="collapse"
+              data-bs-target=".cv{{ m.id }}" aria-label="Show sub-modules">▸</button>{% endif %}
+          <a href="{{ url_for('project', pid=p.id, folder=m.id) }}">{{ m.name }}</a>
+          {% if m.n_kids %}<span class="small text-secondary fw-normal">· {{ m.kids_tested }}/{{ m.n_kids }} sub-modules tested</span>{% endif %}</td>
+        <td class="text-start">{{ badge(m.state) }}</td>{{ cells(m.s) }}
+      </tr>
+      {% for k in m.kids %}
+      <tr class="collapse cv{{ m.id }} {{ 'show' if want }}">
+        <td class="text-start ps-4"><a href="{{ url_for('project', pid=p.id, folder=k.id) }}">{{ k.name }}</a></td>
+        <td class="text-start">{{ badge(k.state) }}</td>{{ cells(k.s) }}
+      </tr>
+      {% endfor %}
+      {% else %}
+      <tr><td colspan="9" class="text-center text-secondary py-4">{% if want %}No module matches this filter.{% else %}No modules yet:
+        set them up from the application's menu (Test Cases → Update Modules).{% endif %}</td></tr>
+      {% endfor %}
+      {% if loose and not want %}
+      <tr class="text-secondary"><td class="text-start fst-italic">Cases without a module</td><td></td>{{ cells(loose) }}</tr>
+      {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

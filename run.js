@@ -10,7 +10,7 @@ const { parseStep, runAction, uiRuleCheck } = require('./lib/actions');
 const { writeReport } = require('./lib/report');
 const { parseCase } = require('./lib/testcase');
 const { showIntro } = require('./lib/intro');
-const { aiStep, explain, MODEL: AI_MODEL } = require('./lib/ai');
+const { aiStep, healStep, listElements, explain, MODEL: AI_MODEL } = require('./lib/ai');
 const dbsteps = require('./lib/dbsteps');
 
 const DEFAULT_VARS = process.env.LTH_VARS_FILE || 'tests/variables/variables.json';   // Settings -> System
@@ -64,6 +64,32 @@ function parseArgs(argv) {
   const page = await context.newPage();
   const videoStart = Date.now(); // step offsets below let the report seek the video to each step
 
+  // Server errors behind a step: an AJAX call / page load that answered 500+, or an AJAX answer that is a PHP /
+  // database error page. A report that stays empty then fails as "text not visible"; this says why (TC-75: the
+  // report's AJAX failed with "Database Error 1932: Table ... doesn't exist in engine").
+  const serverErrors = [], pendingBodies = [];
+  let curStep = 0, sinceNav = 0;
+  const ERROR_PAGE = /A Database Error Occurred|A PHP Error was encountered|Fatal error|Uncaught (?:Error|Exception)|An uncaught Exception/i;
+  const errorText = body => {
+    const t = String(body || '').replace(/<(style|script)[\s\S]*?<\/>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&#39;|&quot;/g, "'").replace(/\s+/g, ' ').trim();
+    let m = t.match(/Error Number:\s*(\d+)\s*(.+?)\s+(?:SELECT|INSERT|UPDATE|DELETE|CALL|Filename:)/i);
+    if (m) return `Database Error ${m[1]}: ${m[2]}`.slice(0, 300);
+    m = t.match(/Severity:\s*(.+?)\s*Message:\s*(.+?)\s*Filename:\s*(\S+)\s*Line Number:\s*(\d+)/i);
+    if (m) return `PHP ${m[1]}: ${m[2]} (${m[3]} line ${m[4]})`.slice(0, 300);
+    return t.slice(0, 200);
+  };
+  page.on('response', resp => {
+    const type = resp.request().resourceType();
+    if (!['xhr', 'fetch', 'document'].includes(type)) return;
+    const st = resp.status(), ajax = type !== 'document';
+    if (st < 500 && !(ajax && /html/i.test(resp.headers()['content-type'] || ''))) return;
+    const step = curStep, url = resp.url().replace(/[?#].*$/, '').replace(/^https?:\/\/[^/]+/, '').slice(-90);
+    pendingBodies.push(resp.text().then(body => {
+      if (st < 500 && !ERROR_PAGE.test(body)) return;
+      serverErrors.push({ step, url, status: st, text: mask(errorText(body)) || `HTTP ${st}` });
+    }).catch(() => { if (st >= 500) serverErrors.push({ step, url, status: st, text: `HTTP ${st}` }); }));
+  });
+
   // Branded intro: first seconds of the video + poster.png (never shows secrets: only step text, masked).
   const firstNav = tc.steps.map(s => fill(s.text, vars).match(/^navigate to (.+?)\.?$/i)).find(Boolean);
   await showIntro(page, runDir, {
@@ -83,6 +109,48 @@ function parseArgs(argv) {
   const CLEANUP = /^(clean[\s-]*up|tear[\s-]*down)\b/i;
   const keepOnPass = process.env.LTH_CLEANUP !== 'always';
   const keptSteps = [];
+
+  // Heal (LTH_HEAL=1: Test Runs / schedules): a screen step that fails is shown to the AI with the fields and messages
+  // on the page. A changed screen (new required field, new id / label) is healed - the steps it gives are run and the
+  // test goes on, and LogiTestHub keeps the change in the case. An app bug is not healed. Asserts are never changed:
+  // after the heal steps the same assert is checked again.
+  const HEAL = process.env.LTH_HEAL === '1';
+  let heals = 0;
+  const NO_HEAL_STEP = /^(assert|sql|navigate|unknown|badHint)/;
+  const unsafe = t => { const a = parseStep(fill(t, vars)); return a.needsAI || NO_HEAL_STEP.test(a.kind); };
+  async function tryHeal(i, r, action) {
+    heals += 1;
+    const elements = (await listElements(page).catch(() => [])).map(({ index, ...e }) => e);
+    const pageText = await page.evaluate(() => document.body.innerText.replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n').slice(0, 3000)).catch(() => '');
+    const texts = tc.steps.map(s => mask(fill(s.text, vars)));
+    const { data, usage } = await healStep({ steps: texts, failedN: i + 1, error: r.error, url: page.url(), elements, pageText: mask(pageText) });
+    const u = usage || {};
+    aiTokens.in += u.input_tokens || 0; aiTokens.out += u.output_tokens || 0;
+    aiTokens.cacheRead += u.cache_read_input_tokens || 0; aiTokens.cacheWrite += u.cache_creation_input_tokens || 0;
+    aiTokens.calls += 1;
+    const edit = data.case_edit, target = tc.steps[edit.step - 1];
+    const ev = { type: 'heal', n: i + 1, verdict: data.verdict, change: data.change, explain: mask(data.explain), ok: false,
+                 steps_now: data.steps_now.map(mask), case_edit: { op: edit.op, step: edit.step, steps: edit.steps.map(mask) } };
+    if (data.verdict === 'heal') {
+      const editBad = edit.op !== 'none' && (!target || edit.steps.some(unsafe)
+        || (edit.op === 'replace' && /^assert/.test(parseStep(fill(target.text, vars)).kind)));
+      if (!data.steps_now.length || data.steps_now.some(unsafe) || editBad) {
+        ev.explain += ' (Not used: the steps it gave cannot run safely.)';
+      } else {
+        try {
+          for (const t of data.steps_now) await runAction(page, parseStep(fill(t, vars)));
+          if (/^assert/.test(action.kind)) await runAction(page, action);   // the check itself never changes
+          ev.ok = true;
+          ev.case_edit.target = target ? target.text : null;   // the step as written in the case (with its {{values}})
+        } catch (e) {
+          ev.explain += ` (Tried it, still failing: ${mask(e.message.split('\n')[0])})`;
+        }
+      }
+    }
+    emit(ev);
+    return ev;
+  }
+
   for (let i = 0; i < tc.steps.length; i++) {
     const s = tc.steps[i];
     const shown = mask(fill(s.text, vars));
@@ -101,6 +169,9 @@ function parseArgs(argv) {
     const wasFailed = failed;   // a clean-up step failing must not hide the test's own failure
 
     const action = parseStep(fill(s.text, vars));
+    curStep = i + 1;
+    if (action.kind === 'navigate') sinceNav = curStep;   // a new page: older server errors are not this page's
+    const errFrom = serverErrors.length;
     const t0 = Date.now();
     r.at = Math.max(0, (t0 - videoStart) / 1000);
     if (action.needsAI) {
@@ -166,7 +237,23 @@ function parseArgs(argv) {
         r.status = 'failed';
         r.error = mask(e.message.split('\n')[0]);
         failed = true;
+        if (HEAL && args.ai && !cleanup && heals < 3) {
+          try {
+            const h = await tryHeal(i, r, action);
+            if (h.ok) { r.status = 'passed'; r.healed = h.explain; r.error = ''; failed = false; r.warnings.push(`Auto-healed: ${h.explain}`); }
+            else r.ai = `${{ app_bug: 'Looks like an app bug', test_data: 'Test data missing here', unknown: 'Could not heal' }[h.verdict] || 'Not healed'}: ${h.explain}`;
+          } catch (he) {
+            r.ai = `Heal not possible: ${explain(he)}`;
+          }
+        }
       }
+    }
+    await Promise.race([Promise.all(pendingBodies), new Promise(res => setTimeout(res, 1500))]);
+    serverErrors.slice(errFrom).forEach(x => r.warnings.push(`Server error ${x.status} on ${x.url}: ${x.text}`));
+    if (r.status === 'failed') {   // the cause is often a server error a few steps before (the Search click)
+      // errors while a page loads (Navigate step) are its background calls (dashboard alerts ...), not this failure
+      const cause = serverErrors.filter(x => x.step > sinceNav && x.step <= r.n).pop();
+      if (cause) r.server_error = `seen at step ${cause.step}: ${cause.url} answered ${cause.status}: ${cause.text}`;
     }
     if (cleanup && r.status === 'failed') {   // keep cleaning up; the run still fails ("data may be left")
       cleanupFailed = true;
@@ -178,7 +265,8 @@ function parseArgs(argv) {
     await page.screenshot({ path: path.join(runDir, r.shot) }).catch(() => { r.shot = ''; });
     results.push(r);
     emit({ type: 'step', ...r });
-    const note = r.error || (r.status === 'needs-ai' && r.ai) || '';
+    const note = (r.server_error ? `SERVER ERROR (${r.server_error}) ` : '') + (r.error || (r.status === 'needs-ai' && r.ai) || '')
+      + (r.healed ? `HEALED: ${r.healed}` : '');
     console.log(`${String(r.n).padStart(2)}. [${r.status.toUpperCase()}] ${r.text}${note ? '  -> ' + note : ''}`);
   }
 
@@ -197,6 +285,7 @@ function parseArgs(argv) {
   if (keptSteps.length && !failed) emit({ type: 'cleanup_pending', steps: keptSteps });
   const status = failed ? 'FAILED' : needsAI ? 'PARTIAL' : 'PASSED';
   const summary = {
+    healed: results.filter(r => r.healed).length,
     test: tc.title, file: args.file, status, durationMs: Date.now() - started,
     passed: results.filter(r => r.status === 'passed').length,
     failed: results.filter(r => r.status === 'failed').length,

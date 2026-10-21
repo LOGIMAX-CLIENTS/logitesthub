@@ -18,6 +18,8 @@
         <input class="form-control" id="nn" name="name" maxlength="60" required></div>
       <div class="col-md-3"><label class="form-label" for="nr">Role</label>
         <select class="form-select" id="nr" name="role">{% for rk, rl, rd in roles if rk != 'superadmin' or is_super %}<option value="{{ rk }}" title="{{ rd }}" {{ 'selected' if rk == 'member' }}>{{ rl }}</option>{% endfor %}</select></div>
+      <div class="col-md-4"><label class="form-label" for="ne">Email <span class="text-secondary small">(as in PM)</span></label>
+        <input class="form-control" id="ne" name="email" type="email" maxlength="254" placeholder="name@logimaxindia.com"></div>
       <div class="col-md-3"><label class="form-label" for="nd">Department</label>
         <select class="form-select" id="nd" name="department"><option value="">(choose)</option>{% for d in departments %}<option>{{ d }}</option>{% endfor %}</select></div>
       <div class="col-md-4"><label class="form-label" for="np">Password <span class="text-secondary small">(min {{ min_pw }})</span></label>
@@ -35,16 +37,43 @@
   {% for d in departments %}<button type="button" class="btn btn-sm btn-outline-secondary" data-dept="{{ d }}">{{ d }} <span class="badge text-bg-light">{{ users|selectattr('department', 'equalto', d)|list|length }}</span></button>{% endfor %}
   {% set nodept = users|rejectattr('department')|list|length %}{% if nodept %}<button type="button" class="btn btn-sm btn-outline-secondary" data-dept="-">Not set <span class="badge text-bg-light">{{ nodept }}</span></button>{% endif %}
 </div>
+{# several users at once: tick them, pick a role and / or a department, Apply. The checkboxes sit in the rows
+   (which have their own forms) and belong to this form through form="bulkForm". #}
+<form method="post" action="{{ url_for('settings.users_bulk') }}" id="bulkForm" class="bulk-bar panel py-2 mb-2" hidden>
+  <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="back_dept" class="dept-back">
+  <div class="d-flex flex-wrap gap-2 align-items-center">
+    <b id="bulkCount">0 selected</b>
+    <select class="form-select form-select-sm w-auto" name="role" aria-label="Role for the selected users">
+      <option value="">Role: leave as it is</option>
+      {% for rk, rl, rd in roles if rk != 'superadmin' or is_super %}<option value="{{ rk }}" title="{{ rd }}">Role: {{ rl }}</option>{% endfor %}
+    </select>
+    <select class="form-select form-select-sm w-auto" name="department" aria-label="Department for the selected users">
+      <option value="">Department: leave as it is</option>
+      {% for d in departments %}<option value="{{ d }}">Department: {{ d }}</option>{% endfor %}
+      <option value="-">Department: clear (not set)</option>
+    </select>
+    <button class="btn btn-sm btn-primary" id="bulkApply">Apply to selected</button>
+    <button class="btn btn-sm btn-link" type="button" id="bulkClear">Clear selection</button>
+  </div>
+</form>
 <div class="panel p-0">
   <div class="table-responsive">
     <table class="table align-middle mb-0 users-table">
-      <thead><tr><th class="text-start">User</th><th class="text-start">Role</th><th class="text-start">Department</th><th class="text-start">Created</th><th class="text-start">AI this month</th><th class="text-end">Actions</th></tr></thead>
+      <thead><tr><th class="text-start" style="width: 36px"><input class="form-check-input" type="checkbox" id="bulkAll"
+        aria-label="Select all users shown" title="Select all users shown"></th><th class="text-start">User</th><th class="text-start">Role</th><th class="text-start">Email <span class="text-secondary small fw-normal" title="PM's Tester CLI button finds the person by this email">(PM)</span></th><th class="text-start">Department</th><th class="text-start">Created</th><th class="text-start">AI this month</th><th class="text-end">Actions</th></tr></thead>
       <tbody>
       {% for u in users %}
       <tr data-dept="{{ u.department or '-' }}">
+        <td class="text-start"><input class="form-check-input bulk-cb" type="checkbox" name="uid" value="{{ u.id }}" form="bulkForm"
+          aria-label="Select @{{ u.username }}"></td>
         <td class="text-start"><div class="d-flex align-items-center gap-2"><span class="avatar">{{ u.name[:1]|upper }}</span>
           <div><div class="fw-semibold">{{ u.name }}{% if u.id == me.id %} <span class="text-secondary small">(you)</span>{% endif %}</div><div class="small text-secondary">@{{ u.username }}{% if u.auth_source == 'pm' %} <span class="pm-badge" title="Signs in with PM{{ (': ' ~ u.pm_login) if u.pm_login }}">PM</span>{% endif %}</div></div></div></td>
         <td class="text-start"><span class="role role-{{ u.role }}">{{ role_label.get(u.role, u.role|capitalize) }}</span></td>
+        <td class="text-start">
+          <form method="post" action="{{ url_for('settings.user_email', uid=u.id) }}" class="m-0">
+            <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="back_dept" class="dept-back">
+            <input class="form-control form-control-sm" type="email" name="email" value="{{ u.email or '' }}" maxlength="254"
+                   placeholder="(not set)" aria-label="Email of @{{ u.username }}" onchange="this.form.submit()"></form></td>
         <td class="text-start">
           <form method="post" action="{{ url_for('settings.user_department', uid=u.id) }}" class="m-0">
             <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="back_dept" class="dept-back">
@@ -149,6 +178,32 @@
 {% endblock %}
 {% block scripts %}
 <script>
+(function () {   // bulk edit: the bar shows while users are ticked; "select all" ticks only the rows shown by the chips
+  var bar = document.getElementById('bulkForm'), all = document.getElementById('bulkAll'), count = document.getElementById('bulkCount');
+  var boxes = function () { return Array.prototype.slice.call(document.querySelectorAll('.bulk-cb')); };
+  var shown = function () { return boxes().filter(function (b) { return !b.closest('tr').hidden; }); };
+  function update() {
+    var n = boxes().filter(function (b) { return b.checked; }).length, s = shown();
+    bar.hidden = !n;
+    count.textContent = n + ' selected';
+    all.checked = s.length > 0 && s.every(function (b) { return b.checked; });
+    all.indeterminate = !all.checked && s.some(function (b) { return b.checked; });
+  }
+  all.addEventListener('change', function () { shown().forEach(function (b) { b.checked = all.checked; }); update(); });
+  document.addEventListener('change', function (e) { if (e.target.classList.contains('bulk-cb')) update(); });
+  document.getElementById('bulkClear').addEventListener('click', function () { boxes().forEach(function (b) { b.checked = false; }); update(); });
+  document.querySelectorAll('#deptChips [data-dept]').forEach(function (c) {   // a chip hides rows: untick what is hidden
+    c.addEventListener('click', function () { setTimeout(function () {
+      boxes().forEach(function (b) { if (b.closest('tr').hidden) b.checked = false; }); update(); }); });
+  });
+  bar.addEventListener('submit', function (e) {
+    var role = bar.elements.role, dept = bar.elements.department;
+    if (!role.value && !dept.value) { e.preventDefault(); alert('Choose a role or a department to set.'); return; }
+    var what = [role.value ? role.options[role.selectedIndex].text : '', dept.value ? dept.options[dept.selectedIndex].text : ''].filter(Boolean).join(', ');
+    if (!confirm('Set ' + what + ' for ' + count.textContent.replace(' selected', '') + ' user(s)?')) e.preventDefault();
+  });
+  update();
+})();
 (function () {   // department chips: show only that department's users (kept in ?dept= so saving a change comes back here)
   var chips = document.querySelectorAll('#deptChips [data-dept]'), rows = document.querySelectorAll('tr[data-dept]');
   function show(d) {

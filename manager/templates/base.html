@@ -134,6 +134,9 @@
   <span class="task-chip" title="Every test case you create or run is linked to this PM task">
     <a href="{{ url_for('pmtasks.page', code=active_task) }}">🟢 Testing <b>{{ active_task }}</b></a>
     <a class="task-chip-stop" href="{{ url_for('pmtasks.stop_task', code=active_task) }}" title="Stop testing {{ active_task }}">Stop</a></span>
+  {% elif me and review_task %}{# a Tester Assistant chat opened from PM's Test Assistant button #}
+  <span class="task-chip" title="This chat writes and runs test cases for this PM task. Send a passed run (or an app bug) to PM from the run card.">
+    <a href="{{ url_for('pmtasks.page', code=review_task) }}">🟣 Reviewing <b>{{ review_task }}</b></a></span>
   {% endif %}
   {% if me and credit_chip %}{% set cc = credit_chip %}
   <div class="dropdown">

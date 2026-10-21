@@ -1,0 +1,6 @@
+{
+  "format": "tester.workspace/v1",
+  "variables": "variables/variables.json",
+  "url": "http://localhost:5050/login",
+  "project": 1
+}

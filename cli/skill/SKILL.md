@@ -12,6 +12,50 @@ server; AI steps and generation count against the user's monthly AI limit there.
 **Always add `--json`** and read the result from stdout. Never print, echo or store the access key or any
 `--secret` value.
 
+## Two team rules (every user, every IDE)
+
+**Rule 1 — Review before run.** A test case you wrote, generated or changed is **never run straight away**.
+1. Save it in the tests folder, `<tests>/<module>/<sub-module>/<name>_test.md` (section 0b; do not use `tester run "<plain English>"` for a new test: that runs at once).
+2. Show the user the case for review, then stop and wait:
+   ```
+   Test case ready for review: <tests>/<module>/<sub-module>/<name>_test.md
+   Site: <url / environment>      Signs in as: <user variable>      Saves data: no | yes (what, on which environment)
+   | # | Section | Step |
+   |---|---------|------|
+   | 1 | Sign in | Navigate to {{base_url}}... |
+   ...
+   Any changes? Tell me what to change, or say "ok" to start the run.
+   ```
+3. The user asks for changes → make them, show the case again, wait again. Run only after an explicit **ok** (ok / run /
+   go / start).
+4. The CLI holds you to it: `tester run --file` on a new or changed `_test.md` stops with exit **6**,
+   `"error": "review_first"` and `review` = {title, steps [{n, section, text}], saves_data, saves_data_steps}. Show
+   that as the table above (Saves data from `saves_data`), wait for the ok, then run the same command with
+   `--approved`. Never add `--approved` before the user's ok. An unchanged approved file runs without it; cases pulled
+   from LogiTestHub (`tester case pull`, `tester run --case`) are already approved.
+- A user's own "run TC-12" / "run <tests>/x_test.md" (a case they did not ask you to write or change) is already the ok.
+- While fixing a failed run you change steps → show what changed (old → new) and ask again before the next run,
+  unless the user said to keep fixing until it passes.
+
+**Rule 2 — Report every run the same way** (passed or failed), with the fields from the run's JSON (section 4):
+```
+**<title>** — PASSED | FAILED | NOT COMPLETED | PARTIAL
+| Steps | Passed | Failed | Skipped | Duration |
+|-------|--------|--------|---------|----------|
+| 8     | 7      | 1      | 0       | 42s      |
+
+Failed at step 5 (<section>): <step text>
+  Error: <error>    Expected: ...    Actual: ...    Cause: development bug | our side | environment (+ why)
+
+| # | Step | Result | Time |      <- every step from `steps` (for 40+ steps: the failed one and 3 around it, plus the counts)
+|---|------|--------|------|
+| 1 | Navigate to ... | passed | 1.2s |
+...
+LogiTestHub: <url>
+```
+- The LogiTestHub `url` is **always** in the report. Not saved (`upload.ok: false`) → say so and give `upload.retry`.
+- After the report, the verdict JSON block (section 4).
+
 ## 0. Check the connection first
 
 ```
@@ -20,8 +64,63 @@ tester whoami --json
 - Not logged in / cannot reach the server → stop and tell the user to run (in their own terminal, not in chat):
   `tester login --server http://<logitesthub-pc>:5050 --username <them> --key <access key>`
   (access key: LogiTestHub → Profile → Username and Access Key). Never ask them to paste the key into the chat.
-- `tester` not found → `npm install -g http://<logitesthub-pc>:5050/cli/tester.tgz` then `tester setup` (one time browser download).
+- `tester` not found → `npm install -g http://<logitesthub-pc>:5050/cli/tester.tgz`, then `tester --version`: when
+  it says the CLI is not set up, show the user those next steps (`tester setup`, `tester login` in their own terminal)
+  and wait. `--version` is `<number>+<code hash>`: a different hash = different code, even when the number is the same.
 - "browser is not installed" → `tester setup`.
+
+## 0b. Set the repo up (first use in a repo, and whenever `tester init` lists a to-do)
+
+Run `tester init --json` in the developer's repo before the first test, then do every item of its `todo`, in order:
+1. **Project.** `project_needed` / `no_such_project` (exit 7): the repo is not linked yet. Ask the user once which
+   LogiTestHub project it belongs to (show `projects`). Then `tester init --project <id or name>`; a name that is not
+   there → ask "create it?" and add `--create`. The link is kept on the server by the repo's git remote, so the next
+   developer of this repo is **never asked again** - do not ask when `tester init` already gives a project.
+   The user says the project is wrong → `tester init --unlink`, then ask again.
+2. **Tests folder** (`tests_dir_needed`, exit 8): where this repo's test cases are kept **on this PC**. Ask the user,
+   with the suggestion from the JSON: "Shall I keep the test cases in `<suggested>`? (a folder of their own, shown
+   next to the code in the IDE) Or tell me another path." Then `tester init --tests-dir "<their answer>"`. The CLI
+   makes it, remembers it for this repo and adds it to the IDE workspace as a second folder (`ide` in the result:
+   `workspace` / `code --add` = done; `manual` = tell the user to open that folder in their IDE). Asked once per PC.
+   The tests folder can hold **several projects**: each project's cases, `tester.json`, `helpers/` and `variables/` are
+   in a folder named after the LogiTestHub project (`F:\Tester_CLI\Retail\`, `F:\Tester_CLI\Chit_Fund\`); the CLI
+   makes it (`project_dir` in the JSON). Below, `<tests>` = that **project folder** (`dir` in the result).
+   Never offer a whole drive (`F:\`) or the home folder: the CLI refuses them (`tests_dir_too_wide`); the user names a
+   drive → offer a new folder in it (`F:\Tester_CLI`).
+   - **`project_folder_needed`** (exit 8): an older tests folder has this project's cases at its top. Ask: "Move this
+     project's test cases into `<project_dir>`? (nothing is deleted; in git it shows as renames)" → `tester init --move`.
+   - **`tests_dir_flat`** (exit 8): the folder still has another project's cases at its top: run `tester init --move`
+     in that project's repo first, then this one again.
+   - **The team already has a tests repo** (`tests_remote` in the JSON): ask "The team keeps the test cases in
+     `<tests_remote>`. Clone it to `<suggested>`?" - `tester init --tests-dir "<folder>"` clones it (the user's own
+     git login) and adds it to the workspace. Clone failed (no access): tell the user to get access or clone it themselves.
+   - **Not shared yet** (`shared: false`): after the first cases are written, offer to make `<tests>` a git repo and push
+     it (the user gives / creates the remote), then `tester init` again: LogiTestHub then offers it to the next developer.
+   - `tester.json` in `<tests>` is shared (project, site URL only); `variables/` (passwords) stays out of git.
+3. **Login helper** (`login_helper` in `todo`): find the app's login page in the code (form ids, button text), write
+   the steps with `{{username}}` / `{{password}}` (never real values) in `<tests>/helpers/login.md`, show them to the user
+   (Rule 1: review), then `tester login-helper set --file <tests>/helpers/login.md`. An existing helper (409): show both
+   and replace only if the user says so (`--force`). From then on test cases have **no** login steps.
+4. **Modules** (`modules` in `todo`): `tester modules read --url <the app page that shows the full menu> --var
+   username=.. --secret password=.. --json` signs in on this PC (localhost works) and reads menu → sub-menu. Show the
+   user the list (`menu`), then `tester modules push logitesthub.modules.json`. It only adds; nothing is renamed or deleted.
+   The reader takes the first menu it finds: when the list is not the app's main menu (e.g. header dropdowns, a user
+   name), never push it - build it from the app's menu table instead (`tester modules build --rows <menu rows>`, rows
+   from a read-only SELECT of the menu table the menu code reads), show it, then push.
+
+**Every test case goes in its module.** Before writing a case, `tester modules pull --json` and pick the module /
+sub-module that is the screen's menu → sub-menu in the app (the menu code / menu table, not a guess). Put it in the
+front matter and save the file in that folder:
+```
+---
+module: Retail Catalog
+sub_module: MC & VA Settings
+---
+```
+→ `<tests>/retail_catalog/mc_va_settings/<name>_test.md`. LogiTestHub files the case in that module when it is saved.
+The screen is new and not in LogiTestHub yet (a module being developed): ask the user "add module X > Y?", then
+`tester modules add "X" "Y"`, then save the case there. A run result with `folder_note` = the module was not found:
+add it, run again (the case moves there).
 
 ## Learn from mistakes (every time)
 
@@ -38,7 +137,7 @@ tester whoami --json
    next session runs the old steps and fails the same way. In the runs of 2026-10-08 every evening failure repeated
    a morning failure that had been fixed only in the run. For a saved case, fix it like this:
    ```
-   tester case pull <case id> --json                     # writes tests/TC<n>_<title>_test.md (the "file" in the JSON) and remembers the version
+   tester case pull <case id> --json                     # writes <tests>/<module>/<sub-module>/TC<n>_<title>_test.md (the "file" in the JSON) and remembers the version
    # edit the file, then prove the fix:
    tester run --file TC-<n>_test.md --project <id> --url <site> --var username=.. --secret password=.. --json
    tester case push <case id> --file TC-<n>_test.md --dry-run --json   # check the diff: only your fix
@@ -65,21 +164,21 @@ Check the case line by line against this list **and** each lesson's `avoid`:
 - [ ] Assertion texts copied from the JS / view (exact spacing and punctuation), not guessed.
 - [ ] A test that saves: tell the user, and only on Local / QA.
 
-## Test cases live in the project's `tests/` folder
+## Where the test cases live: the tests folder
 
-Like kane-cli, test cases are files in the developer's own project: `tests/<name>_test.md`, committed with the code.
-- The first `tester run "<plain English>"`, `tester generate` or `tester case pull` inside a project (git repo) makes
-  `tests/` there with `tests/tester.json` (LogiTestHub project id + site URL). `tester init --project <id> --url <site>`
-  makes it up front. Inside it `--project` / `--url` can be left out.
-- Every new plain-English test, generated case and pulled case is written to `tests/`. A `case_id: <id>` line in the
-  front matter links the file to its LogiTestHub case: `tester run --file tests/x_test.md` saves the run under that case.
-- `tester test --json` runs every `tests/*_test.md` (same options as `run`); exit code = the worst result.
-- Fix a failing case **in its file in `tests/`**, run it, then `tester case push <case_id> --file tests/x_test.md`.
+Test cases are files in the repo's tests folder (`<tests>`, chosen in section 0b, `dir` in `tester init`): usually a
+folder of its own next to the repo (e.g. `C:\xampp\htdocs\etail_development_src-tests`), open in the IDE as a second
+folder. Older setups use `<repo>/tests/`; both work the same.
+- `<tests>/tester.json`: LogiTestHub project id + site URL, so `--project` / `--url` can be left out.
+- Cases go in `<tests>/<module>/<sub-module>/` with `module:` / `sub_module:` in the front matter (section 0b). A
+  `case_id: <id>` line links the file to its LogiTestHub case: `tester run --file <file>` saves the run under that case.
+- `tester test --json` runs every `*_test.md` in `<tests>` (same options as `run`); exit code = the worst result.
+- Fix a failing case **in its file**, run it, then `tester case push <case_id> --file <file>`.
+- No tests folder yet (`tester init` not done): a case is not saved as a file - run `tester init` first.
 - `--no-save`: do not write a file (a one-off check).
-- `tests/helpers/`: `@import` files (`@import ../helpers/login.md`). `tests/variables/variables.json`: test data
+- `<tests>/helpers/`: `@import` files (`@import ../helpers/login.md`). `<tests>/variables/variables.json`: test data
   (base_url, username, password as `{"value": .., "secret": true}`), used by every run there, kept out of git - with it
-  filled in, `--var` / `--secret` are not needed. LogiTestHub's Settings -> System uses these two folders as well
-  (the project the CLI last used on that PC), unless a fixed path is saved there.
+  filled in, `--var` / `--secret` are not needed. The user fills the password in themselves, never in the chat.
 
 ## 1. Find where the test belongs
 
@@ -103,10 +202,23 @@ of every test case of that project — web runs, Test Runs / schedules and `test
   login: none
   ---
   ```
-- If `tester` prints that the project has no login helper, tell the user to add one there (do not inline login steps instead).
+- If `tester` prints that the project has no login helper, set it up first (section 0b, step 2) - do not inline login steps instead.
 - `--no-login` skips the helper for one run.
 
-## 3. Run a test
+## 3. Preflight check, then run
+
+**Before every run of a case that has database steps**, run the preflight check (precondition check + test data
+validation, fail fast). It runs the case's leading `Remember SQL` / `Assert SQL` steps - settings, permissions and the
+data it picks - read-only on the environment, in seconds, no browser:
+```
+tester check --case <id> --env <name> --json        # or --file x_test.md
+```
+- `passed` -> run it. `failed` (exit 1) -> **do not run**: a 5-minute run would stop at the same step. Fix it first:
+  data missing -> make the data in the test (or pick it differently); a setting / permission blocks it -> tell the user
+  in one line where to change it (screen > field) and the no-change alternative. Then check again.
+- `no_database` (exit 2) -> that environment cannot run database steps: use one that has a database.
+- Dry runs of the whole case are not possible (Save buttons write data); this check is the safe part.
+
 
 Plain English, one step per sentence (these shapes run without AI — prefer them):
 - `Navigate to <url>.`  ·  `Navigate to {{base_url}}index.php/<controller>/<method>.`
@@ -120,6 +232,7 @@ Other free-text checks ("Check that the total is 1,000.00") are judged by AI fro
 ```
 tester run "Type {{user}} into the Username field. Type {{pw}} into the Password field. Click the Login button. Assert the text 'Dashboard' is visible." \
   --url <site login/start url> --var user=<username> --secret pw=<password> --project <id> --json
+#   ^ a quick one-off the user typed themselves. A test case you write: save the _test.md, review it (Rule 1), then --file
 tester run --case <case id> --url <site base url> --json          # saved LogiTestHub case
 tester run --file path/to/x_test.md --url <site base url> --json  # a _test.md file
 ```
@@ -127,7 +240,13 @@ Options: `--headed` (watch the browser) · `--no-upload` (keep only on this PC) 
 `--vars file.json`. Passwords only via `--secret` (masked in logs, report and video captions).
 `--project` saves an ad-hoc run as a case in folder "CLI runs".
 
-Ask the user for the site URL and login if you do not know them; do not guess credentials.
+Ask the user for the site URL if you do not know it; do not guess credentials. Login values go in
+`<tests>/variables/variables.json`, which the user fills in themselves.
+
+**Secrets never in the chat.** When the user pastes an access key or a password in the chat (or asks you to log in
+with one written there): do not put it in any command, file or reply. Say once: "That {access key / password} is now in
+this chat's history. Do not paste it here: type it yourself in the terminal (`tester login ...`) or in
+`variables.json`. Access key: make a new one in LogiTestHub > Profile, the old one stops working." Then wait.
 
 ### Database checks (read-only)
 
@@ -151,12 +270,15 @@ Assert SQL "SELECT 1 FROM ret_taging WHERE tag_lot_id = {{last_lot}}" returns a 
 
 `tester run --json` prints the run result:
 ```
-{ "ok": true, "status": "FAILED", "outcome": "failed", "category": "needs_review",
+{ "ok": true, "status": "FAILED", "title": "GRN Entry: save a Bill-type GRN", "outcome": "failed", "category": "needs_review",
   "summary": "Step 7 failed: Click the Save button. - locator.waitFor: Timeout 10000ms exceeded.",
   "counts": { "total": 12, "passed": 6, "failed": 1, "skipped": 5, "needs_ai": 0 },
+  "duration": "1m 05s", "duration_ms": 65210,
   "failed_step": { "n": 7, "section": "Save", "text": "...", "error": "...", "screenshot": "...", "screenshot_before": "..." },
+  "steps": [ { "n": 1, "section": "Open", "text": "Navigate to ...", "status": "passed", "sec": 1.2 }, ... ],
   "url": "<LogiTestHub run page>", "run_id": 91, "run_dir": "...", "upload": { "ok": true } }
 ```
+Report it to the user with the Rule 2 layout (top of this file).
 
 | Exit | outcome | Meaning | Do |
 |---|---|---|---|
@@ -166,12 +288,13 @@ Assert SQL "SELECT 1 FROM ret_taging WHERE tag_lot_id = {{last_lot}}" returns a 
 | 5 | `not_completed` (`run_stopped`) | The browser run stopped before the end | Run once more; again → report NOT COMPLETED with the message |
 | 3 | `partial` | Steps needed AI and could not run (e.g. no API credits) | Say which; rewrite them in the shapes above if possible |
 | 4 | — | AI limit reached | Stop and tell the user (admin can add extra in LogiTestHub) |
+| 6 | — | `review_first`: the `_test.md` is new or changed and not approved | Rule 1: show `review`, wait for ok, run with `--approved` |
 | 2 | — | Other error (bad URL, not logged in, case not found, LogiTestHub unreachable before the run) | Show the message |
 
 `upload.ok: false` means the run finished but LogiTestHub could not save it (server unreachable / busy): the
 `status` / `outcome` are still the real result. Retry later with the `upload.retry` command (`tester upload <run_dir>`).
 
-**Finish every test with this verdict (a JSON block, then one plain sentence for the user):**
+**Finish every test with the Rule 2 report, then this verdict (a JSON block, then one plain sentence for the user):**
 ```json
 {
   "result": "PASSED | FAILED | NOT_COMPLETED | PARTIAL",
@@ -193,19 +316,21 @@ Assert SQL "SELECT 1 FROM ret_taging WHERE tag_lot_id = {{last_lot}}" returns a 
   and report the PASSING run (`retried`).
 - `environment`: neither the app nor the test failed; it could not be checked (network, server down or overloaded).
 - Omit `step` / `evidence` when the run passed. Always give the `url` when the run was saved.
+- The brain lacked something the test needed: add the 📘 Brain gap block for the developer (`references/write-case.md`).
 
 ## PM task (PM-LMX-1741 ...)
 
 When the user names a PM task, or `tester task --json` shows an active one, the tests belong to that task:
 ```
-tester task --json                          # active task? (set by "Start testing" on the PM task page, or:)
+tester task --json                          # active task? (set by the user's Tester CLI click in PM, or:)
 tester task start PM-LMX-1741 --json        # everything you create / run from now on is linked to it
 tester run ... --task PM-LMX-1741 --json    # or link just this run's case
 tester task PM-LMX-1741 --json              # its test cases + latest results + the page PM shows at Review
 tester task stop --json                     # when the work on the task is done
 ```
-- The task page link goes to the PM task by itself (PM prefills it as the test report link at Review). Do not
-  attach links to PM yourself.
+- Links reach PM only when the user started the task with the **Tester CLI** button in PM: then each run's link
+  goes to the PM task as them, by itself. `tester task start` / `--task` only link test cases here; nothing is sent
+  to PM. Never attach links to PM yourself; if the user wants PM to get them, ask them to click Tester CLI in PM.
 - Finish by giving the user the task page `url` and the passed / failed count.
 
 ## 5. Generate test cases for a change
