@@ -418,6 +418,11 @@ function reviewOf(file, text) {
 function slug(s) {
   return String(s || 'test').toLowerCase().replace(/\{\{.*?\}\}/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 50) || 'test';
 }
+// A project's own folder inside the tests folder (one tests folder can hold several projects): its LogiTestHub name,
+// safe for a path - "Retail", "Retail_POS".
+function projectFolder(name) {
+  return String(name || 'project').trim().replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^[._]+|[._]+$/g, '').slice(0, 60) || 'project';
+}
 // The file in tests/ for a case: the one already linked to it (case_id), else a new name that is not taken.
 // (a case linked by case_id is found in any sub-folder; a new one goes in tests/<module>/<sub-module>/ when its module
 // is known - the same tree as LogiTestHub's modules)
@@ -528,37 +533,71 @@ async function init() {
 
   // where the test cases go on this PC. The team may keep them in a git repo of their own: the first developer pushes
   // it, LogiTestHub remembers its URL for this code repo, and the next developer is offered to clone it.
-  let dir = found ? found.dir : null, ide = null, cloned = false;
+  // One tests folder can hold several projects: each one's cases, tester.json, helpers/ and variables/ are in a folder
+  // named after the LogiTestHub project - <tests folder>/<Project>/<module>/<sub-module>/<name>_test.md.
+  const pname = project.name || (await api(c, 'GET', `/projects/${project.id}/setup`)).project.name;
+  const pfolder = projectFolder(pname);
+  const isOutside = d => !samePath(path.dirname(d), root) || path.basename(d) !== WS_DIR;
+  let dir = found ? found.dir : null, ide = null, cloned = false, container = null, moved = null;
   const given = typeof flag('--tests-dir') === 'string' ? path.resolve(flag('--tests-dir')) : null;
+  if (dir && (!given || samePath(given, dir)) && isOutside(dir) && path.basename(dir) !== pfolder) {
+    // an older tests folder with this project's cases at its top: they go into its project folder (nothing is deleted;
+    // in a git repo it shows as renames). Other projects' folders already there are left alone.
+    const to = path.join(dir, pfolder);
+    if (!argv.includes('--move'))
+      fail(`This project's test cases are at the top of ${dir}. Each project now has a folder of its own there (the tests ` +
+        `folder can hold several projects): ${to}. Ask the user: move them into it? Then: tester init --move  ` +
+        '(tester.json, helpers, variables and the module folders move; nothing is deleted; in git it shows as renames)', 8,
+        { error: 'project_folder_needed', dir, project_dir: to, project: { id: project.id, name: pname } });
+    fs.mkdirSync(to, { recursive: true });
+    moved = [];
+    for (const e of fs.readdirSync(dir)) {
+      if (['.git', '.gitignore', pfolder].includes(e) || fs.existsSync(path.join(dir, e, WS_FILE))) continue;
+      fs.renameSync(path.join(dir, e), path.join(to, e));
+      moved.push(e);
+    }
+    container = dir;
+    dir = to;
+  }
   if (!dir && !given) {
-    const suggested = path.join(path.dirname(root), testsRemote ? path.basename(testsRemote).replace(/\.git$/i, '') : `${path.basename(root)}-tests`);
+    const suggested = path.join(path.dirname(root), testsRemote ? path.basename(testsRemote).replace(/\.git$/i, '') : 'Tester_CLI');
     fail(testsRemote
       ? `The team keeps this repo's test cases in ${testsRemote}. Ask the user: clone it to ${suggested} (or another path)? ` +
-        `Then: tester init --tests-dir "<folder>"  (it is cloned there and added to the IDE workspace as a second folder)`
+        `Then: tester init --tests-dir "<folder>"  (it is cloned there and added to the IDE workspace as a second folder; ` +
+        `this project's cases go in <folder>${path.sep}${pfolder}${path.sep})`
       : `Where should this repo's test cases be kept on this PC? Suggest a folder of their own: ${suggested} ` +
-        '(it is added to the IDE workspace as a second folder). Ask the user to say yes or give another path, then: ' +
+        `(it can hold several projects: this one's cases go in ${path.join(suggested, pfolder)}${path.sep}; the folder is added ` +
+        'to the IDE workspace as a second folder). Ask the user to say yes or give another path, then: ' +
         `tester init --tests-dir "<folder>"`, 8,
-      { error: 'tests_dir_needed', repo_root: root, suggested, tests_remote: testsRemote, inside_repo: path.join(root, WS_DIR), project: { id: project.id } });
+      { error: 'tests_dir_needed', repo_root: root, suggested, project_dir: path.join(suggested, pfolder), tests_remote: testsRemote,
+        inside_repo: path.join(root, WS_DIR), project: { id: project.id, name: pname } });
   }
   if (!dir) {
-    dir = given;
-    // a whole drive or the home folder would put tester.json etc. at its top and add all of it to the IDE: never, even --force
-    if (path.parse(dir).root.toLowerCase() === (dir.endsWith(path.sep) ? dir : dir + path.sep).toLowerCase() || samePath(dir, os.homedir()))
-      fail(`${dir} is a whole drive / your home folder. Ask the user for a folder inside it, e.g. ` +
-        `${path.join(dir, path.basename(root) + '-tests')}`, 2, { error: 'tests_dir_too_wide', dir });
-    const empty = !fs.existsSync(dir) || !fs.readdirSync(dir).length;
-    if (empty && testsRemote) {   // the team's tests repo: clone it (the user's own git login is used)
-      fs.mkdirSync(path.dirname(dir), { recursive: true });
-      const r = require('child_process').spawnSync('git', ['clone', testsRemote, dir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 600000 });
+    container = given;
+    // a whole drive or the home folder would put the tests at its top and add all of it to the IDE: never, even --force
+    if (path.parse(container).root.toLowerCase() === (container.endsWith(path.sep) ? container : container + path.sep).toLowerCase()
+        || samePath(container, os.homedir()))
+      fail(`${container} is a whole drive / your home folder. Ask the user for a folder inside it, e.g. ` +
+        `${path.join(container, 'Tester_CLI')}`, 2, { error: 'tests_dir_too_wide', dir: container });
+    if (fs.existsSync(path.join(container, WS_FILE)))   // another project's cases are at its top (the older layout)
+      fail(`${container} has another project's test cases at its top. In that project's code repo run tester init --move ` +
+        `first (they go into a folder of their own), then run this again.`, 8, { error: 'tests_dir_flat', dir: container });
+    const entries = fs.existsSync(container) ? fs.readdirSync(container) : [];
+    const ours = e => e === '.git' || e === '.gitignore' || e === 'README.md' || fs.existsSync(path.join(container, e, WS_FILE));
+    if (!entries.length && testsRemote) {   // the team's tests repo: clone it (the user's own git login is used)
+      fs.mkdirSync(path.dirname(container), { recursive: true });
+      const r = require('child_process').spawnSync('git', ['clone', testsRemote, container], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 600000 });
       if (r.status !== 0) fail(`git clone ${testsRemote} failed: ${(r.stderr || '').trim().split('\n').pop()}. Check that you can open that repo ` +
         '(GitHub login / access), or clone it yourself to that folder and run tester init --tests-dir again.', 2, { error: 'clone_failed', tests_remote: testsRemote });
       cloned = true;
-    } else if (!empty && !fs.existsSync(path.join(dir, WS_FILE)) && !argv.includes('--force'))
-      fail(`${dir} already has other files. Ask the user: use it anyway (--force) or give an empty / new folder.`, 2,
-        { error: 'tests_dir_not_empty', dir });
+    } else if (!entries.every(ours) && !argv.includes('--force'))   // other projects' folders are fine; anything else: ask
+      fail(`${container} already has other files. Ask the user: use it anyway (--force) or give an empty / new folder.`, 2,
+        { error: 'tests_dir_not_empty', dir: container });
+    dir = path.join(container, pfolder);
     fs.mkdirSync(dir, { recursive: true });
   }
-  const outside = !samePath(path.dirname(dir), root) || path.basename(dir) !== WS_DIR;
+  const outside = isOutside(dir);
+  if (outside && !container && path.basename(dir) === pfolder) container = path.dirname(dir);
   // tester.json is shared (committed in the tests repo): project and site URL only, never a path of this PC
   const settings = { project: project.id };
   if (urlOpt()) settings.url = urlOpt();
@@ -569,7 +608,7 @@ async function init() {
     const cfg = loadConfig();
     const m = Object.fromEntries(Object.entries(cfg.tests_dirs || {}).filter(([k]) => !samePath(k, root)));
     saveConfig({ ...cfg, tests_dirs: { ...m, [root]: dir } });
-    ide = addToIde(dir, root);
+    ide = addToIde(container || dir, root);   // the whole tests folder: every project in it shows next to the code
   }
   // the tests folder is a git repo with a remote: tell LogiTestHub, so the next developer is offered to clone it
   const own = outside && gitRemote(dir);
@@ -587,9 +626,11 @@ async function init() {
   const share = !outside ? '' : cloned ? `  Cloned the team's tests repo ${testsRemote}\n`
     : shared ? `  Team tests repo: ${own} (the next developer of this repo is offered to clone it)\n`
     : '  Not shared yet: to share these cases with the team, make this folder a git repo, push it, then run tester init again\n';
-  print({ ok: true, dir, repo_root: root, repo: remote || null, linked_by: linkedBy, ide, cloned, tests_remote: own || testsRemote || null,
-    shared: shared || cloned, ...ws, ...st, next },
-    `Test cases folder: ${dir}${path.sep}\n` + ideLine + share +
+  print({ ok: true, dir, tests_root: container, moved, repo_root: root, repo: remote || null, linked_by: linkedBy, ide, cloned,
+    tests_remote: own || testsRemote || null, shared: shared || cloned, ...ws, ...st, next },
+    `Test cases folder: ${dir}${path.sep}\n` +
+    (moved ? `  Moved into the project folder: ${moved.join(', ') || 'nothing'}${gitTop(dir) ? ' (commit it: git shows renames)' : ''}\n` : '') +
+    ideLine + share +
     `  LogiTestHub project: ${st.project.name} (${st.project.id})${linkedBy ? `  - this repo is linked to it (by ${linkedBy})` : ''}\n` +
     `  Login helper: ${st.login_helper ? 'yes' : 'NOT SET'}\n` +
     `  Modules: ${st.modules} modules, ${st.sub_modules} sub-modules\n` +
@@ -1154,7 +1195,8 @@ function help() {
   tester skill install                               add the /tester skill to Claude Code (~/.claude/skills/tester)
   tester init [--project <id|name>] [--create] [--tests-dir <folder>] [--url <site>]
                                                      set this repo up: project (asked once per repo), tests folder
-                                                     (added to the IDE workspace), what is missing
+                                                     (added to the IDE workspace; the cases go in <folder>/<Project>/), what is missing
+  tester init --move                                 an older tests folder: move this project's cases into <folder>/<Project>/
   tester init --unlink                                           this repo was linked to the wrong project: unlink it
   tester login-helper [show] | set --file <login.md> [--force]   the project's login steps (run before every case)
   tester modules read --url <menu page> [--var/--secret ..]      read the app's menu -> sub-menus on this PC (no AI) into a file
