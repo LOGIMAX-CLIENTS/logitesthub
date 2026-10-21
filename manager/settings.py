@@ -692,6 +692,57 @@ def register(app, con, admin_required, current_user):
             flash(f'@{u["username"]}: department {"set to " + dept if dept else "cleared"}.', 'success')
         return redirect(url_for('users', dept=request.form.get('back_dept') or None))
 
+    @bp.route('/users/bulk', methods=['POST'])
+    @admin_required
+    def users_bulk():
+        """Role and / or department for the ticked users at once (Users page). The same rules as one at a time:
+        not your own role, and the Super Admin role is given or taken only by a Super Admin. A user that a rule
+        stops is skipped and named; the others are changed."""
+        me = current_user()
+        ids = [int(x) for x in request.form.getlist('uid') if str(x).isdigit()]
+        role = request.form.get('role', '').strip()
+        dept = request.form.get('department', '').strip()   # '' = leave as it is, '-' = clear
+        back = redirect(url_for('users', dept=request.form.get('back_dept') or None))
+        if not ids:
+            flash('Tick at least one user.', 'danger')
+            return back
+        if not role and not dept:
+            flash('Choose a role or a department to set.', 'danger')
+            return back
+        if role and role not in ROLE_KEYS:
+            flash('Unknown role.', 'danger')
+            return back
+        if dept and dept != '-' and dept not in DEPARTMENTS:
+            flash('Choose a department from the list.', 'danger')
+            return back
+        c = con()
+        rows = c.execute(f'SELECT id, username, role FROM users WHERE id IN ({",".join("?" * len(ids))})', ids).fetchall()
+        changed, skipped = [], []
+        with c:
+            for u in rows:
+                sets, vals = [], []
+                if role and u['role'] != role:
+                    if u['id'] == me['id']:
+                        skipped.append(f'@{u["username"]} (your own role)')
+                    elif not is_super(me['role']) and (is_super(u['role']) or role == 'superadmin'):
+                        skipped.append(f'@{u["username"]} (Super Admin role: only a Super Admin)')
+                    else:
+                        sets.append('role=?'); vals.append(role)
+                if dept:
+                    sets.append('department=?'); vals.append(None if dept == '-' else dept)
+                if sets:
+                    c.execute(f'UPDATE users SET {", ".join(sets)} WHERE id=?', (*vals, u['id']))
+                    changed.append(u['username'])
+        what = ' and '.join(x for x in [f'role {ROLE_LABEL[role]}' if role else '',
+                                          ('department cleared' if dept == '-' else f'department {dept}') if dept else ''] if x)
+        if changed:
+            write_audit(me['username'], 'users.bulk', 'user', None, 'ok',
+                        f'{what} for {len(changed)} user(s): ' + ', '.join('@' + n for n in changed), None, request.remote_addr)
+            flash(f'{len(changed)} user{"s" if len(changed) != 1 else ""}: {what}.', 'success')
+        if skipped:
+            flash('Not changed: ' + ', '.join(skipped) + '.', 'warning')
+        return back
+
     @bp.route('/')
     @admin_required
     def index():
