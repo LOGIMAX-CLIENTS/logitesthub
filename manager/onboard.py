@@ -35,7 +35,10 @@ def ensure(con):
 
 def set_tests_remote(con, repo, tests_remote):
     ensure(con)
-    return con.execute('UPDATE project_repos SET tests_remote=? WHERE repo=?', ((tests_remote or '')[:500] or None, repo)).rowcount
+    # UPDATE's rowcount is rows CHANGED, so it is 0 when tests_remote already equals the new value (e.g. copied in at
+    # go-live) - which is not "repo not linked". Report whether the repo row exists, independent of whether it changed.
+    con.execute('UPDATE project_repos SET tests_remote=? WHERE repo=?', ((tests_remote or '')[:500] or None, repo))
+    return 1 if con.execute('SELECT 1 FROM project_repos WHERE repo=?', (repo,)).fetchone() else 0
 
 
 def repo_key(remote):
