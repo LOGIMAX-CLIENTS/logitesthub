@@ -82,8 +82,15 @@ Run `tester init --json` in the developer's repo before the first test, then do 
    next to the code in the IDE) Or tell me another path." Then `tester init --tests-dir "<their answer>"`. The CLI
    makes it, remembers it for this repo and adds it to the IDE workspace as a second folder (`ide` in the result:
    `workspace` / `code --add` = done; `manual` = tell the user to open that folder in their IDE). Asked once per PC.
-   Below, `<tests>` = that folder (`dir` in the result). Never offer a whole drive (`F:\`) or the home folder: the CLI
-   refuses them (`tests_dir_too_wide`); the user names a drive → offer a new folder in it (`F:\<repo>-tests`).
+   The tests folder can hold **several projects**: each project's cases, `tester.json`, `helpers/` and `variables/` are
+   in a folder named after the LogiTestHub project (`F:\Tester_CLI\Retail\`, `F:\Tester_CLI\Chit_Fund\`); the CLI
+   makes it (`project_dir` in the JSON). Below, `<tests>` = that **project folder** (`dir` in the result).
+   Never offer a whole drive (`F:\`) or the home folder: the CLI refuses them (`tests_dir_too_wide`); the user names a
+   drive → offer a new folder in it (`F:\Tester_CLI`).
+   - **`project_folder_needed`** (exit 8): an older tests folder has this project's cases at its top. Ask: "Move this
+     project's test cases into `<project_dir>`? (nothing is deleted; in git it shows as renames)" → `tester init --move`.
+   - **`tests_dir_flat`** (exit 8): the folder still has another project's cases at its top: run `tester init --move`
+     in that project's repo first, then this one again.
    - **The team already has a tests repo** (`tests_remote` in the JSON): ask "The team keeps the test cases in
      `<tests_remote>`. Clone it to `<suggested>`?" - `tester init --tests-dir "<folder>"` clones it (the user's own
      git login) and adds it to the workspace. Clone failed (no access): tell the user to get access or clone it themselves.
