@@ -78,7 +78,7 @@
     <form class="as-compose" id="asForm" autocomplete="off" {{ 'hidden' if readonly }}>
       <div class="as-imgprev" id="asImgPrev" hidden></div>
       <textarea class="form-control" id="asText" rows="2" maxlength="4000" placeholder="Describe the test scenario… (Enter to send, Shift+Enter for a new line)" aria-label="Your message"></textarea>
-      <input type="file" id="asFile" accept="image/*" hidden>
+      <input type="file" id="asFile" accept="image/*" multiple hidden>
       <button class="btn btn-outline-secondary as-attach" id="asAttach" type="button" title="Attach a screenshot (optional) — you can also paste or drag an image" aria-label="Attach a screenshot">📎</button>
       <button class="btn btn-primary" id="asSend" type="submit">Send</button>
       <button class="btn btn-outline-danger as-stop" id="asStop" type="button" hidden title="Stop the AI"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg> Stop</button>
@@ -120,8 +120,9 @@
   var box = document.getElementById('asMsgs'), empty = document.getElementById('asEmpty');
   var form = document.getElementById('asForm'), text = document.getElementById('asText'), sendBtn = document.getElementById('asSend'), stopBtn = document.getElementById('asStop');
 
-  // ---- optional screenshot: pick a file, paste, or drag-drop; compressed to a small JPEG before it is sent
-  var pendingImage = null;
+  // ---- optional screenshots: pick files, paste, or drag-drop; each compressed to a small JPEG before it is sent
+  var MAX_IMGS = 6;
+  var pendingImages = [];   // data: URLs of the screenshots to send with the next message
   var fileInput = document.getElementById('asFile'), attachBtn = document.getElementById('asAttach'), imgPrev = document.getElementById('asImgPrev');
   function compressImage(file, cb) {
     var reader = new FileReader();
@@ -143,26 +144,32 @@
   function showImagePreview() {
     if (!imgPrev) return;
     imgPrev.textContent = '';
-    if (!pendingImage) { imgPrev.hidden = true; return; }
-    var fig = el('figure'), im = el('img'); im.src = pendingImage; im.alt = 'Screenshot to send';
-    var x = el('button', '', '×'); x.type = 'button'; x.title = 'Remove screenshot';
-    x.addEventListener('click', function () { pendingImage = null; if (fileInput) fileInput.value = ''; showImagePreview(); });
-    fig.appendChild(im); fig.appendChild(x); imgPrev.appendChild(fig); imgPrev.hidden = false;
+    if (!pendingImages.length) { imgPrev.hidden = true; return; }
+    pendingImages.forEach(function (url, i) {
+      var fig = el('figure'), im = el('img'); im.src = url; im.alt = 'Screenshot to send';
+      var x = el('button', '', '×'); x.type = 'button'; x.title = 'Remove screenshot';
+      x.addEventListener('click', function () { pendingImages.splice(i, 1); if (fileInput) fileInput.value = ''; showImagePreview(); });
+      fig.appendChild(im); fig.appendChild(x); imgPrev.appendChild(fig);
+    });
+    imgPrev.hidden = false;
   }
   function takeImage(file) {
     if (!file || !/^image\//.test(file.type || '')) return;
-    compressImage(file, function (url) { if (url) { pendingImage = url; showImagePreview(); } });
+    if (pendingImages.length >= MAX_IMGS) { systemMessage({ text: 'You can attach up to ' + MAX_IMGS + ' screenshots per message.' }); return; }
+    compressImage(file, function (url) { if (url && pendingImages.length < MAX_IMGS) { pendingImages.push(url); showImagePreview(); } });
   }
+  function takeFiles(list) { for (var i = 0; i < list.length; i++) if (/^image\//.test(list[i].type || '')) takeImage(list[i]); }
   if (attachBtn && fileInput) {
     attachBtn.addEventListener('click', function () { fileInput.click(); });
-    fileInput.addEventListener('change', function () { if (fileInput.files && fileInput.files[0]) takeImage(fileInput.files[0]); });
+    fileInput.addEventListener('change', function () { if (fileInput.files && fileInput.files.length) takeFiles(fileInput.files); });
   }
   if (text) {
     text.addEventListener('paste', function (e) {
-      var items = (e.clipboardData || {}).items || [];
+      var items = (e.clipboardData || {}).items || [], took = false;
       for (var i = 0; i < items.length; i++) {
-        if (items[i].type && items[i].type.indexOf('image') === 0) { var f = items[i].getAsFile(); if (f) { e.preventDefault(); takeImage(f); return; } }
+        if (items[i].type && items[i].type.indexOf('image') === 0) { var f = items[i].getAsFile(); if (f) { took = true; takeImage(f); } }
       }
+      if (took) e.preventDefault();
     });
   }
   if (form) {
@@ -170,8 +177,7 @@
     form.addEventListener('dragleave', function () { form.classList.remove('as-drag'); });
     form.addEventListener('drop', function (e) {
       e.preventDefault(); form.classList.remove('as-drag');
-      var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-      if (f) takeImage(f);
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) takeFiles(e.dataTransfer.files);
     });
   }
   var busy = false, lastDraft = null;
@@ -185,12 +191,12 @@
     }).catch(function () { return { ok: false, error: 'Cannot reach LogiTestHub. Check the connection and try again.' }; });
   }
 
-  function bubble(role, txt, imgUrl) {
+  function bubble(role, txt, imgUrls) {
     empty.hidden = true;
     var row = el('div', 'as-row as-' + role);
     var b = el('div', 'as-bubble');
     b.textContent = txt;
-    if (imgUrl) { var im = el('img', 'as-shot'); im.src = imgUrl; im.alt = 'Attached screenshot'; b.appendChild(im); }
+    (imgUrls || []).forEach(function (u) { var im = el('img', 'as-shot'); im.src = u; im.alt = 'Attached screenshot'; b.appendChild(im); });
     row.appendChild(b); box.appendChild(row); scrollDown();
     return row;
   }
@@ -495,7 +501,11 @@
     }
   }
 
-  MSGS.forEach(function (m) { if (m.role === 'user') markLastUser(bubble('user', m.text, m.data && m.data.image ? URL_BASE + '/shot/' + m.id : null)); else if (m.role === 'assistant') assistantMessage(m); else systemMessage(m); });
+  function shotUrls(m) {
+    var d = m.data || {}, names = d.images || (d.image ? [d.image] : []);
+    return names.map(function (_, i) { return URL_BASE + '/shot/' + m.id + '/' + i; });
+  }
+  MSGS.forEach(function (m) { if (m.role === 'user') markLastUser(bubble('user', m.text, shotUrls(m))); else if (m.role === 'assistant') assistantMessage(m); else systemMessage(m); });
 
   var reqId = null, lastUser = null;
   function markLastUser(row) {   // the last message you sent gets an Edit link
@@ -529,8 +539,8 @@
     msg = (msg || '').trim();
     if (!msg || busy) return;
     busy = true; stopped = null; sendBtn.hidden = true; stopBtn.hidden = false; text.value = '';
-    var sentImg = pendingImage; pendingImage = null; if (fileInput) fileInput.value = ''; showImagePreview();
-    markLastUser(bubble('user', msg, sentImg));
+    var sentImgs = pendingImages.slice(); pendingImages = []; if (fileInput) fileInput.value = ''; showImagePreview();
+    markLastUser(bubble('user', msg, sentImgs));
     var thinking = bubble('assistant', 'Starting…'); thinking.classList.add('as-thinking');
     reqId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     var myReq = reqId, started = Date.now();
@@ -543,7 +553,7 @@
       });
     }, 1500);
     var data = { thread_id: THREAD, text: msg, req: reqId, env_id: document.getElementById('asEnv') ? document.getElementById('asEnv').value : null };
-    if (sentImg) data.image = sentImg;   // optional screenshot the tester attached
+    if (sentImgs.length) data.images = sentImgs;   // optional screenshots the tester attached
     var codeSel = document.getElementById('asCodeSel'); if (codeSel) data.code_env_id = codeSel.value;   // '' = no code
     if (lastDraft) { data.draft_title = lastDraft.title.value; data.draft_text = lastDraft.steps.value; }
     post(URL_SEND, data).then(function (j) {

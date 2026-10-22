@@ -35,6 +35,7 @@ MAX_MSG = 4000          # characters per user message
 SHOTS_DIR = os.path.join(db.DATA, 'assistant_shots')   # optional screenshots a tester attaches to a message
 IMG_DATA_RE = re.compile(r'^data:image/(jpeg|png|webp);base64,(.+)$', re.I | re.S)
 MAX_IMG_BYTES = 6 * 1024 * 1024
+MAX_IMGS = 6            # screenshots a tester may attach to one message
 _SAFE_SHOT = re.compile(r'^[\w.-]+$')
 
 
@@ -289,11 +290,11 @@ def stop_turn(key):
     return True
 
 
-def ask_ai(messages, context, code_dir=None, key=None, image=None):
+def ask_ai(messages, context, code_dir=None, key=None, images=None):
     """One Test Assistant turn through ai-bridge.js. Returns (data, usage, model, error); error STOPPED when stopped."""
     req = {'op': 'chat', 'messages': messages, 'context': context, 'codeDir': code_dir}
-    if image:
-        req['image'] = image
+    if images:
+        req['images'] = images
     try:
         proc = subprocess.Popen(['node', os.path.join(db.RUNNER_DIR, 'ai-bridge.js')], cwd=db.RUNNER_DIR, stdin=subprocess.PIPE,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
@@ -567,8 +568,16 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
             with c:
                 tid = c.execute('INSERT INTO chat_threads(project_id, title, created_by, created_at, updated_at) VALUES (?,?,?,?,?)',
                                 (pid, re.sub(r'\s+', ' ', text)[:120], me['username'], db.now(), db.now())).lastrowid
-        shot_name, shot_for_ai = _save_shot(tid, body.get('image'))   # optional screenshot the tester attached
-        add_message(tid, 'user', text, data={'image': shot_name} if shot_name else None)
+        imgs_in = body.get('images')   # optional screenshots the tester attached
+        if not isinstance(imgs_in, list):
+            imgs_in = [body.get('image')] if body.get('image') else []
+        shot_names, shots_for_ai = [], []
+        for du in imgs_in[:MAX_IMGS]:
+            fn, ai = _save_shot(tid, du)
+            if fn:
+                shot_names.append(fn)
+                shots_for_ai.append(ai)
+        add_message(tid, 'user', text, data={'images': shot_names} if shot_names else None)
         b = budget.status(con(), me)
         if not b['ok']:
             msg = b['message'] + ' The Test Assistant needs AI, so it cannot answer until the limit is raised.'
@@ -612,7 +621,7 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
             context += (f"\nThis chat writes test cases for PM task {tc['task_code']} (they are linked to it when saved). "
                         "If the user has not said what the task changed, ask what to check for this task.")
         set_progress(key, 'Understanding your request' + (' and looking at the application code' if code else ''))
-        data, usage, model, err = ask_ai(hist, context, code, key, image=shot_for_ai)
+        data, usage, model, err = ask_ai(hist, context, code, key, images=shots_for_ai or None)
         if err == STOPPED:
             return jsonify({'ok': False, 'stopped': True, 'thread_id': tid})
         if err:
@@ -705,22 +714,23 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
         return jsonify({'ok': True, 'thread_id': tid, 'message': {'id': mid, 'role': 'assistant', 'text': data.get('reply') or '', 'data': out},
                         'warn': b['message'] if b.get('warn') else ''})
 
-    @bp.route('/projects/<int:pid>/assistant/shot/<int:mid>')
+    @bp.route('/projects/<int:pid>/assistant/shot/<int:mid>/<int:idx>')
     @login_required
-    def shot(pid, mid):
-        """The screenshot a tester attached to a message (user messages only), by message id."""
+    def shot(pid, mid, idx):
+        """One screenshot a tester attached to a message (user messages only), by message id and index."""
         project_or_404(pid)
         m = con().execute('SELECT m.data FROM chat_messages m JOIN chat_threads t ON t.id=m.thread_id '
                           'WHERE m.id=? AND t.project_id=?', (mid, pid)).fetchone()
-        name = None
+        names = []
         if m and m['data']:
             try:
-                name = (json.loads(m['data']) or {}).get('image')
+                d = json.loads(m['data']) or {}
+                names = d.get('images') or ([d['image']] if d.get('image') else [])
             except ValueError:
-                name = None
-        if not name or not _SAFE_SHOT.match(name):
+                names = []
+        if idx < 0 or idx >= len(names) or not _SAFE_SHOT.match(names[idx] or ''):
             abort(404)
-        path = os.path.join(SHOTS_DIR, name)
+        path = os.path.join(SHOTS_DIR, names[idx])
         if not os.path.isfile(path):
             abort(404)
         return send_file(path, max_age=86400)

@@ -1018,7 +1018,7 @@ button.set-cell:focus-visible { outline: 2px solid var(--gold); outline-offset: 
 .as-compose textarea { resize: none; max-height: 160px; }
 .as-compose.as-drag { outline: 2px dashed var(--brand); outline-offset: -4px; border-radius: 10px; }
 .as-attach { flex: 0 0 auto; font-size: 16px; line-height: 1; }
-.as-imgprev { flex: 0 0 100%; }
+.as-imgprev { flex: 0 0 100%; display: flex; flex-wrap: wrap; gap: 12px; }
 .as-imgprev figure { position: relative; display: inline-block; margin: 0; }
 .as-imgprev img { max-height: 84px; border-radius: 8px; border: 1px solid var(--line); display: block; }
 .as-imgprev figure button { position: absolute; top: -8px; right: -8px; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; background: var(--ink); color: #fff; font-size: 13px; line-height: 20px; cursor: pointer; }
