@@ -403,6 +403,6 @@ def register(app, con, admin_required, current_user):
         scan_env = dict(e, base_url=target)   # same environment (name, code) but the chosen target URL
         sid, err = start_scan(con(), scan_env, current_user()['username'], coderepo.code_dir(e))
         flash(err or f'Scanning {target}: this page refreshes until it is done.', 'danger' if err else 'info')
-        return redirect(url_for('security.page') + (f'#scan{sid}' if sid else ''))
+        return redirect(url_for('security.page'))
 
     app.register_blueprint(bp)
