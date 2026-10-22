@@ -1,0 +1,116 @@
+{% extends 'base.html' %}
+{% block title %}Security scan{% endblock %}
+{% block head %}{% if scans and scans[0].status == 'running' %}<meta http-equiv="refresh" content="4">{% endif %}{% endblock %}
+{% block content %}
+{% set sev = {'high': 'danger', 'medium': 'warning', 'low': 'secondary', 'info': 'info', 'pass': 'success'} %}
+{% set sevlabel = {'high': 'High', 'medium': 'Medium', 'low': 'Low', 'info': 'Info', 'pass': 'Pass'} %}
+
+<div class="d-flex flex-wrap gap-2 align-items-end justify-content-between mb-3">
+  <div>
+    <h1 class="h4 mb-0">Security scan</h1>
+    <div class="text-secondary small">Quick, safe checks on an environment's URL and its code — security headers, cookie flags,
+      HTTPS / TLS, exposed files, and known-vulnerable libraries. Read-only; run it on UAT / staging, never production.</div>
+  </div>
+  <form method="post" action="{{ url_for('security.scan') }}" class="d-flex gap-2 align-items-end">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div>
+      <label class="form-label small mb-1" for="secEnv">Environment</label>
+      <select class="form-select form-select-sm" id="secEnv" name="env_id" style="min-width: 220px">
+        {% for e in envs %}<option value="{{ e.id }}" {{ 'disabled' if e.is_prod }}>{{ e.name }} — {{ e.base_url }}{{ ' (production — blocked)' if e.is_prod }}</option>{% endfor %}
+      </select>
+    </div>
+    <button class="btn btn-primary btn-sm" type="submit" {{ 'disabled' if not envs }}>Run scan</button>
+  </form>
+</div>
+
+{% if not envs %}
+<div class="panel text-secondary">No shared environments yet. Add one in <a href="{{ url_for('environments') }}">Settings → Environments</a>, then scan it.</div>
+{% endif %}
+
+{% macro sevpill(s, n) %}<span class="badge text-bg-{{ sev[s] }}">{{ n }} {{ sevlabel[s] }}</span>{% endmacro %}
+
+{% set latest = scans[0] if scans else none %}
+{% if latest %}
+<section class="panel mb-4" id="scan{{ latest.id }}">
+  <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+    <h2 class="h6 mb-0">{{ latest.env_name or latest.target }}</h2>
+    <span class="text-secondary small">{{ latest.target }}</span>
+    {% if latest.status == 'running' %}<span class="badge text-bg-info">Scanning… (this page refreshes)</span>
+    {% elif latest.status == 'error' %}<span class="badge text-bg-danger">Error</span>
+    {% else %}
+      {% if latest.high %}{{ sevpill('high', latest.high) }}{% endif %}
+      {% if latest.medium %}{{ sevpill('medium', latest.medium) }}{% endif %}
+      {% if latest.low %}{{ sevpill('low', latest.low) }}{% endif %}
+      {% if not (latest.high or latest.medium or latest.low) %}<span class="badge text-bg-success">No issues found</span>{% endif %}
+    {% endif %}
+    <span class="ms-auto text-secondary small">{{ latest.started_at }} · by {{ latest.started_by or '—' }}</span>
+  </div>
+  {% if latest.status == 'error' %}
+    <div class="text-danger small">{{ latest.error }}</div>
+  {% elif latest.status != 'running' %}
+    <div class="sec-findings">
+      {% for f in latest.findings if f.severity != 'pass' %}
+      <div class="sec-row">
+        <span class="badge text-bg-{{ sev[f.severity] }} sec-sev">{{ sevlabel[f.severity] }}</span>
+        <div class="sec-body">
+          <div class="sec-title">{{ f.title }}</div>
+          {% if f.detail %}<div class="sec-detail text-secondary small">{{ f.detail }}</div>{% endif %}
+          {% if f.fix %}<div class="sec-fix small"><b>Fix:</b> {{ f.fix }}</div>{% endif %}
+        </div>
+        <button type="button" class="btn btn-sm btn-outline-secondary sec-copy"
+                data-copy="[{{ sevlabel[f.severity] }}] {{ f.title }}{% if f.detail %} — {{ f.detail }}{% endif %}{% if f.fix %} | Fix: {{ f.fix }}{% endif %}">Copy</button>
+      </div>
+      {% else %}
+      <div class="text-success">✅ No high / medium / low issues found in this scan.</div>
+      {% endfor %}
+    </div>
+    {% set passes = latest.findings | selectattr('severity', 'equalto', 'pass') | list %}
+    {% if passes %}
+    <details class="mt-2"><summary class="small text-secondary">{{ passes|length }} check(s) passed</summary>
+      <ul class="small text-secondary mb-0 mt-1">{% for f in passes %}<li>{{ f.title }}{% if f.detail %} — {{ f.detail }}{% endif %}</li>{% endfor %}</ul>
+    </details>
+    {% endif %}
+  {% endif %}
+</section>
+{% endif %}
+
+{% if scans|length > 1 %}
+<section class="panel">
+  <h2 class="h6 mb-2">Earlier scans</h2>
+  <table class="table table-sm mb-0 align-middle">
+    <thead><tr><th>Environment</th><th>When</th><th>By</th><th class="text-end">Findings</th><th>Status</th></tr></thead>
+    <tbody>
+      {% for s in scans[1:] %}
+      <tr>
+        <td>{{ s.env_name or s.target }}</td>
+        <td class="small text-nowrap">{{ s.started_at }}</td>
+        <td class="small">{{ s.started_by or '—' }}</td>
+        <td class="text-end">
+          {% if s.status == 'done' %}
+            {% if s.high %}{{ sevpill('high', s.high) }} {% endif %}{% if s.medium %}{{ sevpill('medium', s.medium) }} {% endif %}{% if s.low %}{{ sevpill('low', s.low) }}{% endif %}
+            {% if not (s.high or s.medium or s.low) %}<span class="text-success small">clean</span>{% endif %}
+          {% else %}—{% endif %}
+        </td>
+        <td>{% if s.status == 'done' %}<span class="text-secondary small">done</span>{% elif s.status == 'running' %}<span class="badge text-bg-info">running</span>{% else %}<span class="text-danger small">error</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<script>
+document.querySelectorAll('.sec-copy').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var t = b.getAttribute('data-copy') || '';
+    (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(function () {
+      var old = b.textContent; b.textContent = 'Copied'; setTimeout(function () { b.textContent = old; }, 1200);
+    }).catch(function () {
+      var ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy'; }, 1200); } catch (e) {}
+      ta.remove();
+    });
+  });
+});
+</script>
+{% endblock %}

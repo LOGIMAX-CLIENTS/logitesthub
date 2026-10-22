@@ -1653,3 +1653,13 @@ html:has(main.as-page), body:has(main.as-page) { overflow: hidden; }
 .ai-meter-bar.is-warn { background: var(--gold-tint, #fff3ea); } .ai-meter-bar.is-warn i { background: var(--warn); }
 .ai-meter-pct { font-weight: 700; color: var(--ink); }
 .ai-meter-meta { color: var(--muted); font-size: 12px; }
+
+/* ---- Security scan ---- */
+.sec-findings { display: flex; flex-direction: column; gap: 8px; }
+.sec-row { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2, #f7f8fc); }
+.sec-sev { flex: 0 0 auto; margin-top: 2px; }
+.sec-body { flex: 1 1 auto; min-width: 0; }
+.sec-title { font-weight: 600; font-size: 14px; }
+.sec-detail { word-break: break-word; }
+.sec-fix { margin-top: 2px; }
+.sec-copy { flex: 0 0 auto; }
