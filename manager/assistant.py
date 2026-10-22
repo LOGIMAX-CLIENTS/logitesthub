@@ -7,6 +7,7 @@ Conversations are kept in MySQL (chat_threads / chat_messages), per project.
 
 Registered from app.py with register(app, con, login_required, current_user, project_or_404, start_case_run).
 """
+import base64
 import json
 import os
 import re
@@ -14,7 +15,7 @@ import subprocess
 import threading
 import time
 
-from flask import Blueprint, abort, flash, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, abort, flash, jsonify, redirect, render_template, request, send_file, url_for
 
 import db
 
@@ -31,6 +32,32 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 ) ENGINE=InnoDB;
 """
 MAX_MSG = 4000          # characters per user message
+SHOTS_DIR = os.path.join(db.DATA, 'assistant_shots')   # optional screenshots a tester attaches to a message
+IMG_DATA_RE = re.compile(r'^data:image/(jpeg|png|webp);base64,(.+)$', re.I | re.S)
+MAX_IMG_BYTES = 6 * 1024 * 1024
+MAX_IMGS = 6            # screenshots a tester may attach to one message
+_SAFE_SHOT = re.compile(r'^[\w.-]+$')
+
+
+def _save_shot(tid, data_url):
+    """Decode a 'data:image/...;base64,...' string, save it under SHOTS_DIR, and return
+    (filename, {media_type, data}) to pass to the AI; (None, None) when there is no valid image."""
+    m = IMG_DATA_RE.match(str(data_url or '').strip())
+    if not m:
+        return None, None
+    kind = m.group(1).lower()
+    b64 = m.group(2)
+    try:
+        raw = base64.b64decode(b64, validate=True)
+    except (ValueError, Exception):
+        return None, None
+    if not raw or len(raw) > MAX_IMG_BYTES:
+        return None, None
+    os.makedirs(SHOTS_DIR, exist_ok=True)
+    fname = f"{int(tid)}-{int(time.time())}-{os.urandom(4).hex()}.{'jpg' if kind == 'jpeg' else kind}"
+    with open(os.path.join(SHOTS_DIR, fname), 'wb') as f:
+        f.write(raw)
+    return fname, {'media_type': f'image/{kind}', 'data': b64}
 HISTORY = 14            # messages sent to the AI (latest)
 
 
@@ -263,9 +290,11 @@ def stop_turn(key):
     return True
 
 
-def ask_ai(messages, context, code_dir=None, key=None):
+def ask_ai(messages, context, code_dir=None, key=None, images=None):
     """One Test Assistant turn through ai-bridge.js. Returns (data, usage, model, error); error STOPPED when stopped."""
     req = {'op': 'chat', 'messages': messages, 'context': context, 'codeDir': code_dir}
+    if images:
+        req['images'] = images
     try:
         proc = subprocess.Popen(['node', os.path.join(db.RUNNER_DIR, 'ai-bridge.js')], cwd=db.RUNNER_DIR, stdin=subprocess.PIPE,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
@@ -539,7 +568,16 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
             with c:
                 tid = c.execute('INSERT INTO chat_threads(project_id, title, created_by, created_at, updated_at) VALUES (?,?,?,?,?)',
                                 (pid, re.sub(r'\s+', ' ', text)[:120], me['username'], db.now(), db.now())).lastrowid
-        add_message(tid, 'user', text)
+        imgs_in = body.get('images')   # optional screenshots the tester attached
+        if not isinstance(imgs_in, list):
+            imgs_in = [body.get('image')] if body.get('image') else []
+        shot_names, shots_for_ai = [], []
+        for du in imgs_in[:MAX_IMGS]:
+            fn, ai = _save_shot(tid, du)
+            if fn:
+                shot_names.append(fn)
+                shots_for_ai.append(ai)
+        add_message(tid, 'user', text, data={'images': shot_names} if shot_names else None)
         b = budget.status(con(), me)
         if not b['ok']:
             msg = b['message'] + ' The Test Assistant needs AI, so it cannot answer until the limit is raised.'
@@ -583,7 +621,7 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
             context += (f"\nThis chat writes test cases for PM task {tc['task_code']} (they are linked to it when saved). "
                         "If the user has not said what the task changed, ask what to check for this task.")
         set_progress(key, 'Understanding your request' + (' and looking at the application code' if code else ''))
-        data, usage, model, err = ask_ai(hist, context, code, key)
+        data, usage, model, err = ask_ai(hist, context, code, key, images=shots_for_ai or None)
         if err == STOPPED:
             return jsonify({'ok': False, 'stopped': True, 'thread_id': tid})
         if err:
@@ -675,6 +713,27 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
                                note=f'Test Assistant chat #{tid}' + (' (Claude subscription via Claude Code)' if u.get('via') == 'claude-code' else ''))
         return jsonify({'ok': True, 'thread_id': tid, 'message': {'id': mid, 'role': 'assistant', 'text': data.get('reply') or '', 'data': out},
                         'warn': b['message'] if b.get('warn') else ''})
+
+    @bp.route('/projects/<int:pid>/assistant/shot/<int:mid>/<int:idx>')
+    @login_required
+    def shot(pid, mid, idx):
+        """One screenshot a tester attached to a message (user messages only), by message id and index."""
+        project_or_404(pid)
+        m = con().execute('SELECT m.data FROM chat_messages m JOIN chat_threads t ON t.id=m.thread_id '
+                          'WHERE m.id=? AND t.project_id=?', (mid, pid)).fetchone()
+        names = []
+        if m and m['data']:
+            try:
+                d = json.loads(m['data']) or {}
+                names = d.get('images') or ([d['image']] if d.get('image') else [])
+            except ValueError:
+                names = []
+        if idx < 0 or idx >= len(names) or not _SAFE_SHOT.match(names[idx] or ''):
+            abort(404)
+        path = os.path.join(SHOTS_DIR, names[idx])
+        if not os.path.isfile(path):
+            abort(404)
+        return send_file(path, max_age=86400)
 
     @bp.route('/projects/<int:pid>/assistant/progress', methods=['POST'])
     @login_required
