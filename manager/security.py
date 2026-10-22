@@ -380,11 +380,24 @@ def register(app, con, admin_required, current_user):
         if not e or e['owner'] is not None:
             flash('Pick a shared environment to scan.', 'danger')
             return redirect(url_for('security.page'))
-        if is_production(e['name'], e['base_url']):
+        target = e['base_url']
+        custom = (request.form.get('url') or '').strip()
+        if custom:   # scan a specific page, but only on one of our own environments' sites (no arbitrary URLs)
+            pu = urlparse(custom)
+            if pu.scheme not in ('http', 'https') or not pu.hostname:
+                flash('The URL must start with http:// or https://', 'danger')
+                return redirect(url_for('security.page'))
+            hosts = {urlparse(x['base_url']).hostname for x in envs.all_envs(con()) if x['owner'] is None}
+            if pu.hostname not in hosts:
+                flash("The URL must be on one of your environments' sites.", 'danger')
+                return redirect(url_for('security.page'))
+            target = custom
+        if is_production(e['name'], target):
             flash(f'"{e["name"]}" looks like production - security scans run on UAT / staging only.', 'danger')
             return redirect(url_for('security.page'))
-        sid, err = start_scan(con(), e, current_user()['username'], coderepo.code_dir(e))
-        flash(err or f'Scanning {e["name"]}: this page refreshes until it is done.', 'danger' if err else 'info')
+        scan_env = dict(e, base_url=target)   # same environment (name, code) but the chosen target URL
+        sid, err = start_scan(con(), scan_env, current_user()['username'], coderepo.code_dir(e))
+        flash(err or f'Scanning {target}: this page refreshes until it is done.', 'danger' if err else 'info')
         return redirect(url_for('security.page') + (f'#scan{sid}' if sid else ''))
 
     app.register_blueprint(bp)

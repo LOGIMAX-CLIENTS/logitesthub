@@ -19,6 +19,11 @@
         {% for e in envs %}<option value="{{ e.id }}" {{ 'disabled' if e.is_prod }}>{{ e.name }} — {{ e.base_url }}{{ ' (production — blocked)' if e.is_prod }}</option>{% endfor %}
       </select>
     </div>
+    <div>
+      <label class="form-label small mb-1" for="secUrl">Specific URL <span class="text-secondary">(optional)</span></label>
+      <input class="form-control form-control-sm" id="secUrl" name="url" style="min-width: 300px"
+             placeholder="defaults to the environment URL" title="A page on the same site, e.g. .../admin/reports — leave empty to scan the environment URL">
+    </div>
     <button class="btn btn-primary btn-sm" type="submit" {{ 'disabled' if not envs }}>Run scan</button>
   </form>
 </div>
