@@ -28,7 +28,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from urllib.parse import urlparse, urlunparse
 
-from flask import Blueprint, flash, redirect, render_template, request, url_for
+from flask import Blueprint, abort, flash, redirect, render_template, request, url_for
 
 import db
 
@@ -367,13 +367,40 @@ def register(app, con, admin_required, current_user):
             out.append(d)
         return out
 
+    def _findings_of(row):
+        try:
+            return json.loads(row['findings']) if row and row['findings'] else []
+        except ValueError:
+            return []
+
+    def _key(f):
+        return f'{f["check"]}|{f["title"]}'
+
     @bp.route('/security')
     @admin_required
     def page():
         import envs
         all_envs = [e for e in envs.all_envs(con()) if e['owner'] is None]   # shared environments only
         marked = [dict(e, is_prod=is_production(e['name'], e['base_url'])) for e in all_envs]
-        return render_template('security.html', envs=marked, scans=_scan_rows())
+        scans = _scan_rows()
+        # the scan shown on top: ?scan=<id> (clicked in Earlier scans), else the newest
+        sel = request.args.get('scan', type=int)
+        cur = next((s for s in scans if s['id'] == sel), None) if sel else (scans[0] if scans else None)
+        if sel and not cur:
+            r = con().execute('SELECT * FROM security_scans WHERE id=?', (sel,)).fetchone() or abort(404)
+            cur = dict(r, findings=_findings_of(r))
+        # what changed since the previous finished scan of the same URL: fixed / new / still open
+        cmp = None
+        if cur and cur['status'] == 'done':
+            p = con().execute("SELECT id, started_at, findings FROM security_scans WHERE target=? AND status='done' AND id<? "
+                              'ORDER BY id DESC LIMIT 1', (cur['target'], cur['id'])).fetchone()
+            if p:
+                issues = lambda fs: {_key(f): f for f in fs if f['severity'] in ('high', 'medium', 'low')}
+                now, before = issues(cur['findings']), issues(_findings_of(p))
+                cmp = {'prev_id': p['id'], 'prev_at': p['started_at'],
+                       'fixed': [before[k] for k in before if k not in now],
+                       'new': set(k for k in now if k not in before), 'still': sum(1 for k in now if k in before)}
+        return render_template('security.html', envs=marked, scans=scans, cur=cur, cmp=cmp, key=_key)
 
     @bp.route('/security/scan', methods=['POST'])
     @admin_required

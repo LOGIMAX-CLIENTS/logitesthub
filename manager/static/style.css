@@ -1663,3 +1663,6 @@ html:has(main.as-page), body:has(main.as-page) { overflow: hidden; }
 .sec-detail { word-break: break-word; }
 .sec-fix { margin-top: 2px; }
 .sec-copy { flex: 0 0 auto; }
+.sec-url { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sec-hist { cursor: pointer; }
+.sec-cmp { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 8px 12px; border-radius: 8px; background: var(--surface-2, #f5f6fb); font-size: 13px; }

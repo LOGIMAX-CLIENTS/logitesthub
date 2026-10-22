@@ -36,12 +36,12 @@
 
 {% macro sevpill(s, n) %}<span class="badge text-bg-{{ sev[s] }}">{{ n }} {{ sevlabel[s] }}</span>{% endmacro %}
 
-{% set latest = scans[0] if scans else none %}
+{% set latest = cur %}
 {% if latest %}
 <section class="panel mb-4" id="scan{{ latest.id }}">
   <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
     <h2 class="h6 mb-0">{{ latest.env_name or latest.target }}</h2>
-    <span class="text-secondary small">{{ latest.target }}</span>
+    <span class="text-secondary small sec-url" title="{{ latest.target }}">{{ latest.target }}</span>
     {% if latest.status == 'running' %}<span class="badge text-bg-info">Scanning… (this page refreshes)</span>
     {% elif latest.status == 'error' %}<span class="badge text-bg-danger">Error</span>
     {% else %}
@@ -51,7 +51,28 @@
       {% if not (latest.high or latest.medium or latest.low) %}<span class="badge text-bg-success">No issues found</span>{% endif %}
     {% endif %}
     <span class="ms-auto text-secondary small">{{ latest.started_at }} · by {{ latest.started_by or '—' }}</span>
+    {% if latest.env_id and latest.status != 'running' %}
+    <form method="post" action="{{ url_for('security.scan') }}" class="d-inline">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="env_id" value="{{ latest.env_id }}">
+      <input type="hidden" name="url" value="{{ latest.target }}">
+      <button class="btn btn-sm btn-outline-primary" type="submit" title="Scan this same URL again - after the developer's fix, see what is fixed">↻ Check again</button>
+    </form>
+    {% endif %}
   </div>
+  {% if cmp %}
+  <div class="sec-cmp mb-2">
+    <span>Compared with the scan of {{ cmp.prev_at }}:</span>
+    <span class="text-success fw-semibold">✅ {{ cmp.fixed|length }} fixed</span>
+    <span class="fw-semibold">🆕 {{ cmp.new|length }} new</span>
+    <span class="text-secondary">{{ cmp.still }} still open</span>
+    {% if cmp.fixed %}
+    <details class="mt-1 w-100"><summary class="small text-success">Show what got fixed</summary>
+      <ul class="small mb-0 mt-1">{% for f in cmp.fixed %}<li><s>{{ f.title }}</s> <span class="text-success">— fixed</span></li>{% endfor %}</ul>
+    </details>
+    {% endif %}
+  </div>
+  {% endif %}
   {% if latest.status == 'error' %}
     <div class="text-danger small">{{ latest.error }}</div>
   {% elif latest.status != 'running' %}
@@ -60,7 +81,7 @@
       <div class="sec-row">
         <span class="badge text-bg-{{ sev[f.severity] }} sec-sev">{{ sevlabel[f.severity] }}</span>
         <div class="sec-body">
-          <div class="sec-title">{{ f.title }}</div>
+          <div class="sec-title">{{ f.title }}{% if cmp and key(f) in cmp.new %} <span class="badge text-bg-primary">New</span>{% endif %}</div>
           {% if f.detail %}<div class="sec-detail text-secondary small">{{ f.detail }}</div>{% endif %}
           {% if f.fix %}<div class="sec-fix small"><b>Fix:</b> {{ f.fix }}</div>{% endif %}
         </div>
@@ -81,15 +102,17 @@
 </section>
 {% endif %}
 
-{% if scans|length > 1 %}
+{% set others = scans | rejectattr('id', 'equalto', cur.id if cur else 0) | list %}
+{% if others %}
 <section class="panel">
-  <h2 class="h6 mb-2">Earlier scans</h2>
-  <table class="table table-sm mb-0 align-middle">
-    <thead><tr><th>Environment</th><th>When</th><th>By</th><th class="text-end">Findings</th><th>Status</th></tr></thead>
+  <h2 class="h6 mb-2">Earlier scans <span class="text-secondary small fw-normal">— click a row to see its issues</span></h2>
+  <table class="table table-sm table-hover mb-0 align-middle">
+    <thead><tr><th>Environment</th><th>URL scanned</th><th>When</th><th>By</th><th class="text-end">Findings</th><th>Status</th></tr></thead>
     <tbody>
-      {% for s in scans[1:] %}
-      <tr>
-        <td>{{ s.env_name or s.target }}</td>
+      {% for s in others %}
+      <tr class="sec-hist" data-href="{{ url_for('security.page', scan=s.id) }}">
+        <td><a href="{{ url_for('security.page', scan=s.id) }}">{{ s.env_name or '—' }}</a></td>
+        <td class="small sec-url" title="{{ s.target }}">{{ s.target }}</td>
         <td class="small text-nowrap">{{ s.started_at }}</td>
         <td class="small">{{ s.started_by or '—' }}</td>
         <td class="text-end">
@@ -107,6 +130,9 @@
 {% endif %}
 
 <script>
+document.querySelectorAll('.sec-hist').forEach(function (tr) {   // the whole row opens that scan
+  tr.addEventListener('click', function (e) { if (!e.target.closest('a')) location.href = tr.getAttribute('data-href'); });
+});
 document.querySelectorAll('.sec-copy').forEach(function (b) {
   b.addEventListener('click', function () {
     var t = b.getAttribute('data-copy') || '';
