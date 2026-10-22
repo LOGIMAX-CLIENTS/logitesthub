@@ -24,6 +24,7 @@ import ssl
 import threading
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from urllib.parse import urlparse, urlunparse
 
@@ -68,14 +69,14 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _fetch(url, method='GET', headers=None, follow=True, max_body=40000):
+def _fetch(url, method='GET', headers=None, follow=True, max_body=40000, timeout=TIMEOUT):
     h = {'User-Agent': UA, 'Accept': '*/*'}
     if headers:
         h.update(headers)
     req = urllib.request.Request(url, method=method, headers=h)
     opener = urllib.request.build_opener() if follow else urllib.request.build_opener(_NoRedirect)
     try:
-        r = opener.open(req, timeout=TIMEOUT)
+        r = opener.open(req, timeout=timeout)
         body = r.read(max_body) or b''
         return {'status': r.status, 'headers': {k.lower(): v for k, v in r.headers.items()},
                 'set_cookie': r.headers.get_all('Set-Cookie') or [], 'body': body, 'url': r.geturl()}
@@ -205,18 +206,22 @@ EXPOSED = [   # path, a signature that must be IN the body for it to count (avoi
 ]
 
 
+def _probe(base, path, sig):
+    try:
+        r = _fetch(base + path, follow=True, timeout=5)
+    except Exception:
+        return None
+    if r['status'] == 200 and r.get('body') and sig.search(r['body'][:40000].decode('utf-8', 'replace')):
+        sev = 'high' if path in ('/.env', '/.git/config', '/.git/HEAD', '/backup.sql', '/web.config') else 'medium'
+        return _finding('exposed', sev, f'Exposed file: {path}', f'{base + path} returns real content (status 200).',
+                       f'Block {path} at the web server / move it out of the web root.')
+    return None
+
+
 def check_exposed(target):
-    out = []
     base = target.rstrip('/')
-    for path, sig in EXPOSED:
-        try:
-            r = _fetch(base + path, follow=True)
-        except Exception:
-            continue
-        if r['status'] == 200 and r.get('body') and sig.search(r['body'][:40000].decode('utf-8', 'replace')):
-            sev = 'high' if path in ('/.env', '/.git/config', '/.git/HEAD', '/backup.sql', '/web.config') else 'medium'
-            out.append(_finding('exposed', sev, f'Exposed file: {path}', f'{base + path} returns real content (status 200).',
-                               f'Block {path} at the web server / move it out of the web root.'))
+    with ThreadPoolExecutor(max_workers=6) as ex:   # the paths are independent - probe them at once, not one by one
+        out = [f for f in ex.map(lambda p: _probe(base, p[0], p[1]), EXPOSED) if f]
     if not out:
         out.append(_finding('exposed', 'pass', 'No sensitive files exposed', 'Checked common leaks (.env, .git, backups, phpinfo, server-status, ...).'))
     return out
