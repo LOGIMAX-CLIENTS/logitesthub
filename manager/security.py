@@ -227,6 +227,61 @@ def check_exposed(target):
     return out
 
 
+# Known critical PHP advisories: a version is vulnerable from `since` up to (not including) the fixed release of its
+# branch; a branch with no fixed release that is older than every fixed branch never got a fix (end of life).
+PHP_ADVISORIES = [
+    {'name': 'PHP2Shell', 'cves': 'CVE-2026-109618, CVE-2026-109619', 'since': (5, 4, 0),
+     'fixed': {(8, 5): (8, 5, 12), (8, 4): (8, 4, 27), (8, 3): (8, 3, 36), (8, 2): (8, 2, 35)},
+     'what': 'unauthenticated remote code execution (CVSS 9.2), published 2026-10-21'},
+]
+PHP_SUPPORTED_FROM = (8, 2)   # older branches are end of life: no security fixes at all
+PHP_VER_RE = re.compile(r'PHP/(\d+)\.(\d+)\.(\d+)', re.I)
+PHPINFO_VER_RE = re.compile(r'PHP Version\s*(?:</[^>]+>\s*<[^>]+>\s*)?(\d+)\.(\d+)\.(\d+)', re.I)
+
+
+def _vstr(v):
+    return '.'.join(str(x) for x in v)
+
+
+def php_findings(ver, source):
+    """Findings for one PHP version (major, minor, patch) seen at `source`."""
+    branch, out = ver[:2], []
+    for adv in PHP_ADVISORIES:
+        fixed = adv['fixed'].get(branch)
+        no_fix = fixed is None and branch < min(adv['fixed'])
+        if ver >= adv['since'] and (no_fix or (fixed and ver < fixed)):
+            fixes = ' / '.join(_vstr(v) for v in sorted(adv['fixed'].values()))
+            out.append(_finding('php', 'high', f"PHP {_vstr(ver)} is vulnerable to {adv['name']} ({adv['cves']})",
+                                f"{adv['what']}. Version seen in {source}."
+                                + (f" PHP {_vstr(branch)} gets no official fix." if no_fix else ''),
+                                f'Upgrade PHP to {_vstr(fixed)} or later.' if fixed else
+                                f'Upgrade to a supported PHP branch ({fixes} or later); until then use WAF rules and the php.net mitigations.'))
+    if branch < PHP_SUPPORTED_FROM and not out:
+        out.append(_finding('php', 'medium', f'PHP {_vstr(ver)} is end of life', f'No security fixes for PHP {_vstr(branch)}. Version seen in {source}.',
+                            f'Upgrade to PHP {_vstr(PHP_SUPPORTED_FROM)} or newer.'))
+    if not out:
+        out.append(_finding('php', 'pass', f'PHP {_vstr(ver)} has no known critical issue', f'Checked against: {", ".join(a["name"] for a in PHP_ADVISORIES)}. Version seen in {source}.'))
+    return out
+
+
+def check_php(home, target):
+    """PHP version from the X-Powered-By / Server header, else from an exposed phpinfo.php."""
+    for key in ('x-powered-by', 'server'):
+        m = PHP_VER_RE.search(home['headers'].get(key, ''))
+        if m:
+            return php_findings(tuple(int(x) for x in m.groups()), f'the {key} header')
+    try:
+        r = _fetch(target.rstrip('/') + '/phpinfo.php', timeout=5, max_body=300000)
+        m = PHPINFO_VER_RE.search(r['body'].decode('utf-8', 'replace')) if r['status'] == 200 else None
+        if m:
+            return php_findings(tuple(int(x) for x in m.groups()), 'the public /phpinfo.php')
+    except Exception:
+        pass
+    return [_finding('php', 'info', 'PHP version not visible from outside',
+                     'Hidden version is good. Confirm it on the server with php -v against the advisory list.',
+                     'Run php -v on the server; upgrade if it is below the fixed releases.')]
+
+
 def _parse_deps(code_dir):
     """(ecosystem, name, version) for lockfiles found in the synced code; best-effort, bounded."""
     deps = []
@@ -310,6 +365,7 @@ def _run(scan_id, env_id, target, code_dir):
         findings += check_cookies(home)
         findings += check_tls(home['url'])
         findings += check_exposed(target)
+        findings += check_php(home, target)
         findings += check_cve(code_dir)
         findings.sort(key=lambda f: SEV_ORDER.get(f['severity'], 9))
         counts = {s: sum(1 for f in findings if f['severity'] == s) for s in ('high', 'medium', 'low', 'pass')}
