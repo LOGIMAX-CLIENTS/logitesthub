@@ -1693,3 +1693,4 @@ html:has(main.as-page), body:has(main.as-page) { overflow: hidden; }
 .tl-phone { position: relative; }
 .tl-dot { position: absolute; width: 26px; height: 26px; margin: -13px 0 0 -13px; border-radius: 50%; background: rgba(124, 77, 255, .45); border: 2px solid #fff; pointer-events: none; animation: tl-dot .7s ease-out forwards; }
 @keyframes tl-dot { from { transform: scale(.5); opacity: 1; } to { transform: scale(1.6); opacity: 0; } }
+.tl-phone img { touch-action: none; }

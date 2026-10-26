@@ -25,7 +25,7 @@
   <div class="tl-side">
     <div class="panel">
       <h2 class="h6 mb-2">Controls</h2>
-      <div class="small text-secondary mb-2">Click the screen to tap. Drag on it to swipe / scroll.</div>
+      <div class="small text-secondary mb-2">Click the screen to tap. Drag on it, or use the mouse wheel, to swipe / scroll.</div>
       <div class="d-flex flex-wrap gap-2 mb-3">
         {% if s.platform == 'android' %}<button class="btn btn-outline-secondary btn-sm" data-key="back" type="button">◀ Back</button>{% endif %}
         <button class="btn btn-outline-secondary btn-sm" data-key="home" type="button">● Home</button>
@@ -112,18 +112,38 @@
     var r = img.getBoundingClientRect(), w = dims.w || img.naturalWidth, h = dims.h || img.naturalHeight;
     return { x: Math.round((e.clientX - r.left) * w / r.width), y: Math.round((e.clientY - r.top) * h / r.height) };
   }
+  // Drag = swipe, click = tap. Pointer capture keeps the drag even when the mouse is released outside the screen.
   var down = null;
-  img.addEventListener('mousedown', function (e) { e.preventDefault(); down = { p: toDevice(e), t: Date.now() }; });
-  img.addEventListener('mouseup', function (e) {
-    if (!down || !live) return;
-    dot(e);
-    var p = toDevice(e), dx = p.x - down.p.x, dy = p.y - down.p.y, ms = Date.now() - down.t;
-    var act = Math.hypot(dx, dy) < 25 ? { kind: 'tap', x: p.x, y: p.y } : { kind: 'swipe', x1: down.p.x, y1: down.p.y, x2: p.x, y2: p.y, ms: Math.max(200, ms) };
-    down = null;
+  img.addEventListener('pointerdown', function (e) {
+    if (e.button !== 0) return; e.preventDefault(); img.setPointerCapture(e.pointerId); down = { p: toDevice(e), t: Date.now() };
+  });
+  img.addEventListener('pointerup', function (e) {
+    if (!down || !live) { down = null; return; }
+    var p = toDevice(e), h = dims.h || img.naturalHeight, w = dims.w || img.naturalWidth;
+    p.x = Math.max(1, Math.min(w - 2, p.x)); p.y = Math.max(1, Math.min(h - 2, p.y));
+    var dx = p.x - down.p.x, dy = p.y - down.p.y, ms = Date.now() - down.t;
+    var act = Math.hypot(dx, dy) < 25 ? { kind: 'tap', x: p.x, y: p.y } : { kind: 'swipe', x1: down.p.x, y1: down.p.y, x2: p.x, y2: p.y, ms: Math.max(200, Math.min(ms, 800)) };
+    down = null; dot(e);
     say(act.kind === 'tap' ? 'Tap…' : 'Swipe…');
     post('/act', act).then(function (j) { say(j.ok ? '' : j.error, !j.ok); fresh(); });
   });
-  img.addEventListener('mouseleave', function () { down = null; });
+  img.addEventListener('pointercancel', function () { down = null; });
+
+  // Mouse wheel = scroll the part of the screen under the mouse (gathered for 120 ms, then one swipe)
+  var wheel = 0, wheelAt = null, wheelTimer = null;
+  img.addEventListener('wheel', function (e) {
+    if (!live) return; e.preventDefault();
+    wheel += e.deltaY; wheelAt = toDevice(e);
+    if (wheelTimer) return;
+    wheelTimer = setTimeout(function () {
+      var h = dims.h || img.naturalHeight, dist = Math.min(h * 0.55, Math.max(200, Math.abs(wheel) * 3));
+      var y1 = Math.max(h * 0.1, Math.min(h * 0.9, wheelAt.y)), y2 = wheel > 0 ? y1 - dist : y1 + dist;
+      y2 = Math.max(h * 0.08, Math.min(h * 0.92, y2));
+      wheel = 0; wheelTimer = null;
+      say('Scroll…');
+      post('/act', { kind: 'swipe', x1: wheelAt.x, y1: Math.round(y1), x2: wheelAt.x, y2: Math.round(y2), ms: 250 }).then(function (j) { say(j.ok ? '' : j.error, !j.ok); fresh(); });
+    }, 120);
+  }, { passive: false });
 
   document.querySelectorAll('[data-key]').forEach(function (b) {
     b.addEventListener('click', function () { if (!live) return; say(b.textContent.trim() + '…'); post('/act', { kind: 'key', key: b.dataset.key }).then(function (j) { say(j.ok ? '' : j.error, !j.ok); fresh(); }); });
