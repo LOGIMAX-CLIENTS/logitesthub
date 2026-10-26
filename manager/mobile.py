@@ -264,6 +264,21 @@ def register(app, con, login_required, admin_required, current_user):
     finally:
         cx.close()
     threading.Thread(target=_reaper, name='lth-mobile-reaper', daemon=True).start()
+
+    def _app_size_limit():
+        """An app build is far bigger than the app's 10 MB request limit. Raised for the upload only, and FIRST:
+        the CSRF check runs before the route and reads the form, which is where the limit applies."""
+        if request.endpoint == 'mobile.app_upload':
+            request.max_content_length = MAX_APP_MB * 1024 * 1024
+    app.before_request_funcs.setdefault(None, []).insert(0, _app_size_limit)
+
+    @app.errorhandler(413)
+    def _too_large(_e):
+        if request.endpoint == 'mobile.app_upload':
+            flash(f'The app is bigger than {MAX_APP_MB} MB: build a smaller one (e.g. a release APK, or one ABI).', 'danger')
+            return redirect(url_for('mobile.page'))
+        return 'The data sent is bigger than the server accepts.', 413
+
     bp = Blueprint('mobile', __name__)
 
     def body():   # the page posts a form (the app's CSRF check applies) with the data as JSON in "payload"
