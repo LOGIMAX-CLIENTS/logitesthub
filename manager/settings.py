@@ -72,6 +72,7 @@ PERMS = [   # key, label, what it covers
     ('cases.create', 'Create & import test cases', 'Add Test Case, Import _test.md files'),
     ('cases.edit', 'Edit test cases & folders', 'Edit steps / title, QA status, move; new, rename, archive folders'),
     ('ai.generate', 'Generate test cases with AI', 'Generate with AI on the web and from the CLI (uses Anthropic credits)'),
+    ('assistant.use', 'Use the Tester Assistant', 'Open the Tester Assistant and chat to draft & run test cases with AI'),
     ('runs.run', 'Run tests', 'Run a test case, Run selected, Verify code, AI steps from the CLI'),
     ('testruns.manage', 'Manage test runs & schedules', 'Create, edit, delete and execute test runs; schedules'),
     ('runs.share', 'Share run links', 'Public links to a run report (with expiry)'),
@@ -100,7 +101,7 @@ ENDPOINT_PERM = {
     'project_login': 'cases.edit', 'api.sql': 'runs.run', 'api.sql_write': 'runs.run', 'api.memory_set': 'runs.run', 'modules.setup': 'cases.edit', 'modules.read': 'cases.edit', 'modules.parse': 'cases.edit',
     'modules.apply': 'cases.edit', 'modules.shot': 'cases.edit', 'modules.parse_file': 'cases.edit',
     'api.modules_push': 'cases.edit', 'api.case_update': 'cases.edit',
-    'assistant.send': 'ai.generate', 'assistant.save': 'cases.create',
+    'assistant.home': 'assistant.use', 'assistant.page': 'assistant.use', 'assistant.send': 'assistant.use', 'assistant.save': 'cases.create',
     'lessons.new': 'cases.edit', 'lessons.update': 'cases.edit', 'api.lessons_add': 'runs.run',
     'api.workspace_report': 'runs.run',
 }

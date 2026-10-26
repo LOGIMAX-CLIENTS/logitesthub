@@ -1533,7 +1533,8 @@ def _env_owner_for_form(existing, me):
 
 
 def _env_editable(e, me):
-    return bool(e) and (e['owner'] == me['username'] if e['owner'] else _is_admin(me))
+    # personal env: its owner; shared env: a role with 'manage' access (admins by default, superadmin always)
+    return bool(e) and envs.can_manage(con(), e, me)
 
 
 def _env_form(existing=None, owner=None):
@@ -1623,7 +1624,11 @@ def environments():
                   + (' Copying its code repository now.' if rv['repo_url'] and not coderepo.is_local(rv['repo_url']) else ''),
                   'success')
         return redirect(url_for('environments'))
-    return render_template('environments.html', envs=envs.all_envs(con(), me), can_shared=_is_admin(me))
+    import settings
+    me_envs = envs.all_envs(con(), me)
+    access = {e['id']: envs.access_map(con(), e['id']) for e in me_envs if e['owner'] is None}
+    return render_template('environments.html', envs=me_envs, can_shared=_is_admin(me), env_access=access,
+                           access_roles=[(r, settings.ROLE_LABEL.get(r, r)) for r in settings.EDITABLE_ROLES])
 
 
 @app.route('/admin/environments/<int:eid>', methods=['POST'])
@@ -1674,6 +1679,23 @@ def environment_update(eid):
                 flash(f'Environment "{v["name"]}" saved.' + (' Copying its code repository now.' if resync else ''), 'success')
     if resync:
         coderepo.start_sync(eid)   # after the save is committed, so the copy reads the new settings
+    return redirect(url_for('environments') + f'#env{eid}')
+
+
+@app.route('/admin/environments/<int:eid>/access', methods=['POST'])
+@login_required
+def environment_access(eid):
+    """Set each role's access (hidden / use / manage / default) to a shared environment. Admins only."""
+    import settings
+    me = current_user()
+    e = con().execute('SELECT id, name, owner FROM environments WHERE id=?', (eid,)).fetchone() or abort(404)
+    if e['owner'] or not _is_admin(me):
+        abort(403)   # access control is for shared environments, set by admins
+    with con():
+        for role in settings.EDITABLE_ROLES:
+            lvl = request.form.get('role_' + role, 'default')
+            envs.set_access(con(), eid, role, lvl if lvl in ('hidden', 'use', 'manage', 'default') else 'default')
+    flash(f'Access for "{e["name"]}" updated.', 'success')
     return redirect(url_for('environments') + f'#env{eid}')
 
 

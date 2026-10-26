@@ -92,6 +92,10 @@ def init(con):
     con.execute('CREATE TABLE IF NOT EXISTS run_memory (env_id INT NOT NULL, name VARCHAR(64) NOT NULL, '
                 'value VARCHAR(1000) NULL, updated_by VARCHAR(64), updated_at VARCHAR(32) NOT NULL, '
                 'PRIMARY KEY (env_id, name)) ENGINE=InnoDB')
+    # per-role access to a shared environment: hidden (not shown) / use (see + run, no edit) / manage (edit config).
+    # No row = the default for the role (admins manage, everyone else uses), so existing setups keep working.
+    con.execute('CREATE TABLE IF NOT EXISTS env_role_access (env_id INT NOT NULL, role VARCHAR(16) NOT NULL, '
+                "level VARCHAR(8) NOT NULL, PRIMARY KEY (env_id, role)) ENGINE=InnoDB")
     # first start only: create "Dev" from the shared variables file so existing runs keep working.
     # Remembered in settings, so an admin who deletes every environment does not get "Dev" back on restart.
     if con.execute("SELECT 1 FROM settings WHERE name='envs.seeded'").fetchone():
@@ -119,27 +123,99 @@ def visible(env, user):
     return bool(env) and (env['owner'] is None or env['owner'] == _username(user))
 
 
+# ---------------------------------------------------------------- per-role access: hidden / use / manage
+LEVELS = ('hidden', 'use', 'manage')
+
+
+def _role(user):
+    return None if (not user or isinstance(user, str)) else user['role']
+
+
+def role_levels(con, role):
+    """{env_id: level} - the explicit overrides set for this role (empty when the role has none)."""
+    if not role:
+        return {}
+    return {r['env_id']: r['level'] for r in con.execute(
+        'SELECT env_id, level FROM env_role_access WHERE role=?', (role,)).fetchall()}
+
+
+def level_of(env, role, uname, overrides):
+    """This (env, role) access level. Personal env -> only its owner (manage); shared env -> the role's override,
+    else the default (admins manage, everyone else uses). Superadmin is never locked out; an unknown role keeps the
+    old behaviour (usable)."""
+    if not env:
+        return 'hidden'
+    if env['owner']:
+        return 'manage' if env['owner'] == uname else 'hidden'
+    if role == 'superadmin':
+        return 'manage'
+    if role is None:
+        return 'use'
+    return overrides.get(env['id']) or ('manage' if role == 'admin' else 'use')
+
+
+def access_level(con, env, user):
+    role = _role(user)
+    return level_of(env, role, _username(user), role_levels(con, role))
+
+
+def can_manage(con, env, user):
+    return access_level(con, env, user) == 'manage'
+
+
+def _usable(con, env, user):
+    return access_level(con, env, user) in ('use', 'manage')
+
+
+def access_map(con, env_id):
+    """{role: level} of the explicit overrides on this environment (for the Environments page)."""
+    return {r['role']: r['level'] for r in con.execute(
+        'SELECT role, level FROM env_role_access WHERE env_id=?', (env_id,)).fetchall()}
+
+
+def set_access(con, env_id, role, level):
+    """Set (or clear, with level='default') one role's access to an environment."""
+    if level == 'default':
+        con.execute('DELETE FROM env_role_access WHERE env_id=? AND role=?', (env_id, role))
+    elif level in LEVELS:
+        con.execute('INSERT INTO env_role_access(env_id, role, level) VALUES (?,?,?) '
+                    'ON DUPLICATE KEY UPDATE level=VALUES(level)', (env_id, role, level))
+
+
 def all_envs(con, user=None):
-    """Shared environments first (default on top), then the user's personal ones. user=None: every environment."""
+    """Shared environments first (default on top), then the user's personal ones. user=None: every environment.
+    With a user, environments this user's role may not see (access 'hidden') are left out."""
     where, params = ('WHERE ' + visible_sql(user)[0], visible_sql(user)[1]) if user else ('', [])
-    return con.execute('SELECT id, name, base_url, username, branch, note, is_default, updated_at, login_steps, menu_url, '
+    rows = con.execute('SELECT id, name, base_url, username, branch, note, is_default, updated_at, login_steps, menu_url, '
                        'db_host, db_port, db_name, db_user, (db_password_enc IS NOT NULL) AS has_db_password, '
                        'db_write_user, (db_write_password_enc IS NOT NULL) AS has_db_write_password, db_allow_write, '
                        '(password_enc IS NOT NULL) AS has_password, repo_url, repo_branch, repo_paths, repo_commit, '
                        'repo_synced_at, repo_status, repo_error, (repo_token_enc IS NOT NULL) AS has_repo_token, owner, created_by, '
                        'db_on_pc '
                        f'FROM environments {where} ORDER BY owner IS NOT NULL, is_default DESC, name', params).fetchall()
+    if not user:
+        return rows
+    role, uname, ov = _role(user), _username(user), role_levels(con, _role(user))
+    return [r for r in rows if level_of(r, role, uname, ov) != 'hidden']
 
 
 def get(con, env_id=None, user=None):
-    """The environment by id, else the default (shared) one; None if there are none.
-    With user: only an environment that user may see (shared, or their own) - another user's personal id gives the
-    default instead. Without user (background runs, already checked when they started): any environment."""
+    """The environment by id, else the default (shared) one the user may use; None if there are none.
+    With user: only an environment that user's role may USE (shared+allowed, or their own personal one) - an id the
+    user may not use gives their default instead. Without user (background runs, already checked when they started):
+    any environment."""
     if env_id:
         r = con.execute('SELECT * FROM environments WHERE id=?', (env_id,)).fetchone()
-        if r and (user is None or visible(r, user)):
+        if r and (user is None or _usable(con, r, user)):
             return r
-    return con.execute('SELECT * FROM environments ORDER BY owner IS NOT NULL, is_default DESC, id LIMIT 1').fetchone()
+    cands = con.execute('SELECT * FROM environments ORDER BY owner IS NOT NULL, is_default DESC, id').fetchall()
+    if user is None:
+        return cands[0] if cands else None
+    role, uname, ov = _role(user), _username(user), role_levels(con, _role(user))
+    for r in cands:   # the user's default = the first shared env their role may use
+        if level_of(r, role, uname, ov) in ('use', 'manage'):
+            return r
+    return None
 
 
 def vars_file(env):
