@@ -240,11 +240,11 @@ def register(app, con, admin_required, project_or_404):
 
     @bp.route('/admin/environments/<int:eid>/code', methods=['POST'])
     def action(eid):
-        import settings
+        import envs
         from flask import session
         me = con().execute('SELECT * FROM users WHERE id=?', (session.get('uid'),)).fetchone() if session.get('uid') else None
         e = con().execute('SELECT id, name, owner FROM environments WHERE id=?', (eid,)).fetchone() or abort(404)
-        if not me or not (e['owner'] == me['username'] if e['owner'] else settings.is_admin(me['role'])):
+        if not me or not envs.can_manage(con(), e, me):   # needs 'manage' access on this environment
             abort(404)
         if request.form.get('action') == 'sync':
             flash(f'Copying the code for {e["name"]}: this page refreshes until it is done.' if start_sync(eid)

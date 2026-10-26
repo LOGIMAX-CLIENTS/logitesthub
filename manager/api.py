@@ -720,6 +720,8 @@ def _env_from(value):
                             'ORDER BY owner IS NULL LIMIT 1', (int(v) if v.isdigit() else -1, v, me)).fetchone()
     if not row:
         return None, _error(404, f'Environment "{v}" not found.')
+    if not envs._usable(g.api_con, row, g.api_user):   # the caller's role must be allowed to use this environment
+        return None, _error(403, f'Your role is not allowed to use the "{row["name"]}" environment.')
     return row, None
 
 

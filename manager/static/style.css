@@ -1653,3 +1653,9 @@ html:has(main.as-page), body:has(main.as-page) { overflow: hidden; }
 .ai-meter-bar.is-warn { background: var(--gold-tint, #fff3ea); } .ai-meter-bar.is-warn i { background: var(--warn); }
 .ai-meter-pct { font-weight: 700; color: var(--ink); }
 .ai-meter-meta { color: var(--muted); font-size: 12px; }
+
+/* ---- Environment access by role ---- */
+.env-access { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px 14px; }
+.env-access-row { display: flex; align-items: center; gap: 8px; margin: 0; }
+.env-access-role { flex: 0 0 90px; font-size: 13px; font-weight: 600; }
+.env-access-row select { flex: 1 1 auto; }
