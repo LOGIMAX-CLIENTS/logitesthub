@@ -135,7 +135,8 @@ document.querySelectorAll('.db-test').forEach(function (b) {
     {% if can_edit %}
     <div class="env-meta">
       <span>User <b>{{ e.username or '-' }}</b></span><span>Password <b>{{ 'saved (encrypted)' if e.has_password else 'not set' }}</b></span>
-      <span>Branch <b>{{ e.branch or '-' }}</b></span><span>Database <b>{{ (e.db_user ~ '@' ~ e.db_host ~ '/' ~ e.db_name) if e.db_host else 'not set' }}</b>{% if e.db_host %}
+      <span>Branch <b>{{ e.branch or '-' }}</b></span><span>Database <b>{{ (e.db_user ~ '@' ~ e.db_host ~ '/' ~ e.db_name) if e.db_host else 'not set' }}</b>{% if e.db_host and e.db_on_pc %}
+        <span class="badge text-bg-light border ms-1" title="Added with tester env add. The Tester CLI on this user's PC runs the database steps; LogiTestHub keeps no password for it and cannot reach it.">on {{ 'my' if e.owner == me.username else 'the owner\'s' }} PC</span>{% elif e.db_host %}
         <button type="button" class="btn btn-link btn-sm p-0 ms-1 align-baseline db-test" data-url="{{ url_for('environment_db_test', eid=e.id) }}">Test connection</button><span class="db-test-msg small ms-1"></span>{% endif %}</span>
       {% if e.db_host %}<span>Set up SQL <b>{{ ('on · ' ~ e.db_write_user) if e.db_allow_write and e.db_write_user else 'off' }}</b></span>{% endif %}{% if e.note %}<span>{{ e.note }}</span>{% endif %}<span>Updated {{ e.updated_at|ago }}</span>
     </div>
