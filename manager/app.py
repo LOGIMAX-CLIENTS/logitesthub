@@ -1560,7 +1560,8 @@ def _env_form(existing=None, owner=None):
         return None, 'Database port must be a number (e.g. 3306).'
     if any((db_host, db_name, db_user)) and not all((db_host, db_name, db_user)):
         return None, 'Database: fill in host, database name and user together (or leave all three blank).'
-    if db_user and db_user.lower() in ('root', 'admin'):
+    on_pc = bool(existing and existing['db_on_pc'])   # the owner's own PC database: the CLI there reads it, read-only
+    if db_user and db_user.lower() in ('root', 'admin') and not on_pc:
         return None, 'Database: use a read-only user (SELECT only), never root / admin.'
     dpw = f.get('db_password', '')
     db_pw_enc = (existing['db_password_enc'] if existing else None) if dpw == '' else envs.encrypt(dpw)

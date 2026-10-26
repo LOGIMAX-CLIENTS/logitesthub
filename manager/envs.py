@@ -77,7 +77,10 @@ def init(con):
                             ('environments', 'db_allow_write', 'ALTER TABLE environments ADD COLUMN db_write_user VARCHAR(64) NULL, '
                              'ADD COLUMN db_write_password_enc TEXT NULL, ADD COLUMN db_allow_write TINYINT NOT NULL DEFAULT 0'),
                             # personal environments: owner = username (only they see it); NULL = shared
-                            ('environments', 'owner', 'ALTER TABLE environments ADD COLUMN owner VARCHAR(64) NULL')):
+                            ('environments', 'owner', 'ALTER TABLE environments ADD COLUMN owner VARCHAR(64) NULL'),
+                            # a personal environment whose database is on its owner's PC (e.g. XAMPP MySQL): the Tester
+                            # CLI on that PC runs the SQL steps; this server cannot reach it and keeps no password for it
+                            ('environments', 'db_on_pc', 'ALTER TABLE environments ADD COLUMN db_on_pc TINYINT NOT NULL DEFAULT 0')):
         n = con.execute('SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() '
                         'AND TABLE_NAME=? AND COLUMN_NAME=?', (table, col)).fetchone()['n']
         if not n:
@@ -123,7 +126,8 @@ def all_envs(con, user=None):
                        'db_host, db_port, db_name, db_user, (db_password_enc IS NOT NULL) AS has_db_password, '
                        'db_write_user, (db_write_password_enc IS NOT NULL) AS has_db_write_password, db_allow_write, '
                        '(password_enc IS NOT NULL) AS has_password, repo_url, repo_branch, repo_paths, repo_commit, '
-                       'repo_synced_at, repo_status, repo_error, (repo_token_enc IS NOT NULL) AS has_repo_token, owner, created_by '
+                       'repo_synced_at, repo_status, repo_error, (repo_token_enc IS NOT NULL) AS has_repo_token, owner, created_by, '
+                       'db_on_pc '
                        f'FROM environments {where} ORDER BY owner IS NOT NULL, is_default DESC, name', params).fetchall()
 
 
@@ -183,13 +187,22 @@ def check_select(sql):
 
 
 def db_configured(env):
-    return bool(env and env['db_host'] and env['db_name'] and env['db_user'])
+    """This server can query the environment's database (one on its owner's PC is reached only by the Tester CLI there)."""
+    return bool(env and env['db_host'] and env['db_name'] and env['db_user'] and not env.get('db_on_pc'))
+
+
+def on_pc_error(env):
+    """The database is on the owner's PC: only the Tester CLI there can reach it."""
+    return DbError(f'The database of "{env["name"]}" is on {env["owner"] or "its owner"}\'s PC: LogiTestHub cannot reach it. '
+                   f'Run the test with the Tester CLI on that PC: tester run ... --env "{env["name"]}".')
 
 
 def db_query(env, sql):
     """Runs one SELECT on the environment's database in a READ ONLY session.
     -> {'columns': [...], 'rows': [[...], ...] (max MAX_ROWS), 'value': first cell as text or None, 'count': n}"""
     import pymysql
+    if env and env.get('db_on_pc'):
+        raise on_pc_error(env)
     if not db_configured(env):
         raise DbError(f'Environment "{env["name"] if env else "?"}" has no database set (Settings -> Environments -> Database).')
     s = check_select(sql)
@@ -268,6 +281,8 @@ def db_write(env, sql):
     """Runs one INSERT / UPDATE / DELETE with the environment's write user, in a transaction that is rolled back
     when it would change more than MAX_WRITE_ROWS rows. -> {'affected': n}"""
     import pymysql
+    if env and env.get('db_on_pc'):
+        raise on_pc_error(env)
     if not db_write_configured(env):
         raise DbError(f'Environment "{env["name"] if env else "?"}" does not allow test-data setup '
                       '(Settings -> Environments -> Database -> Allow "Set up SQL" steps, with a write user).')
