@@ -39,12 +39,22 @@
       The AI key stays on the LogiTestHub server; AI use counts against your monthly AI limit.</p>
     {{ cmd(login_cmd) }}</div></div>
   <div class="cli-step"><span class="cli-n">3</span><div>
+    <h2>Add your local environment (only for me)</h2>
+    <p>Your own site and database (e.g. XAMPP on this PC) as an environment that only you see in
+      <a href="{{ url_for('environments') }}">Settings → Environments</a>. The same fields as that form: site URL, login,
+      branch, note, database host / port / name / user, and a write user for "Set up SQL" steps.
+      Run it in your own terminal: it asks the passwords there, never in a chat.</p>
+    {{ cmd('tester env add --name Local --url http://localhost/your-app/admin/ --login-user admin --db-host localhost --db-port 3306 --db-name your_db --db-user root --db-write-user root') }}
+    <p class="mt-2 mb-1">A database on this PC (localhost / LAN) is reached only from here: its passwords stay on this PC, and your runs with
+      <code>--env Local</code> run their database steps from here. In VS Code you can also ask Claude: <i>"connect my local DB"</i>.</p>
+    {{ cmd('tester env list') }}</div></div>
+  <div class="cli-step"><span class="cli-n">4</span><div>
     <h2>Run a test in plain English</h2>
     <p>One step per line or sentence. <code>--project</code> saves the run (video, screenshots) in that project, folder <b>CLI runs</b>.</p>
     {{ cmd('tester run "Type admin into the Username field. Type {{password}} into the Password field. Click the Login button. Assert the text \'Dashboard\' is visible." --url https://your-site/admin/ --secret password=xxxx --project 1') }}
     <p class="mt-2 mb-1">Or run a saved test case, or a <code>_test.md</code> file:</p>
     {{ cmd('tester run --case 23 --url https://your-site/admin/') }}</div></div>
-  <div class="cli-step"><span class="cli-n">4</span><div>
+  <div class="cli-step"><span class="cli-n">5</span><div>
     <h2>Generate test cases for your change</h2>
     <p>Run it inside your git repository: <code>--diff</code> sends your uncommitted changes (or <code>--diff main</code> for the branch) so the cases cover the code you touched. They are saved for review, not run.</p>
     {{ cmd('tester generate "GRN entry must block negative pcs across lots" --project 1 --diff') }}</div></div>
@@ -58,6 +68,7 @@
       <tr><td class="text-start"><code>tester run … --headed</code></td><td class="text-start">Watch the browser instead of headless</td></tr>
       <tr><td class="text-start"><code>--var k=v</code> · <code>--secret k=v</code> · <code>--vars file.json</code></td><td class="text-start">Values for <code>{{ '{{' }}placeholders{{ '}}' }}</code>; secrets are masked in logs, report and video captions</td></tr>
       <tr><td class="text-start"><code>--no-upload</code> · <code>--no-ai</code></td><td class="text-start">Keep the run only on this PC · skip AI steps</td></tr>
+      <tr><td class="text-start"><code>tester env list</code> · <code>tester env add …</code> · <code>--env Local</code></td><td class="text-start">Your environments · add / update your own (only for me) · run with its database</td></tr>
       <tr><td class="text-start"><code>tester usage</code></td><td class="text-start">Your AI use and limit this month</td></tr>
       <tr><td class="text-start"><code>tester whoami</code> · <code>tester logout</code></td><td class="text-start">Who is logged in · remove the access key from this PC</td></tr>
     </tbody>

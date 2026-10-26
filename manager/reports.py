@@ -27,8 +27,8 @@ def _date(s, default):
 
 
 def _filters(a):
-    """Period + project from the query string; defaults to the last 30 days like AI Usage."""
-    d_from = _date(a.get('from'), date.today() - timedelta(days=29))
+    """Period + project from the query string; defaults to today (From and To = today)."""
+    d_from = _date(a.get('from'), date.today())
     d_to = _date(a.get('to'), date.today())
     today = date.today().isoformat()
     d_from, d_to = min(d_from, today), min(d_to, today)   # no future dates: nothing can have happened yet
@@ -132,6 +132,95 @@ def make_blueprint(con, admin_required):
             'LEFT JOIN (SELECT run_id, SUM(calls) AS calls, SUM(input_tokens + output_tokens) AS tok, SUM(cost_usd) AS cost '
             '           FROM ai_usage WHERE run_id IS NOT NULL GROUP BY run_id) au ON au.run_id=r.id '
             f'WHERE {" AND ".join(where)} ORDER BY r.id DESC LIMIT 1000', params).fetchall()
+
+    def daily(d_from, d_end, pid, dept='', user=''):
+        """Runs in the period grouped by user, by day + user and by PM task code. A run's task: the task its link went to
+        PM with (pm_run_links), else every task its test case is linked to (case_tasks); a run with neither has none."""
+        c = con()
+        where, params = ['r.started_at >= ?', 'r.started_at < ?'], [d_from, d_end]
+        if pid:
+            where.append('c.project_id=?')
+            params.append(pid)
+        if user:
+            cond, p2 = _user_cond('r.run_by', user)
+            where.append(cond)
+            params += p2
+        runs = c.execute('SELECT r.id, r.case_id, r.run_by AS u, LEFT(r.started_at, 10) AS d, r.status, r.started_at '
+                         f'FROM runs r JOIN cases c ON c.id=r.case_id WHERE {" AND ".join(where)} ORDER BY r.started_at',
+                         params).fetchall()
+        depts = {r['username']: r['department'] for r in c.execute('SELECT username, department FROM users')}
+        if dept:
+            runs = [r for r in runs if (depts.get(r['u']) or '-') == dept]
+        case_codes, run_code = {}, {}
+        if runs:
+            ids = sorted({r['case_id'] for r in runs})
+            for i in range(0, len(ids), 500):
+                chunk = ids[i:i + 500]
+                for t in c.execute(f'SELECT case_id, task_code FROM case_tasks WHERE case_id IN ({",".join("?" * len(chunk))})', chunk):
+                    case_codes.setdefault(t['case_id'], set()).add(t['task_code'])
+            rids = [r['id'] for r in runs]
+            for i in range(0, len(rids), 500):
+                chunk = rids[i:i + 500]
+                for t in c.execute(f'SELECT run_id, task_code FROM pm_run_links WHERE run_id IN ({",".join("?" * len(chunk))})', chunk):
+                    run_code[t['run_id']] = t['task_code']
+
+        def blank():
+            return {'cases': set(), 'runs': 0, 'passed': 0, 'failed': 0, 'codes': {}}
+
+        def add(b, r, codes):
+            b['cases'].add(r['case_id'])
+            b['runs'] += 1
+            b['passed'] += r['status'] == 'PASSED'
+            b['failed'] += r['status'] in ('FAILED', 'ERROR')
+            for code in codes:
+                b['codes'].setdefault(code, set()).add(r['case_id'])
+
+        by_user, by_day, by_task = {}, {}, {}
+        for r in runs:
+            u = r['u'] or NO_USER
+            codes = {run_code[r['id']]} if r['id'] in run_code else case_codes.get(r['case_id'], set())
+            add(by_user.setdefault(u, dict(blank(), days=set())), r, codes)
+            by_user[u]['days'].add(r['d'])
+            add(by_day.setdefault((r['d'], u), blank()), r, codes)
+            for code in codes:
+                t = by_task.setdefault(code, dict(blank(), users=set(), last=None))
+                add(t, r, ())
+                t['users'].add(u)
+                t['last'] = max(t['last'] or '', r['started_at'])
+
+        def out(b, **extra):
+            return {**extra, 'cases': len(b['cases']), 'runs': b['runs'], 'passed': b['passed'], 'failed': b['failed'],
+                    'codes': sorted(((k, len(v)) for k, v in b['codes'].items()), key=lambda x: (-x[1], x[0]))}
+
+        users_ = sorted((out(b, user=u, days=len(b['days'])) for u, b in by_user.items()), key=lambda x: (-x['runs'], x['user']))
+        days = [out(b, day=d, user=u) for (d, u), b in sorted(by_day.items(), key=lambda kv: (kv[0][0], kv[0][1]), reverse=True)]
+        tasks = sorted(({'code': k, 'users': sorted(b['users']), 'cases': len(b['cases']), 'runs': b['runs'], 'passed': b['passed'],
+                         'failed': b['failed'], 'last': b['last']} for k, b in by_task.items()), key=lambda x: (-x['runs'], x['code']))
+        total = {'runs': len(runs), 'cases': len({r['case_id'] for r in runs}), 'tasks': len(by_task), 'users': len(by_user),
+                 'passed': sum(r['status'] == 'PASSED' for r in runs), 'failed': sum(r['status'] in ('FAILED', 'ERROR') for r in runs)}
+        return users_, days, tasks, total
+
+    @bp.route('/daily')
+    @admin_required
+    def daily_report():
+        """Who ran how many test cases each day, and for which PM tasks (a task code with its number of test cases)."""
+        import settings
+        a = request.args
+        d_from, d_to, d_end, pid = _filters(a)
+        dept = a.get('dept', '').strip()
+        dept = dept if dept in settings.DEPARTMENTS or dept == '-' else ''
+        user = a.get('user', '').strip()
+        users_, days, tasks, total = daily(d_from, d_end, pid, dept, user)
+        if a.get('format') == 'csv':
+            return _csv(f'runs-by-day-and-task-{d_from}-to-{d_to}',
+                        ['Date', 'User', 'Test cases run', 'Runs', 'Passed', 'Failed', 'Task codes', 'Task codes (test cases)'],
+                        [[r['day'], '(not recorded)' if r['user'] == NO_USER else r['user'], r['cases'], r['runs'], r['passed'],
+                          r['failed'], len(r['codes']), '; '.join(f'{k} ({n})' for k, n in r['codes'])] for r in days])
+        projects = con().execute('SELECT id, name FROM projects ORDER BY name').fetchall()
+        people = [r['username'] for r in con().execute('SELECT username FROM users ORDER BY username')]
+        return render_template('daily_report.html', users_=users_, days=days, tasks=tasks, total=total, d_from=d_from, d_to=d_to,
+                               today=date.today().isoformat(), pid=pid, projects=projects, dept=dept, user=user, people=people,
+                               no_user=NO_USER)
 
     @bp.route('/users')
     @admin_required

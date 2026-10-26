@@ -1,0 +1,103 @@
+{% extends 'base.html' %}
+{% macro link(extra={}) -%}
+{{ url_for('reports.daily_report', **dict({'from': d_from, 'to': d_to, 'project': pid or None, 'dept': dept or None, 'user': user or None}, **extra)) }}
+{%- endmacro %}
+{% macro who(u) %}{% if u == no_user %}<span class="text-secondary">(not recorded)</span>{% else %}<a href="{{ link({'user': u}) }}" title="Only {{ u }}"><b>{{ u }}</b></a>{% endif %}{% endmacro %}
+{% macro codes(list, u=None) %}{% for code, n in list %}<a class="task-badge me-1 mb-1" href="{{ url_for('pmtasks.page', code=code, by=u if u and u != no_user else None) }}"
+   title="{{ n }} test case{{ 's' if n != 1 }} for {{ code }}">{{ code }} · {{ n }}</a>{% else %}<span class="text-secondary small">no task</span>{% endfor %}{% endmacro %}
+{% block title %}Runs by day & task{% endblock %}
+{% block bodyclass %}rep-page{% endblock %}
+{% block crumbs %}<span class="tm-crumbs"><b>User Report</b> <span>/</span> By day &amp; task</span>{% endblock %}
+{% block content %}
+<div class="rep-head">
+  <div class="rep-title">
+    <h1 class="h5 mb-0">Runs by day &amp; task{% if user %} · {{ '(not recorded)' if user == no_user else user }}{% endif %}</h1>
+    <span class="text-secondary small">Who ran how many test cases each day, and for which PM task (task code · its test cases). Click a task code for its page.</span>
+  </div>
+  <div class="d-flex gap-2">
+    <div class="btn-group btn-group-sm" role="group" aria-label="Report">
+      <a class="btn btn-outline-secondary" href="{{ url_for('reports.users', **{'from': d_from, 'to': d_to, 'project': pid or None, 'dept': dept or None}) }}">By user</a>
+      <a class="btn btn-outline-secondary active" href="{{ link() }}">By day &amp; task</a>
+    </div>
+    <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('reports.daily_report', **dict(request.args, format='csv')) }}">Export CSV</a>
+  </div>
+</div>
+
+<form class="rep-bar panel" method="get" action="{{ url_for('reports.daily_report') }}">
+  <div class="rep-filters">
+    <label for="f1">From</label><input class="form-control form-control-sm" id="f1" type="date" name="from" value="{{ d_from }}" max="{{ d_to }}" required>
+    <label for="f2">To</label><input class="form-control form-control-sm" id="f2" type="date" name="to" value="{{ d_to }}" min="{{ d_from }}" max="{{ today }}" required>
+    <label for="f3">Project</label><select class="form-select form-select-sm" id="f3" name="project"><option value="">All</option>{% for p in projects %}<option value="{{ p.id }}" {{ 'selected' if pid == p.id }}>{{ p.name }}</option>{% endfor %}</select>
+    <label for="f4">Department</label><select class="form-select form-select-sm" id="f4" name="dept"><option value="">All</option>{% for d in departments %}<option {{ 'selected' if dept == d }}>{{ d }}</option>{% endfor %}<option value="-" {{ 'selected' if dept == '-' }}>Not set</option></select>
+    <label for="f5">User</label><select class="form-select form-select-sm" id="f5" name="user"><option value="">All</option>{% for u in people %}<option {{ 'selected' if user == u }}>{{ u }}</option>{% endfor %}</select>
+    <button class="btn btn-primary btn-sm">Apply</button><a class="btn btn-link btn-sm px-1" href="{{ url_for('reports.daily_report') }}">Reset</a>
+  </div>
+</form>
+
+<div class="tiles rep-tiles">
+  <div class="tile"><span class="n">{{ total.cases }}</span><span>Test cases run · {{ total.runs }} runs</span></div>
+  <div class="tile"><span class="n">{{ total.passed }}</span><span>Passed runs · {{ total.failed }} failed</span></div>
+  <div class="tile"><span class="n">{{ total.tasks }}</span><span>PM task codes tested</span></div>
+  <div class="tile"><span class="n">{{ total.users }}</span><span>Users who ran tests</span></div>
+</div>
+
+<div class="panel p-0 mb-3">
+  <div class="au-head"><b>By user</b><span class="small text-secondary">Test cases run = different test cases (a case run 3 times counts once) · task codes = PM tasks those runs were for</span></div>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0 au-table">
+      <thead><tr><th class="text-start">User</th><th class="text-end">Days</th><th class="text-end">Test cases run</th><th class="text-end">Runs</th><th class="text-end">Passed</th><th class="text-end">Failed</th><th class="text-end">Task codes</th><th class="text-start">Task code · test cases</th></tr></thead>
+      <tbody>
+      {% for r in users_ %}
+      <tr><td class="text-start">{{ who(r.user) }}</td><td class="text-end">{{ r.days }}</td><td class="text-end"><b>{{ r.cases }}</b></td>
+        <td class="text-end"><a href="{{ url_for('reports.users', **{'from': d_from, 'to': d_to, 'project': pid or None, 'detail': 'runs', 'user': r.user}) }}">{{ r.runs }}</a></td>
+        <td class="text-end t-pass">{{ r.passed }}</td><td class="text-end {{ 't-fail' if r.failed }}">{{ r.failed }}</td>
+        <td class="text-end"><b>{{ r.codes|length }}</b></td><td class="text-start">{{ codes(r.codes, r.user) }}</td></tr>
+      {% else %}<tr><td colspan="8" class="text-secondary text-center py-4">No runs in this period.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="panel p-0 mb-3">
+  <div class="au-head"><b>By day</b><span class="small text-secondary">Newest first · one row per user per day</span></div>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0 au-table">
+      <thead><tr><th class="text-start">Date</th><th class="text-start">User</th><th class="text-end">Test cases run</th><th class="text-end">Runs</th><th class="text-end">Passed</th><th class="text-end">Failed</th><th class="text-end">Task codes</th><th class="text-start">Task code · test cases</th></tr></thead>
+      <tbody>
+      {% for r in days %}
+      <tr><td class="text-start text-nowrap">{{ r.day|dmy }}</td><td class="text-start">{{ who(r.user) }}</td><td class="text-end"><b>{{ r.cases }}</b></td>
+        <td class="text-end">{{ r.runs }}</td><td class="text-end t-pass">{{ r.passed }}</td><td class="text-end {{ 't-fail' if r.failed }}">{{ r.failed }}</td>
+        <td class="text-end">{{ r.codes|length }}</td><td class="text-start">{{ codes(r.codes, r.user) }}</td></tr>
+      {% else %}<tr><td colspan="8" class="text-secondary text-center py-4">No runs in this period.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="panel p-0 mb-0">
+  <div class="au-head"><b>By task code</b><span class="small text-secondary">PM tasks tested in this period</span></div>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0 au-table">
+      <thead><tr><th class="text-start">Task code</th><th class="text-start">Users</th><th class="text-end">Test cases</th><th class="text-end">Runs</th><th class="text-end">Passed</th><th class="text-end">Failed</th><th class="text-start">Last run</th></tr></thead>
+      <tbody>
+      {% for t in tasks %}
+      <tr><td class="text-start"><a class="task-badge" href="{{ url_for('pmtasks.page', code=t.code) }}">{{ t.code }}</a></td>
+        <td class="text-start">{% for u in t.users %}{{ who(u) }}{{ ', ' if not loop.last }}{% endfor %}</td>
+        <td class="text-end"><b>{{ t.cases }}</b></td><td class="text-end">{{ t.runs }}</td><td class="text-end t-pass">{{ t.passed }}</td>
+        <td class="text-end {{ 't-fail' if t.failed }}">{{ t.failed }}</td><td class="text-start text-nowrap small">{{ t.last|ago }}</td></tr>
+      {% else %}<tr><td colspan="7" class="text-secondary text-center py-4">No runs for a PM task in this period.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {   // From can't be after To, To can't be after today (the server enforces the same)
+  var f = document.getElementById('f1'), t = document.getElementById('f2');
+  if (!f || !t) return;
+  function sync() { f.max = t.value || t.max; t.min = f.value || ''; }
+  f.addEventListener('change', sync); t.addEventListener('change', sync); sync();
+})();
+</script>
+{% endblock %}

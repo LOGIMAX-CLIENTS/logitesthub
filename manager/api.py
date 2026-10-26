@@ -509,6 +509,10 @@ def precondition_check():
     env, err = _env_from(body.get('env'))
     if err:
         return err
+    if env['db_on_pc']:
+        return jsonify({'ok': True, 'env': env['name'], 'status': 'no_database', 'checks': [],
+                        'message': f'The database of "{env["name"]}" is on your PC, so LogiTestHub cannot check it. The database '
+                                   f'steps run on your PC when you run the test: tester run ... --env "{env["name"]}".'})
     if not envs.db_configured(env):
         return jsonify({'ok': True, 'env': env['name'], 'status': 'no_database', 'checks': [],
                         'message': f'"{env["name"]}" has no database, so nothing could be checked (database steps would fail there).'})
@@ -604,6 +608,106 @@ def task_get(code):
                                'url': f"{base}/cases/{r['id']}" + (f"?run={r['run_id']}" if r['run_id'] else '')} for r in rows]})
 
 
+# ---------------------------------------------------------------- environments (tester env list / tester env add)
+
+def _env_json(e, me):
+    return {'id': e['id'], 'name': e['name'], 'base_url': e['base_url'], 'mine': e['owner'] == me,
+            'scope': 'only_me' if e['owner'] else 'shared', 'is_default': bool(e['is_default']), 'branch': e['branch'],
+            'login_user': e['username'], 'has_login_password': bool(e['has_password']),
+            'db': ({'host': e['db_host'], 'port': e['db_port'] or 3306, 'name': e['db_name'], 'user': e['db_user'],
+                    'on_pc': bool(e['db_on_pc']), 'set_up_sql': bool(e['db_allow_write'])} if e['db_host'] else None)}
+
+
+@bp.get('/environments')
+@api_auth
+def environments_list():
+    """The shared environments and the caller's own (only-for-me) ones; never a password."""
+    import envs
+    me = g.api_user['username']
+    return jsonify({'ok': True, 'environments': [_env_json(e, me) for e in envs.all_envs(g.api_con, me)]})
+
+
+@bp.post('/environments')
+@api_auth
+def environment_save():
+    """Adds or updates one of the CALLER's own environments (only they see it), by name:
+    {"name", "base_url", "login_user"?, "login_password"?, "branch"?,
+     "db": {"host", "port"?, "name", "user", "on_pc": true|false, "password"? (server-side DB only), "set_up_sql"?} | {"remove": true}}
+    A database "on_pc" is the developer's own (e.g. XAMPP MySQL): the Tester CLI on that PC runs the SQL steps and
+    keeps its password there - none is sent here. A field left out keeps its saved value."""
+    import envs
+    import settings
+    me = g.api_user['username']
+    b = request.get_json(silent=True) or {}
+    con = g.api_con
+    name = str(b.get('name') or '').strip()
+    if not envs.NAME_RE.match(name):
+        return _error(400, 'name: 2-40 letters, numbers, space, dot, dash or underscore (e.g. Local).')
+    if con.execute('SELECT 1 FROM environments WHERE name=? AND owner IS NULL', (name,)).fetchone():
+        return _error(400, f'"{name}" is a shared environment: give your own one another name (e.g. Local).')
+    old = con.execute('SELECT * FROM environments WHERE name=? AND owner=?', (name, me)).fetchone()
+    v = {}
+    if 'base_url' in b or not old:
+        url = envs.normalise_url(b.get('base_url'))
+        if not url:
+            return _error(400, 'base_url must start with http:// or https:// (e.g. http://localhost/etail/admin/).')
+        v['base_url'] = url
+    for key, col, n in (('login_user', 'username', 120), ('branch', 'branch', 120), ('note', 'note', 255)):
+        if key in b:
+            v[col] = str(b.get(key) or '').strip()[:n] or None
+    if 'login_password' in b:
+        v['password_enc'] = envs.encrypt(str(b.get('login_password') or '')) if b.get('login_password') else None
+    d = b.get('db')
+    if isinstance(d, dict) and d.get('remove'):
+        v.update(db_host=None, db_port=None, db_name=None, db_user=None, db_password_enc=None, db_write_user=None,
+                 db_write_password_enc=None, db_allow_write=0, db_on_pc=0)
+    elif isinstance(d, dict):
+        host, dbname, user = (str(d.get(k) or '').strip() for k in ('host', 'name', 'user'))
+        port = d.get('port') or 3306
+        if not (host and dbname and user):
+            return _error(400, 'db: host, name and user are all needed.')
+        if not str(port).isdigit() or not 0 < int(port) < 65536:
+            return _error(400, 'db.port must be a number (e.g. 3306).')
+        on_pc = bool(d.get('on_pc'))
+        wuser = str(d.get('write_user') or '').strip()[:64]
+        write = bool(d.get('set_up_sql') or wuser)
+        if write and envs.LIVE_NAME.search(name):
+            return _error(400, f'"{name}" looks like a live environment: "Set up SQL" (database writes) cannot be switched on there.')
+        if on_pc:   # the CLI on the owner's PC connects; this server keeps no database password for it
+            v.update(db_host=host[:255], db_port=int(port), db_name=dbname[:64], db_user=user[:64], db_password_enc=None,
+                     db_write_user=(wuser or user[:64]) if write else None, db_write_password_enc=None,
+                     db_allow_write=1 if write else 0, db_on_pc=1)
+        else:
+            if user.lower() in ('root', 'admin'):
+                return _error(400, 'db.user: use a read-only user (SELECT only) for a database LogiTestHub connects to, never root / admin.')
+            wpw = d.get('write_password')
+            keep_wpw = old['db_write_password_enc'] if old and not old['db_on_pc'] and old['db_write_user'] == wuser else None
+            if write and not (wuser and (wpw or keep_wpw)):
+                return _error(400, '"Set up SQL" needs a write user and its password (db.write_user, db.write_password).')
+            pw = d.get('password')
+            v.update(db_host=host[:255], db_port=int(port), db_name=dbname[:64], db_user=user[:64], db_on_pc=0,
+                     db_password_enc=envs.encrypt(str(pw)) if pw else (old['db_password_enc'] if old and not old['db_on_pc'] else None),
+                     db_write_user=wuser if write else None,
+                     db_write_password_enc=(envs.encrypt(str(wpw)) if wpw else keep_wpw) if write else None,
+                     db_allow_write=1 if write else 0)
+    with con:
+        if old:
+            if v:
+                con.execute(f'UPDATE environments SET {", ".join(k + "=?" for k in v)}, updated_at=? WHERE id=?',
+                            (*v.values(), db.now(), old['id']))
+            eid, what = old['id'], 'updated'
+        else:
+            v.update(name=name, owner=me, created_by=me, updated_at=db.now(), is_default=0)
+            eid = con.execute(f'INSERT INTO environments({", ".join(v)}) VALUES ({", ".join("?" for _ in v)})',
+                              tuple(v.values())).lastrowid
+            what = 'added'
+    settings.write_audit(me, 'api.env_save', 'environment', eid, 'ok',
+                         f'Personal environment "{name}" {what} from the Tester CLI'
+                         + (' (database on the PC)' if v.get('db_on_pc') else ''), None, request.remote_addr)
+    row = next(e for e in envs.all_envs(con, me) if e['id'] == eid)
+    return jsonify({'ok': True, 'created': what == 'added', 'environment': _env_json(row, me)})
+
+
 # ---------------------------------------------------------------- read-only checks on the app's database
 
 def _env_from(value):
@@ -616,6 +720,8 @@ def _env_from(value):
                             'ORDER BY owner IS NULL LIMIT 1', (int(v) if v.isdigit() else -1, v, me)).fetchone()
     if not row:
         return None, _error(404, f'Environment "{v}" not found.')
+    if not envs._usable(g.api_con, row, g.api_user):   # the caller's role must be allowed to use this environment
+        return None, _error(403, f'Your role is not allowed to use the "{row["name"]}" environment.')
     return row, None
 
 

@@ -16,7 +16,13 @@
     <span class="text-secondary small">Test cases created, test runs and AI tokens per user. Click a number to see the list.</span>
     {% endif %}
   </div>
-  <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('reports.users', **dict(request.args, format='csv')) }}">Export CSV</a>
+  <div class="d-flex gap-2">
+    {% if not detail %}<div class="btn-group btn-group-sm" role="group" aria-label="Report">
+      <a class="btn btn-outline-secondary active" href="{{ link() }}">By user</a>
+      <a class="btn btn-outline-secondary" href="{{ url_for('reports.daily_report', **{'from': d_from, 'to': d_to, 'project': pid or None, 'dept': dept or None}) }}">By day &amp; task</a>
+    </div>{% endif %}
+    <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('reports.users', **dict(request.args, format='csv')) }}">Export CSV</a>
+  </div>
 </div>
 
 <form class="rep-bar panel" method="get" action="{{ url_for('reports.users') }}">

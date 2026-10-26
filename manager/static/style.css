@@ -1666,3 +1666,9 @@ html:has(main.as-page), body:has(main.as-page) { overflow: hidden; }
 .sec-url { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sec-hist { cursor: pointer; }
 .sec-cmp { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 8px 12px; border-radius: 8px; background: var(--surface-2, #f5f6fb); font-size: 13px; }
+
+/* ---- Environment access by role ---- */
+.env-access { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px 14px; }
+.env-access-row { display: flex; align-items: center; gap: 8px; margin: 0; }
+.env-access-role { flex: 0 0 90px; font-size: 13px; font-weight: 600; }
+.env-access-row select { flex: 1 1 auto; }
