@@ -27,8 +27,8 @@ def _date(s, default):
 
 
 def _filters(a):
-    """Period + project from the query string; defaults to the last 30 days like AI Usage."""
-    d_from = _date(a.get('from'), date.today() - timedelta(days=29))
+    """Period + project from the query string; defaults to today (From and To = today)."""
+    d_from = _date(a.get('from'), date.today())
     d_to = _date(a.get('to'), date.today())
     today = date.today().isoformat()
     d_from, d_to = min(d_from, today), min(d_to, today)   # no future dates: nothing can have happened yet
