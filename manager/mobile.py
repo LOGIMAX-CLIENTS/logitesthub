@@ -12,8 +12,10 @@ The LambdaTest key stays on this server (Settings -> Integrations); the browser 
 Registered from app.py with register(app, con, login_required, admin_required, current_user).
 """
 import base64
+import http.client
 import json
 import os
+import queue
 import re
 import threading
 import time
@@ -30,6 +32,7 @@ DELETE_URL = 'https://manual-api.lambdatest.com/app/delete'
 DEVICES_URL = 'https://mobile-api.lambdatest.com/mobile-automation/api/v1/list?region=us&os={os}'
 CONCURRENCY_URL = 'https://mobile-api.lambdatest.com/mobile-automation/api/v1/org/concurrency'
 HUB = 'https://mobile-hub.lambdatest.com/wd/hub'
+HUB_HOST, HUB_PATH = 'mobile-hub.lambdatest.com', '/wd/hub'
 MAX_APP_MB = 300
 IDLE_END = 120          # seconds without the page asking for the screen -> the session is ended
 MAX_MINUTES = 30
@@ -154,8 +157,55 @@ def upload_app(c, filename, data):
 
 # ---------------------------------------------------------------- one live session (Appium on the real device)
 
+_POOL = queue.LifoQueue()   # open HTTPS connections to the hub: a new TLS handshake costs ~0.1-0.2 s per call
+
+
 def _wd(c, method, path, body=None, timeout=60, raw=False):
-    return _http(c, method, HUB + path, body=body, timeout=timeout, raw=raw)
+    """One Appium call on the hub over a reused (keep-alive) connection. A stale pooled connection is retried once on a
+    fresh one; a fresh one that fails is not retried (a tap must never be sent twice)."""
+    data = json.dumps(body).encode() if body is not None else None
+    headers = {'Authorization': _auth(c), 'Accept': 'application/json'}
+    if data is not None:
+        headers['Content-Type'] = 'application/json'
+    while True:
+        try:
+            conn, reused = _POOL.get_nowait(), True
+        except queue.Empty:
+            conn, reused = http.client.HTTPSConnection(HUB_HOST, timeout=timeout), False
+        try:
+            conn.timeout = timeout
+            if conn.sock:
+                conn.sock.settimeout(timeout)
+            conn.request(method, HUB_PATH + path, body=data, headers=headers)
+            r = conn.getresponse()
+            payload = r.read()
+        except (http.client.HTTPException, OSError) as e:
+            conn.close()
+            if reused:
+                continue
+            raise LtError(f'Cannot reach LambdaTest ({e}).')
+        if (r.getheader('Connection') or '').lower() == 'close':
+            conn.close()
+        else:
+            _POOL.put(conn)
+        break
+    if r.status >= 400:
+        text = payload[:600].decode('utf8', 'replace')
+        try:
+            j = json.loads(text)
+            v = j.get('value') if isinstance(j.get('value'), dict) else {}
+            text = v.get('message') or j.get('message') or text
+        except ValueError:
+            pass
+        if r.status == 401:
+            text = 'LambdaTest refused the username / access key (Settings -> Integrations -> LambdaTest).'
+        raise LtError(str(text)[:400])
+    if raw:
+        return payload
+    try:
+        return json.loads(payload or b'{}')
+    except ValueError:
+        raise LtError('Unexpected reply from LambdaTest.')
 
 
 def _set(sid, **kw):
@@ -167,11 +217,13 @@ def _set(sid, **kw):
         cx.close()
 
 
-def _start(sid, c, platform, device, version, lt_app, app_name, username):
+def _start(sid, c, platform, device, version, lt_app, app_name, username, unblock=False):
     caps = {'capabilities': {'firstMatch': [{}], 'alwaysMatch': {'platformName': platform, 'lt:options': {
         'w3c': True, 'isRealMobile': True, 'deviceName': device, 'platformVersion': version, 'app': lt_app,
         'build': 'LogiTestHub Tester App', 'name': f'{app_name} - {username} (live)', 'idleTimeout': 300,
-        'video': True, 'autoGrantPermissions': True, 'autoAcceptAlerts': True}}}}
+        'video': True, 'autoGrantPermissions': True, 'autoAcceptAlerts': True,
+        # Android screens with FLAG_SECURE come out black; LambdaTest's beta unblock (enabled per account by their support)
+        **({'enableScreenshotUnblock': True} if unblock and platform == 'android' else {})}}}}
     try:
         s = _wd(c, 'POST', '/session', caps, timeout=360)
         v = s.get('value') or {}
@@ -182,6 +234,11 @@ def _start(sid, c, platform, device, version, lt_app, app_name, username):
             rect = _wd(c, 'GET', f'/session/{lt_session}/window/rect', timeout=30).get('value') or {}
         except LtError:
             rect = {}
+        if platform == 'android':   # live taps: do not wait for the app's animations to settle first (that took ~2 s)
+            try:
+                _wd(c, 'POST', f'/session/{lt_session}/appium/settings', {'settings': {'waitForIdleTimeout': 0}}, timeout=30)
+            except LtError:
+                pass
         _set(sid, lt_session=lt_session, status='live', live_at=db.now(), last_seen=time.time(),
              width=rect.get('width'), height=rect.get('height'))
     except LtError as e:
@@ -390,7 +447,7 @@ def register(app, con, login_required, admin_required, current_user):
             sid = con().execute('INSERT INTO mobile_sessions(username, app_id, app_name, platform, device, os_version, status, started_at, last_seen) '
                                 'VALUES (?,?,?,?,?,?,?,?,?)', (me['username'], a['id'], a['name'], a['platform'], device[:120], version[:20],
                                                               'starting', db.now(), time.time())).lastrowid
-        threading.Thread(target=_start, args=(sid, c, a['platform'], device, version, a['lt_app'], a['name'], me['username']),
+        threading.Thread(target=_start, args=(sid, c, a['platform'], device, version, a['lt_app'], a['name'], me['username'], bool(b.get('unblock'))),
                          name=f'lth-mobile-{sid}', daemon=True).start()
         return jsonify({'ok': True, 'url': url_for('mobile.live', sid=sid)})
 

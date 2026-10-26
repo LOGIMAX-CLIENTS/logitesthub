@@ -6,6 +6,8 @@
   <div>
     <h1 class="h4 mb-0">Test on real devices</h1>
     <div class="text-secondary small" id="taLaunch">Upload your app, pick a phone or tablet, then Start. You test it live, here in the browser.</div>
+    <label class="small mt-1" id="taUnblockRow" title="Some apps (banking, login, payment screens) block screenshots, so the device shows black. LambdaTest's unblock is a beta: their support must switch it on for the account; the first start after an upload can take 3-5 minutes.">
+      <input class="form-check-input me-1" type="checkbox" id="taUnblock">My app shows a black screen: unblock secure screens (beta)</label>
   </div>
   <button class="btn btn-primary ta-start" id="taStart" type="button" disabled>🚀 Start</button>
 </div>
@@ -154,7 +156,7 @@
 
   document.querySelectorAll('.ta-tab').forEach(function (t) {
     t.addEventListener('click', function () {
-      os = t.dataset.os;
+      os = t.dataset.os; document.getElementById('taUnblockRow').hidden = os !== 'android';
       document.querySelectorAll('.ta-tab').forEach(function (x) { x.classList.toggle('on', x === t); x.setAttribute('aria-selected', x === t); });
       pick.app = null; pick.appLabel = '';
       document.querySelectorAll('.ta-app input').forEach(function (r) { r.checked = false; });
@@ -165,7 +167,7 @@
   startBtn.addEventListener('click', function () {
     startBtn.disabled = true; startBtn.textContent = 'Starting…';
     var fd = new FormData(); fd.append('csrf', CSRF);
-    fd.append('payload', JSON.stringify({ app_id: Number(pick.app), device: pick.device, os_version: pick.version }));
+    fd.append('payload', JSON.stringify({ app_id: Number(pick.app), device: pick.device, os_version: pick.version, unblock: os === 'android' && document.getElementById('taUnblock').checked }));
     fetch({{ url_for('mobile.session_start')|tojson }}, { method: 'POST', body: fd }).then(function (r) { return r.json(); }).then(function (j) {
       if (j.ok) { location.href = j.url; return; }
       alert(j.error || 'Could not start.'); startBtn.textContent = '🚀 Start'; refreshLaunch();

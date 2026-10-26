@@ -1690,3 +1690,6 @@ html:has(main.as-page), body:has(main.as-page) { overflow: hidden; }
 .tl-wait a { color: #b9a8ff; }
 .tl-side { flex: 1 1 280px; max-width: 420px; }
 @media (max-width: 720px) { .ta-devices { grid-template-columns: 1fr; } .ta-brands { border-right: 0; flex-direction: row; flex-wrap: wrap; } .tl-phone { width: 100%; max-width: 340px; } }
+.tl-phone { position: relative; }
+.tl-dot { position: absolute; width: 26px; height: 26px; margin: -13px 0 0 -13px; border-radius: 50%; background: rgba(124, 77, 255, .45); border: 2px solid #fff; pointer-events: none; animation: tl-dot .7s ease-out forwards; }
+@keyframes tl-dot { from { transform: scale(.5); opacity: 1; } to { transform: scale(1.6); opacity: 0; } }

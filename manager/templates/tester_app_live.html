@@ -50,11 +50,13 @@
 (function () {
   var CSRF = {{ csrf|tojson }}, BASE = {{ url_for('mobile.live', sid=s.id)|tojson }};
   var img = document.getElementById('tlScreen'), msg = document.getElementById('tlMsg'), dims = { w: {{ s.width or 0 }}, h: {{ s.height or 0 }} };
-  var live = false, busy = false, frames = 0, t0 = Date.now(), started = Date.now(), lastUrl = null, kick = null;
+  var live = false, frames = 0, t0 = Date.now(), started = Date.now(), lastUrl = null;
 
   function post(path, data) {
+    if (path === '/act') { acting++; var done = function (j) { acting--; return j; }; }
     var fd = new FormData(); fd.append('csrf', CSRF); fd.append('payload', JSON.stringify(data || {}));
-    return fetch(BASE + path, { method: 'POST', body: fd }).then(function (r) { return r.json(); }).catch(function () { return { ok: false, error: 'Cannot reach LogiTestHub.' }; });
+    var pr = fetch(BASE + path, { method: 'POST', body: fd }).then(function (r) { return r.json(); }).catch(function () { return { ok: false, error: 'Cannot reach LogiTestHub.' }; });
+    return done ? pr.then(done) : pr;
   }
   function say(t, bad) { msg.textContent = t || ''; msg.className = 'small ' + (bad ? 'text-danger' : 'text-secondary'); }
 
@@ -76,21 +78,34 @@
     }).catch(function () { setTimeout(poll, 3000); });
   }
 
-  function loop() {   // one screenshot at a time, as fast as the device answers (~2 a second)
+  // Screen: two screenshots in flight at once (hides the network wait), the newest one wins; an action asks for a
+  // fresh one as soon as it is done.
+  var inflight = 0, seq = 0, shown = 0;
+  function grab() {
     if (!live) return;
-    busy = true;
+    inflight++; var mine = ++seq;
     fetch(BASE + '/screen', { cache: 'no-store' }).then(function (r) {
       if (r.status === 409) return r.json().then(function (j) { ended(j.error || 'Session ended.'); return null; });
       if (!r.ok) return r.json().then(function (j) { say(j.error || 'Screen not available.', true); return null; });
       return r.blob();
     }).then(function (b) {
-      if (b) {
-        var u = URL.createObjectURL(b); img.src = u; if (lastUrl) URL.revokeObjectURL(lastUrl); lastUrl = u;
-        document.getElementById('tlWait').hidden = true; img.hidden = false; frames++;
-        var s = (Date.now() - t0) / 1000; if (s > 3) { document.getElementById('tlFps').textContent = (frames / s).toFixed(1) + ' frames / second'; frames = 0; t0 = Date.now(); }
-      }
+      if (!b || mine < shown) return;   // an older frame that came back late
+      shown = mine;
+      var u = URL.createObjectURL(b); img.src = u; if (lastUrl) URL.revokeObjectURL(lastUrl); lastUrl = u;
+      document.getElementById('tlWait').hidden = true; img.hidden = false; frames++;
+      var s = (Date.now() - t0) / 1000; if (s > 3) { document.getElementById('tlFps').textContent = (frames / s).toFixed(1) + ' frames / second'; frames = 0; t0 = Date.now(); }
     }).catch(function () { say('Screen not available.', true); })
-      .finally(function () { busy = false; if (live) kick = setTimeout(loop, 150); });
+      .finally(function () { inflight--; pump(); });
+  }
+  var acting = 0;   // a tap / key waiting: no new screenshot goes ahead of it in the device's queue
+  function pump() { while (live && !acting && inflight < 2) grab(); }
+  function loop() { pump(); }
+  function fresh() { if (live && inflight < 3) grab(); pump(); }   // right after an action: do not wait for the queue
+
+  function dot(e) {   // show where you clicked at once, before the device answers
+    var ph = document.getElementById('tlPhone').getBoundingClientRect(), d = document.createElement('span');
+    d.className = 'tl-dot'; d.style.left = (e.clientX - ph.left) + 'px'; d.style.top = (e.clientY - ph.top) + 'px';
+    document.getElementById('tlPhone').appendChild(d); setTimeout(function () { d.remove(); }, 700);
   }
 
   function toDevice(e) {   // page pixels -> device pixels
@@ -101,22 +116,23 @@
   img.addEventListener('mousedown', function (e) { e.preventDefault(); down = { p: toDevice(e), t: Date.now() }; });
   img.addEventListener('mouseup', function (e) {
     if (!down || !live) return;
+    dot(e);
     var p = toDevice(e), dx = p.x - down.p.x, dy = p.y - down.p.y, ms = Date.now() - down.t;
     var act = Math.hypot(dx, dy) < 25 ? { kind: 'tap', x: p.x, y: p.y } : { kind: 'swipe', x1: down.p.x, y1: down.p.y, x2: p.x, y2: p.y, ms: Math.max(200, ms) };
     down = null;
     say(act.kind === 'tap' ? 'Tap…' : 'Swipe…');
-    post('/act', act).then(function (j) { say(j.ok ? '' : j.error, !j.ok); });
+    post('/act', act).then(function (j) { say(j.ok ? '' : j.error, !j.ok); fresh(); });
   });
   img.addEventListener('mouseleave', function () { down = null; });
 
   document.querySelectorAll('[data-key]').forEach(function (b) {
-    b.addEventListener('click', function () { if (!live) return; say(b.textContent.trim() + '…'); post('/act', { kind: 'key', key: b.dataset.key }).then(function (j) { say(j.ok ? '' : j.error, !j.ok); }); });
+    b.addEventListener('click', function () { if (!live) return; say(b.textContent.trim() + '…'); post('/act', { kind: 'key', key: b.dataset.key }).then(function (j) { say(j.ok ? '' : j.error, !j.ok); fresh(); }); });
   });
   var enter = document.getElementById('tlEnter');
   if (enter) enter.addEventListener('click', function (e) { e.preventDefault(); if (live) post('/act', { kind: 'key', key: 'enter' }).then(function (j) { say(j.ok ? '' : j.error, !j.ok); }); });
   document.getElementById('tlTypeForm').addEventListener('submit', function (e) {
     e.preventDefault(); var t = document.getElementById('tlText').value; if (!t || !live) return;
-    say('Typing…'); post('/act', { kind: 'type', text: t }).then(function (j) { say(j.ok ? '' : j.error, !j.ok); if (j.ok) document.getElementById('tlText').value = ''; });
+    say('Typing…'); post('/act', { kind: 'type', text: t }).then(function (j) { say(j.ok ? '' : j.error, !j.ok); if (j.ok) document.getElementById('tlText').value = ''; fresh(); });
   });
   document.getElementById('tlSave').addEventListener('click', function () {
     if (!lastUrl) return; var a = document.createElement('a'); a.href = lastUrl;
