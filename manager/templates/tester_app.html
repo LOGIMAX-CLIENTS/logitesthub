@@ -1,0 +1,183 @@
+{% extends 'base.html' %}
+{% block title %}Tester App{% endblock %}
+{% block crumbs %}<span class="tm-crumbs"><b>Tester App</b></span>{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap gap-3 align-items-start justify-content-between mb-3">
+  <div>
+    <h1 class="h4 mb-0">Test on real devices</h1>
+    <div class="text-secondary small" id="taLaunch">Upload your app, pick a phone or tablet, then Start. You test it live, here in the browser.</div>
+  </div>
+  <button class="btn btn-primary ta-start" id="taStart" type="button" disabled>🚀 Start</button>
+</div>
+
+{% if not connected %}
+<div class="panel mb-3">
+  <b>LambdaTest is not connected.</b>
+  {% if is_admin %}Add the company LambdaTest username and access key in
+    <a href="{{ url_for('settings.integrations') }}#lambdatest">Settings → Integrations</a>.
+  {% else %}Ask an admin to connect it (Settings → Integrations).{% endif %}
+</div>
+{% endif %}
+
+<div class="ta-tabs mb-3" role="tablist">
+  <button type="button" class="ta-tab on" data-os="android" role="tab" aria-selected="true">Android</button>
+  <button type="button" class="ta-tab" data-os="ios" role="tab" aria-selected="false">iOS</button>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-5">
+    <div class="panel">
+      <div class="d-flex align-items-center justify-content-between mb-2">
+        <h2 class="h6 mb-0">Uploaded apps</h2>
+      </div>
+      <form method="post" action="{{ url_for('mobile.app_upload') }}" enctype="multipart/form-data" class="d-flex gap-2 mb-2" id="taUpload">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input class="form-control form-control-sm" type="file" name="app" accept=".apk,.aab,.ipa" required aria-label="App file (.apk / .aab / .ipa)">
+        <button class="btn btn-outline-secondary btn-sm text-nowrap" type="submit" {{ 'disabled' if not connected }}>Upload</button>
+      </form>
+      <div class="small text-secondary mb-2" id="taUpMsg">Android: .apk / .aab · iOS: .ipa · up to 300 MB</div>
+      <input class="form-control form-control-sm mb-2" id="taAppSearch" placeholder="Search apps" aria-label="Search apps">
+      <div class="ta-apps" id="taApps">
+        {% for a in apps %}
+        <label class="ta-app" data-os="{{ a.platform }}" data-name="{{ a.name|lower }}">
+          <input type="radio" name="ta_app" value="{{ a.id }}" data-label="{{ a.name }}">
+          <span class="ta-app-body"><b>{{ a.name }}</b>
+            <span class="small text-secondary">{{ 'Android' if a.platform == 'android' else 'iOS' }}{% if a.size_kb %} · {{ (a.size_kb / 1024)|round(1) }} MB{% endif %} · {{ a.uploaded_by }} · {{ a.uploaded_at[:10] }}</span></span>
+          <form method="post" action="{{ url_for('mobile.app_delete', aid=a.id) }}" onsubmit="return confirm('Delete {{ a.name }}?')">
+            <input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn btn-link btn-sm text-danger p-0" title="Delete">✕</button></form>
+        </label>
+        {% endfor %}
+        <div class="small text-secondary ta-none" id="taNoApps" hidden>No app for this platform yet: upload one above.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-7">
+    <div class="panel">
+      <input class="form-control form-control-sm mb-2" id="taDevSearch" placeholder="Search devices (e.g. Galaxy S24, Pixel, iPhone 15)" aria-label="Search devices">
+      <div class="ta-devices">
+        <div class="ta-brands" id="taBrands"><div class="small text-secondary p-2">Loading devices…</div></div>
+        <div class="ta-models" id="taModels"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% if sessions %}
+<div class="panel mt-3">
+  <h2 class="h6 mb-2">My recent sessions</h2>
+  <table class="table table-sm align-middle mb-0">
+    <thead><tr><th>Device</th><th>App</th><th>Started</th><th>Status</th><th></th></tr></thead>
+    <tbody>
+      {% for s in sessions %}
+      <tr><td>{{ s.device }} · {{ 'Android' if s.platform == 'android' else 'iOS' }} {{ s.os_version }}</td><td class="small">{{ s.app_name }}</td>
+        <td class="small text-nowrap">{{ s.started_at }}</td>
+        <td>{% if s.status == 'live' %}<span class="badge text-bg-success">live</span>{% elif s.status == 'starting' %}<span class="badge text-bg-info">starting</span>
+            {% elif s.status == 'error' %}<span class="badge text-bg-danger" title="{{ s.error }}">error</span>{% else %}<span class="small text-secondary" title="{{ s.error or '' }}">ended</span>{% endif %}</td>
+        <td class="text-end">{% if s.status in ('live', 'starting') %}<a class="btn btn-sm btn-outline-primary" href="{{ url_for('mobile.live', sid=s.id) }}">Open</a>{% endif %}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<script>
+(function () {
+  var CSRF = {{ csrf|tojson }}, CONNECTED = {{ connected|tojson }};
+  var os = 'android', brands = {}, order = [], pick = { app: null, appLabel: '', device: '', version: '', brand: '' };
+  var el = function (t, c, x) { var e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
+  var startBtn = document.getElementById('taStart'), launch = document.getElementById('taLaunch');
+
+  function refreshLaunch() {
+    startBtn.disabled = !(CONNECTED && pick.app && pick.device && pick.version);
+    launch.textContent = pick.app || pick.device
+      ? 'You are launching ' + (pick.appLabel || '(pick an app)') + ' on ' + (pick.device ? pick.device + ' · ' + (os === 'ios' ? 'iOS ' : 'Android ') + pick.version : '(pick a device)')
+      : 'Upload your app, pick a phone or tablet, then Start. You test it live, here in the browser.';
+  }
+
+  function filterApps() {
+    var q = document.getElementById('taAppSearch').value.trim().toLowerCase(), shown = 0;
+    document.querySelectorAll('.ta-app').forEach(function (a) {
+      var ok = a.dataset.os === os && (!q || a.dataset.name.indexOf(q) >= 0);
+      a.hidden = !ok; if (ok) shown++;
+      if (!ok && a.querySelector('input').checked) { a.querySelector('input').checked = false; pick.app = null; pick.appLabel = ''; }
+    });
+    document.getElementById('taNoApps').hidden = shown > 0;
+    if (!pick.app) { var first = Array.prototype.find.call(document.querySelectorAll('.ta-app'), function (a) { return !a.hidden; });
+      if (first) { first.querySelector('input').checked = true; pick.app = first.querySelector('input').value; pick.appLabel = first.querySelector('input').dataset.label; } }
+    refreshLaunch();
+  }
+  document.querySelectorAll('.ta-app input').forEach(function (r) { r.addEventListener('change', function () { pick.app = r.value; pick.appLabel = r.dataset.label; refreshLaunch(); }); });
+  document.getElementById('taAppSearch').addEventListener('input', filterApps);
+
+  function renderModels() {
+    var q = document.getElementById('taDevSearch').value.trim().toLowerCase(), box = document.getElementById('taModels'), bbox = document.getElementById('taBrands');
+    bbox.textContent = ''; box.textContent = '';
+    var names = order.filter(function (b) { return brands[b]; });
+    if (!names.length) { bbox.appendChild(el('div', 'small text-secondary p-2', CONNECTED ? 'No devices.' : 'Connect LambdaTest first.')); return; }
+    if (!pick.brand || !brands[pick.brand]) pick.brand = names[0];
+    names.forEach(function (b) {
+      var n = q ? brands[b].filter(function (m) { return m.name.toLowerCase().indexOf(q) >= 0; }).length : brands[b].length;
+      if (q && !n) return;
+      var btn = el('button', 'ta-brand' + (b === pick.brand && !q ? ' on' : ''), ''); btn.type = 'button';
+      btn.appendChild(el('span', '', b)); btn.appendChild(el('span', 'ta-count', String(n)));
+      btn.addEventListener('click', function () { pick.brand = b; document.getElementById('taDevSearch').value = ''; renderModels(); });
+      bbox.appendChild(btn);
+    });
+    var list = q ? names.reduce(function (acc, b) { return acc.concat(brands[b].filter(function (m) { return m.name.toLowerCase().indexOf(q) >= 0; })); }, []) : brands[pick.brand];
+    list.forEach(function (m) {
+      var row = el('div', 'ta-model' + (m.name === pick.device ? ' on' : ''));
+      row.appendChild(el('span', 'ta-model-name', m.name));
+      var vs = el('span', 'ta-vers');
+      m.versions.forEach(function (v) {
+        var chip = el('button', 'ta-ver' + (m.name === pick.device && v === pick.version ? ' on' : ''), v); chip.type = 'button';
+        chip.addEventListener('click', function () { pick.device = m.name; pick.version = v; renderModels(); refreshLaunch(); });
+        vs.appendChild(chip);
+      });
+      row.appendChild(vs);
+      row.addEventListener('click', function (e) { if (e.target.closest('.ta-ver')) return; pick.device = m.name; pick.version = m.versions[0]; renderModels(); refreshLaunch(); });
+      box.appendChild(row);
+    });
+    if (!list.length) box.appendChild(el('div', 'small text-secondary p-2', 'No device matches.'));
+  }
+  document.getElementById('taDevSearch').addEventListener('input', renderModels);
+
+  function loadDevices() {
+    brands = {}; order = []; pick.device = pick.version = pick.brand = ''; refreshLaunch();
+    var bbox = document.getElementById('taBrands'); bbox.textContent = ''; bbox.appendChild(el('div', 'small text-secondary p-2', 'Loading devices…'));
+    if (!CONNECTED) { renderModels(); return; }
+    fetch({{ url_for('mobile.devices_json')|tojson }} + '?os=' + os).then(function (r) { return r.json(); }).then(function (j) {
+      if (!j.ok) { bbox.textContent = ''; bbox.appendChild(el('div', 'small text-danger p-2', j.error || 'Could not load devices.')); return; }
+      brands = {}; order = []; j.brands.forEach(function (g) { brands[g.brand] = g.models; order.push(g.brand); }); renderModels();
+    });
+  }
+
+  document.querySelectorAll('.ta-tab').forEach(function (t) {
+    t.addEventListener('click', function () {
+      os = t.dataset.os;
+      document.querySelectorAll('.ta-tab').forEach(function (x) { x.classList.toggle('on', x === t); x.setAttribute('aria-selected', x === t); });
+      pick.app = null; pick.appLabel = '';
+      document.querySelectorAll('.ta-app input').forEach(function (r) { r.checked = false; });
+      filterApps(); loadDevices();
+    });
+  });
+
+  startBtn.addEventListener('click', function () {
+    startBtn.disabled = true; startBtn.textContent = 'Starting…';
+    var fd = new FormData(); fd.append('csrf', CSRF);
+    fd.append('payload', JSON.stringify({ app_id: Number(pick.app), device: pick.device, os_version: pick.version }));
+    fetch({{ url_for('mobile.session_start')|tojson }}, { method: 'POST', body: fd }).then(function (r) { return r.json(); }).then(function (j) {
+      if (j.ok) { location.href = j.url; return; }
+      alert(j.error || 'Could not start.'); startBtn.textContent = '🚀 Start'; refreshLaunch();
+    }).catch(function () { alert('Cannot reach LogiTestHub.'); startBtn.textContent = '🚀 Start'; refreshLaunch(); });
+  });
+
+  document.getElementById('taUpload').addEventListener('submit', function () {
+    var b = this.querySelector('button'); b.disabled = true; b.textContent = 'Uploading…';
+    document.getElementById('taUpMsg').textContent = 'Uploading to the device cloud: a big app takes a minute…';
+  });
+
+  filterApps(); loadDevices();
+})();
+</script>
+{% endblock %}
