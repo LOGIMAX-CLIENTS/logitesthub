@@ -114,7 +114,7 @@ document.querySelectorAll('.db-test').forEach(function (b) {
 
 <div class="env-list">
   {% for e in envs %}
-  {% set mine = e.owner == me.username %}{% set can_edit = mine or (not e.owner and can_shared) %}
+  {% set mine = e.owner == me.username %}{% set can_edit = mine or (not e.owner and e.id in manage_ids) %}
   {% if loop.first or (loop.previtem.owner is none) != (e.owner is none) %}
   <div class="small text-secondary fw-bold text-uppercase mt-2">{{ 'Shared with everyone' if e.owner is none else 'Only for me' }}</div>{% endif %}
   <div class="env-card {{ 'is-default' if e.is_default }}" id="env{{ e.id }}">
@@ -130,8 +130,8 @@ document.querySelectorAll('.db-test').forEach(function (b) {
         {% if can_edit %}
         <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#edit{{ e.id }}">Edit</button>
         {% if not e.is_default %}
-        {% if not e.owner %}<form method="post" action="{{ url_for('environment_update', eid=e.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="default"><button class="btn btn-sm btn-outline-secondary">Make default</button></form>{% endif %}
-        <form method="post" action="{{ url_for('environment_update', eid=e.id) }}" onsubmit="return confirm('Delete environment {{ e.name }}? Past runs keep its name.')"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="delete"><button class="btn btn-sm btn-link text-danger">Delete</button></form>
+        {% if not e.owner and can_shared %}<form method="post" action="{{ url_for('environment_update', eid=e.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="default"><button class="btn btn-sm btn-outline-secondary">Make default</button></form>{% endif %}
+        {% if mine or can_shared %}<form method="post" action="{{ url_for('environment_update', eid=e.id) }}" onsubmit="return confirm('Delete environment {{ e.name }}? Past runs keep its name.')"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="delete"><button class="btn btn-sm btn-link text-danger">Delete</button></form>{% endif %}
         {% endif %}{% endif %}
       </div>
     </div>

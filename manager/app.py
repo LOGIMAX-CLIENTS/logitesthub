@@ -1626,8 +1626,10 @@ def environments():
         return redirect(url_for('environments'))
     import settings
     me_envs = envs.all_envs(con(), me)
-    access = {e['id']: envs.access_map(con(), e['id']) for e in me_envs if e['owner'] is None}
+    manage_ids = {e['id'] for e in me_envs if envs.can_manage(con(), e, me)}
+    access = {e['id']: envs.access_map(con(), e['id']) for e in me_envs if e['owner'] is None} if _is_admin(me) else {}
     return render_template('environments.html', envs=me_envs, can_shared=_is_admin(me), env_access=access,
+                           manage_ids=manage_ids,
                            access_roles=[(r, settings.ROLE_LABEL.get(r, r)) for r in settings.EDITABLE_ROLES])
 
 
@@ -1641,6 +1643,8 @@ def environment_update(eid):
     if not _env_editable(e, me):
         abort(403)   # shared ones: admins only
     action = request.form.get('action')
+    if action in ('default', 'delete') and not e['owner'] and not _is_admin(me):
+        abort(403)   # making the default, or deleting a SHARED environment, is admins only (Manage can edit its config)
     resync = False
     with con():
         if action == 'default':
