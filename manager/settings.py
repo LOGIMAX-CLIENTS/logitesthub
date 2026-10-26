@@ -72,11 +72,13 @@ PERMS = [   # key, label, what it covers
     ('cases.create', 'Create & import test cases', 'Add Test Case, Import _test.md files'),
     ('cases.edit', 'Edit test cases & folders', 'Edit steps / title, QA status, move; new, rename, archive folders'),
     ('ai.generate', 'Generate test cases with AI', 'Generate with AI on the web and from the CLI (uses Anthropic credits)'),
+    ('assistant.use', 'Use the Tester Assistant', 'Open the Tester Assistant and chat to draft & run test cases with AI'),
     ('runs.run', 'Run tests', 'Run a test case, Run selected, Verify code, AI steps from the CLI'),
     ('testruns.manage', 'Manage test runs & schedules', 'Create, edit, delete and execute test runs; schedules'),
     ('runs.share', 'Share run links', 'Public links to a run report (with expiry)'),
     ('projects.create', 'Create projects', 'New project'),
     ('reports.view', 'View User Report', 'Cases, runs and AI tokens per user, with cost'),
+    ('settings.environments', 'Open & manage environments', 'Open Settings → Environments; see / run the ones their role may use and edit the ones it may manage'),
 ]
 PERM_KEYS = [p[0] for p in PERMS]
 # Viewer: nothing. Tester: what members could always do (so nothing changes until an admin edits the matrix).
@@ -100,9 +102,11 @@ ENDPOINT_PERM = {
     'project_login': 'cases.edit', 'api.sql': 'runs.run', 'api.sql_write': 'runs.run', 'api.memory_set': 'runs.run', 'modules.setup': 'cases.edit', 'modules.read': 'cases.edit', 'modules.parse': 'cases.edit',
     'modules.apply': 'cases.edit', 'modules.shot': 'cases.edit', 'modules.parse_file': 'cases.edit',
     'api.modules_push': 'cases.edit', 'api.case_update': 'cases.edit',
-    'assistant.send': 'ai.generate', 'assistant.save': 'cases.create',
+    'assistant.home': 'assistant.use', 'assistant.page': 'assistant.use', 'assistant.send': 'assistant.use', 'assistant.save': 'cases.create',
     'lessons.new': 'cases.edit', 'lessons.update': 'cases.edit', 'api.lessons_add': 'runs.run',
     'api.workspace_report': 'runs.run',
+    'environments': 'settings.environments', 'environment_update': 'settings.environments',
+    'environment_db_test': 'settings.environments', 'coderepo.action': 'settings.environments',
 }
 
 SYSTEM = [   # key, label, help, default
