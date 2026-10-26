@@ -248,6 +248,23 @@ with one written there): do not put it in any command, file or reply. Say once: 
 this chat's history. Do not paste it here: type it yourself in the terminal (`tester login ...`) or in
 `variables.json`. Access key: make a new one in LogiTestHub > Profile, the old one stops working." Then wait.
 
+### The user's own environment and local database (`tester env`)
+
+When the user asks to connect their local site / database ("connect my local DB", "add my XAMPP", "set up Local"),
+save it as their own environment (only they see it in LogiTestHub; same fields as Settings → Environments):
+1. `tester env list --json` - what exists already (a `Local` of theirs is updated, not duplicated).
+2. Ask only for what you do not know: site URL, app login user, database host (default localhost), port (3306),
+   database name, database user, and a write user if their tests use `Set up SQL`. **Never ask for a password in the
+   chat** and never put one in a command.
+3. Run it **without** passwords:
+   `tester env add --name Local --url <site URL> --login-user <u> --db-host localhost --db-port 3306 --db-name <db> --db-user <user> [--db-write-user <user>] --json`
+   - `needs_db_password` back -> show the user the returned `command` and ask them to run it **in their own terminal**
+     (it asks the passwords there, hidden). A database with no password (XAMPP root): add `--db-no-password`.
+   - It tests the connection from this PC before saving; a failure saves nothing - tell the user the reason in one line.
+4. A database on this PC (localhost / LAN) is reached only from this PC: its passwords stay in `~/.lth/config.json`, and
+   `tester run ... --env Local` runs the SQL steps from here. Web / scheduled runs cannot use it; `tester check` says so.
+5. Confirm with `tester env list` and from then on run with `--env <name>`.
+
 ### Database checks (read-only)
 
 When the environment has a read-only database (LogiTestHub → Settings → Environments → Database), check what the

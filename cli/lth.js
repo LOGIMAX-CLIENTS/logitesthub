@@ -72,7 +72,9 @@ function positional() {   // words that are not flags or flag values
   const takesValue = new Set(['--server', '--username', '--key', '--url', '--project', '--case', '--file', '--vars',
     '--var', '--secret', '--count', '--folder', '--diff', '--title', '--env',
     '--rows', '--id', '--label', '--parent', '--link', '--sort', '--active', '--out', '--source', '--root',
-    '--kind', '--symptom', '--fix', '--avoid', '--run', '--note', '--task']);
+    '--kind', '--symptom', '--fix', '--avoid', '--run', '--note', '--task',
+    '--name', '--login-user', '--login-password', '--branch', '--db-host', '--db-port', '--db-name', '--db-user', '--db-password',
+    '--db-write-user', '--db-write-password']);
   const out = [];
   for (let i = 1; i < argv.length; i++) {
     if (takesValue.has(argv[i])) { if (argv[i] !== '--diff' || (argv[i + 1] && !argv[i + 1].startsWith('--'))) i++; continue; }
@@ -978,6 +980,8 @@ async function run() {
     res = await runRunner(mdPath, varsPath, {
       LTH_RUNS_DIR: RUNS, LTH_SERVER: c.server, LTH_USER: c.username, LTH_KEY: c.key, LTH_CASE_ID: caseId || '',
       LTH_ENV: flag('--env') && flag('--env') !== true ? flag('--env') : '',   // database steps: which environment's DB
+      // its database is on this PC (tester env add): the runner connects from here, LogiTestHub cannot reach it
+      ...(localDbFor(c, envName) ? { LTH_LOCAL_DB: JSON.stringify(localDbFor(c, envName)) } : {}),
       // @import helpers: the workspace tests/helpers/ (not the PC-wide default)
       ...(workspace() ? { LTH_HELPERS_DIR: path.join(workspace().dir, 'helpers') } : {}),
     }, loginPath, savedFile ? path.dirname(savedFile) : null);
@@ -1178,6 +1182,14 @@ function help() {
   tester run --case <id> ... --clean | --keep          a passed run kept its test data: delete it first, or leave it
   tester check --case <id> | --file x_test.md --env <name>   before a run: settings + test data there? (read-only)
   tester settings --project <id> --env <name>        live profile / retail settings: is the action allowed?
+  tester env list                                    the environments you can use (shared + only yours)
+  tester env add --name Local --url <your site URL> [--login-user u] [--login-password p] [--branch b]
+        [--note "..."] [--db-host localhost --db-port 3306 --db-name <db> --db-user <user>] [--db-no-password]
+        [--db-write-user <user>]   ("Set up SQL" steps: the write user; its password is asked too)
+                                                     add / update your own environment (only you see it in LogiTestHub).
+                                                     A database on this PC (localhost / LAN): its password stays on this PC
+                                                     and runs with --env <name> connect from here. Asks the password in your
+                                                     own terminal (never type it in a chat). --remove-db drops the database.
   tester brain [words] [--path <repo or knowledge_brain>]   the app's knowledge brain docs for a test + out-of-date check
   tester run --file my_test.md --url <site>          run a test case file (new / changed: review first, then --approved)
   tester test [folder | files]                       run every *_test.md in the tests folder (same options as run)
@@ -1606,7 +1618,112 @@ async function brainCmd() {
   print(res, lines.join('\n'));
 }
 
-const COMMANDS = { init, 'login-helper': loginHelperCmd, test: testAll, task: taskCmd, check, settings: settingsCmd, brain: brainCmd, login, logout, whoami, projects, cases, case: caseCmd, usage, generate, run, setup, help, modules, skill, lessons, lesson, upload: uploadCmd };
+// ---------------------------------------------------------------- tester env: the developer's own environments
+// "Only for me" environments in LogiTestHub (e.g. Local = their XAMPP site). A database on this PC (localhost / LAN)
+// cannot be reached by LogiTestHub: its password stays in ~/.lth/config.json and the runner connects from this PC.
+const LOCAL_HOST = /^(localhost|127\.\d+\.\d+\.\d+|::1|0\.0\.0\.0|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|host\.docker\.internal)$|\.local$/i;
+const localKey = (c, name) => `${String(c.server).replace(/\/+$/, '').toLowerCase()}|${String(c.username).toLowerCase()}|${String(name).toLowerCase()}`;
+function localDbFor(c, name) {   // the details the runner needs for an environment whose database is on this PC, or null
+  return name ? ((loadConfig().local_dbs || {})[localKey(c, name)] || null) : null;
+}
+function setLocalDb(c, name, d) {
+  const cfg = loadConfig();
+  cfg.local_dbs = cfg.local_dbs || {};
+  if (d) cfg.local_dbs[localKey(c, name)] = d; else delete cfg.local_dbs[localKey(c, name)];
+  saveConfig(cfg);
+}
+const askHidden = q => new Promise(resolve => {   // a password: typed, not shown
+  const rl = require('readline').createInterface({ input: process.stdin, output: process.stderr, terminal: true });
+  process.stderr.write(q);
+  rl._writeToOutput = () => {};
+  rl.question('', a => { rl.close(); process.stderr.write('\n'); resolve(a); });
+});
+const val = name => (flag(name) && flag(name) !== true ? String(flag(name)) : undefined);
+
+async function dbPassword(what, write = false) {
+  const [fl, ev] = write ? ['--db-write-password', 'LTH_DB_WRITE_PASSWORD'] : ['--db-password', 'LTH_DB_PASSWORD'];
+  if (val(fl) !== undefined) return val(fl);
+  if (process.env[ev] !== undefined) return process.env[ev];
+  if (!write && argv.includes('--db-no-password')) return '';
+  if (process.stdin.isTTY && !JSON_OUT) return askHidden(`Password of the ${what} (not shown; Enter = none): `);
+  const cmd = 'tester ' + argv.filter(a => a !== '--json').map(a => (/\s/.test(a) ? `"${a}"` : a)).join(' ');
+  fail(`the database password is needed. Run this in your own terminal (it asks for the password there, never in a chat):\n  ${cmd}\n` +
+    '(No password, e.g. XAMPP root: add --db-no-password.)', 2, { needs_db_password: true, command: cmd });
+}
+
+async function testLocalDb(d) {
+  let mysql;
+  try { mysql = require('mysql2/promise'); } catch { fail('the MySQL driver is missing: reinstall the Tester CLI (npm install -g <LogiTestHub address>/cli/tester.tgz).'); }
+  let conn;
+  try {
+    conn = await mysql.createConnection({ host: d.host, port: Number(d.port) || 3306, user: d.user, password: d.password || '', database: d.name, connectTimeout: 6000 });
+    await conn.query('SET SESSION TRANSACTION READ ONLY');
+    const [[r]] = await conn.query('SELECT DATABASE() AS db, CURRENT_USER() AS who, VERSION() AS v');
+    return `Connected to ${r.db} as ${r.who} (MySQL ${r.v}); test reads use a read-only session.`;
+  } catch (e) {
+    fail(`cannot connect to the database ${d.user}@${d.host}:${d.port || 3306}/${d.name} from this PC: ${e.sqlMessage || e.code || e.message}. ` +
+      'Is MySQL running and are the details right? Nothing was saved.', 2, { db_test: 'failed' });
+  } finally { if (conn) await conn.end().catch(() => {}); }
+}
+
+function envLine(e, c) {
+  const local = e.db && e.db.on_pc ? (localDbFor(c, e.name) ? 'on this PC (password saved here)' : 'on its owner\'s PC - not set up on this PC: tester env add again') : '';
+  const db = e.db ? `${e.db.user}@${e.db.host}/${e.db.name}${local ? ' · ' + local : ''}${e.db.set_up_sql ? ' · Set up SQL on' : ''}` : 'no database';
+  return `  ${e.name.padEnd(14)} ${(e.scope === 'only_me' ? 'only me' : 'shared').padEnd(8)} ${e.base_url}\n  ${''.padEnd(14)} ${''.padEnd(8)} DB: ${db}`;
+}
+
+async function envCmd() {
+  const c = needLogin();
+  const sub = positional()[0] || 'list';
+  const all = (await api(c, 'GET', '/environments')).environments || [];
+  if (sub === 'list') {
+    print({ ok: true, environments: all.map(e => ({ ...e, db_password_on_this_pc: !!(e.db && e.db.on_pc && localDbFor(c, e.name)) })) },
+      all.length ? `Environments on ${c.server}:\n${all.map(e => envLine(e, c)).join('\n')}` : 'No environments yet. Add your own: tester env add --name Local --url <your site URL>');
+    return;
+  }
+  if (sub !== 'add') fail('usage: tester env list | tester env add --name Local --url <site URL> [--db-host localhost --db-name <db> --db-user <user>] (tester help)');
+  const name = val('--name') || 'Local';
+  const old = all.find(e => e.mine && e.name.toLowerCase() === name.toLowerCase());
+  const body = { name };
+  const url = val('--url') || (!old ? wsGet('url') : undefined);
+  if (url) body.base_url = url;
+  else if (!old) fail(`the site URL is needed for a new environment: tester env add --name ${name} --url http://localhost/<your app>/admin/`);
+  if (val('--login-user') !== undefined) body.login_user = val('--login-user');
+  if (val('--login-password') !== undefined) body.login_password = val('--login-password');
+  if (val('--branch') !== undefined) body.branch = val('--branch');
+  if (val('--note') !== undefined) body.note = val('--note');
+  let local = null, note = '';
+  if (argv.includes('--remove-db')) {
+    body.db = { remove: true };
+  } else if (val('--db-host') || val('--db-name') || val('--db-user')) {
+    const d = { host: val('--db-host') || (old && old.db && old.db.host) || 'localhost', port: Number(val('--db-port') || (old && old.db && old.db.port) || 3306),
+      name: val('--db-name') || (old && old.db && old.db.name), user: val('--db-user') || (old && old.db && old.db.user) };
+    if (!d.name || !d.user) fail('the database needs --db-name and --db-user (and --db-host when it is not localhost).');
+    const onPc = argv.includes('--db-on-server') ? false : argv.includes('--db-on-pc') || LOCAL_HOST.test(d.host);
+    const password = await dbPassword(`database user ${d.user}@${d.host}`);
+    // "Set up SQL" steps (test data): a separate write user, like the Write user / Write password of the web form
+    const writeUser = val('--db-write-user');
+    const setUp = argv.includes('--set-up-sql') || !!writeUser;
+    const writePassword = writeUser ? await dbPassword(`write user ${writeUser}@${d.host}`, true) : undefined;
+    if (onPc) {
+      local = { ...d, password, set_up_sql: setUp, ...(writeUser ? { write_user: writeUser, write_password: writePassword } : {}) };
+      if (!argv.includes('--no-test')) note = await testLocalDb(local);
+      body.db = { ...d, on_pc: true, set_up_sql: setUp, ...(writeUser ? { write_user: writeUser } : {}) };
+    } else {
+      body.db = { ...d, on_pc: false, password, set_up_sql: setUp, ...(writeUser ? { write_user: writeUser, write_password: writePassword } : {}) };
+    }
+  }
+  const j = await api(c, 'POST', '/environments', body);
+  if (local) setLocalDb(c, j.environment.name, local);
+  if (body.db && body.db.remove) setLocalDb(c, j.environment.name, null);
+  const e = j.environment;
+  print({ ok: true, created: j.created, environment: e, db_test: note || undefined },
+    `${j.created ? 'Added' : 'Updated'} "${e.name}" in LogiTestHub (only you see it): ${e.base_url}` +
+    (e.db ? `\nDatabase ${e.db.user}@${e.db.host}/${e.db.name}` + (e.db.on_pc ? ' - on this PC: its password stays on this PC (~/.lth/config.json); the database steps of your runs connect from here.' : ' - LogiTestHub connects to it (read-only).') : '') +
+    (note ? `\n${note}` : '') + `\nUse it: tester run --file <case>_test.md --env "${e.name}"`);
+}
+
+const COMMANDS = { env: envCmd, init, 'login-helper': loginHelperCmd, test: testAll, task: taskCmd, check, settings: settingsCmd, brain: brainCmd, login, logout, whoami, projects, cases, case: caseCmd, usage, generate, run, setup, help, modules, skill, lessons, lesson, upload: uploadCmd };
 (async () => {
   const cmd = argv[0];
   if (!cmd || cmd === '--help' || cmd === '-h') return help();
