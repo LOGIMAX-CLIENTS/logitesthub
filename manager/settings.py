@@ -105,6 +105,8 @@ ENDPOINT_PERM = {
     'assistant.home': 'assistant.use', 'assistant.page': 'assistant.use', 'assistant.send': 'assistant.use', 'assistant.save': 'cases.create',
     'lessons.new': 'cases.edit', 'lessons.update': 'cases.edit', 'api.lessons_add': 'runs.run',
     'api.workspace_report': 'runs.run',
+    # Tester App: a real device costs a LambdaTest slot, so opening one is a run
+    'mobile.page': 'runs.run', 'mobile.app_upload': 'runs.run', 'mobile.session_start': 'runs.run',
     'environments': 'settings.environments', 'environment_update': 'settings.environments',
     'environment_db_test': 'settings.environments', 'coderepo.action': 'settings.environments',
 }
@@ -913,7 +915,9 @@ def register(app, con, admin_required, current_user):
     @admin_required
     def integrations():
         import pmtasks
-        return render_template('settings_integrations.html', pm=_pm_vals(con()), need=pmtasks.NEEDED_TOOLS)
+        import budget
+        lt = {'username': budget.get_setting(con(), 'lt.username') or '', 'has_key': bool(budget.get_setting(con(), 'lt.key'))}
+        return render_template('settings_integrations.html', pm=_pm_vals(con()), need=pmtasks.NEEDED_TOOLS, lt=lt)
 
     @bp.route('/integrations', methods=['POST'])
     @super_required

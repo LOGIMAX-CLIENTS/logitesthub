@@ -1,0 +1,170 @@
+{% extends 'base.html' %}
+{% block title %}{{ s.device }} · Tester App{% endblock %}
+{% block crumbs %}<span class="tm-crumbs"><a href="{{ url_for('mobile.page') }}">Tester App</a> <span>/</span> <b>{{ s.device }}</b></span>{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap gap-2 align-items-center justify-content-between mb-3">
+  <div>
+    <h1 class="h5 mb-0">{{ s.device }} · {{ 'Android' if s.platform == 'android' else 'iOS' }} {{ s.os_version }}</h1>
+    <div class="small text-secondary">{{ s.app_name }} · real device in the LambdaTest cloud · <span id="tlTimer">0:00</span></div>
+  </div>
+  <form method="post" action="{{ url_for('mobile.end', sid=s.id) }}" id="tlEndForm">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="btn btn-outline-danger btn-sm" type="submit" id="tlEnd">■ End session</button>
+  </form>
+</div>
+
+<div class="tl-wrap">
+  <div class="tl-phone" id="tlPhone">
+    <div class="tl-wait" id="tlWait">
+      <div class="spinner-border text-primary mb-3" role="status"></div>
+      <div id="tlWaitText">Starting {{ s.device }} and installing {{ s.app_name }}… about 30 seconds.</div>
+    </div>
+    <img id="tlScreen" alt="Live screen of {{ s.device }}" hidden draggable="false">
+  </div>
+
+  <div class="tl-side">
+    <div class="panel">
+      <h2 class="h6 mb-2">Controls</h2>
+      <div class="small text-secondary mb-2">Click the screen to tap. Drag on it, or use the mouse wheel, to swipe / scroll.</div>
+      <div class="d-flex flex-wrap gap-2 mb-3">
+        {% if s.platform == 'android' %}<button class="btn btn-outline-secondary btn-sm" data-key="back" type="button">◀ Back</button>{% endif %}
+        <button class="btn btn-outline-secondary btn-sm" data-key="home" type="button">● Home</button>
+        {% if s.platform == 'android' %}<button class="btn btn-outline-secondary btn-sm" data-key="recent" type="button">▢ Recent apps</button>{% endif %}
+      </div>
+      <form class="d-flex gap-2 mb-1" id="tlTypeForm" autocomplete="off">
+        <input class="form-control form-control-sm" id="tlText" placeholder="Text for the focused field" aria-label="Text to type">
+        <button class="btn btn-primary btn-sm" type="submit">Type</button>
+      </form>
+      <div class="small text-secondary mb-3">Tap a field on the screen first. {% if s.platform == 'android' %}<a href="#" id="tlEnter">Press Enter</a>{% endif %}</div>
+      <div class="d-flex gap-2 mb-3">
+        <button class="btn btn-outline-secondary btn-sm" type="button" id="tlSave">⤓ Save screenshot</button>
+      </div>
+      <div class="small" id="tlMsg" role="status"></div>
+      <div class="small text-secondary mt-2" id="tlFps"></div>
+    </div>
+    <div class="small text-secondary mt-2">The device stays reserved while this page is open. Closing the page ends it after {{ (idle_end // 60) }} minutes; a session ends after {{ max_minutes }} minutes.</div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var CSRF = {{ csrf|tojson }}, BASE = {{ url_for('mobile.live', sid=s.id)|tojson }};
+  var img = document.getElementById('tlScreen'), msg = document.getElementById('tlMsg'), dims = { w: {{ s.width or 0 }}, h: {{ s.height or 0 }} };
+  var live = false, frames = 0, t0 = Date.now(), started = Date.now(), lastUrl = null;
+
+  function post(path, data) {
+    if (path === '/act') { acting++; var done = function (j) { acting--; return j; }; }
+    var fd = new FormData(); fd.append('csrf', CSRF); fd.append('payload', JSON.stringify(data || {}));
+    var pr = fetch(BASE + path, { method: 'POST', body: fd }).then(function (r) { return r.json(); }).catch(function () { return { ok: false, error: 'Cannot reach LogiTestHub.' }; });
+    return done ? pr.then(done) : pr;
+  }
+  function say(t, bad) { msg.textContent = t || ''; msg.className = 'small ' + (bad ? 'text-danger' : 'text-secondary'); }
+
+  function ended(text) {
+    live = false;
+    document.getElementById('tlWait').hidden = false; img.hidden = true;
+    document.querySelector('#tlWait .spinner-border').hidden = true;
+    document.getElementById('tlWaitText').innerHTML = '';
+    document.getElementById('tlWaitText').append(text || 'Session ended.', document.createElement('br'));
+    var a = document.createElement('a'); a.href = {{ url_for('mobile.page')|tojson }}; a.textContent = 'Back to Tester App'; document.getElementById('tlWaitText').append(a);
+    document.getElementById('tlEnd').disabled = true;
+  }
+
+  function poll() {   // wait for the device to start
+    fetch(BASE + '/status').then(function (r) { return r.json(); }).then(function (j) {
+      if (j.status === 'live') { dims.w = j.width || dims.w; dims.h = j.height || dims.h; live = true; started = t0 = Date.now(); frames = 0; loop(); return; }
+      if (j.status === 'starting') { setTimeout(poll, 2000); return; }
+      ended(j.status === 'error' ? 'Could not start: ' + (j.error || '') : (j.error || 'Session ended.'));
+    }).catch(function () { setTimeout(poll, 3000); });
+  }
+
+  // Screen: two screenshots in flight at once (hides the network wait), the newest one wins; an action asks for a
+  // fresh one as soon as it is done.
+  var inflight = 0, seq = 0, shown = 0;
+  function grab() {
+    if (!live) return;
+    inflight++; var mine = ++seq;
+    fetch(BASE + '/screen', { cache: 'no-store' }).then(function (r) {
+      if (r.status === 409) return r.json().then(function (j) { ended(j.error || 'Session ended.'); return null; });
+      if (!r.ok) return r.json().then(function (j) { say(j.error || 'Screen not available.', true); return null; });
+      return r.blob();
+    }).then(function (b) {
+      if (!b || mine < shown) return;   // an older frame that came back late
+      shown = mine;
+      var u = URL.createObjectURL(b); img.src = u; if (lastUrl) URL.revokeObjectURL(lastUrl); lastUrl = u;
+      document.getElementById('tlWait').hidden = true; img.hidden = false; frames++;
+      var s = (Date.now() - t0) / 1000; if (s > 3) { document.getElementById('tlFps').textContent = (frames / s).toFixed(1) + ' frames / second'; frames = 0; t0 = Date.now(); }
+    }).catch(function () { say('Screen not available.', true); })
+      .finally(function () { inflight--; pump(); });
+  }
+  var acting = 0;   // a tap / key waiting: no new screenshot goes ahead of it in the device's queue
+  function pump() { while (live && !acting && inflight < 2) grab(); }
+  function loop() { pump(); }
+  function fresh() { if (live && inflight < 3) grab(); pump(); }   // right after an action: do not wait for the queue
+
+  function dot(e) {   // show where you clicked at once, before the device answers
+    var ph = document.getElementById('tlPhone').getBoundingClientRect(), d = document.createElement('span');
+    d.className = 'tl-dot'; d.style.left = (e.clientX - ph.left) + 'px'; d.style.top = (e.clientY - ph.top) + 'px';
+    document.getElementById('tlPhone').appendChild(d); setTimeout(function () { d.remove(); }, 700);
+  }
+
+  function toDevice(e) {   // page pixels -> device pixels
+    var r = img.getBoundingClientRect(), w = dims.w || img.naturalWidth, h = dims.h || img.naturalHeight;
+    return { x: Math.round((e.clientX - r.left) * w / r.width), y: Math.round((e.clientY - r.top) * h / r.height) };
+  }
+  // Drag = swipe, click = tap. Pointer capture keeps the drag even when the mouse is released outside the screen.
+  var down = null;
+  img.addEventListener('pointerdown', function (e) {
+    if (e.button !== 0) return; e.preventDefault(); img.setPointerCapture(e.pointerId); down = { p: toDevice(e), t: Date.now() };
+  });
+  img.addEventListener('pointerup', function (e) {
+    if (!down || !live) { down = null; return; }
+    var p = toDevice(e), h = dims.h || img.naturalHeight, w = dims.w || img.naturalWidth;
+    p.x = Math.max(1, Math.min(w - 2, p.x)); p.y = Math.max(1, Math.min(h - 2, p.y));
+    var dx = p.x - down.p.x, dy = p.y - down.p.y, ms = Date.now() - down.t;
+    var act = Math.hypot(dx, dy) < 25 ? { kind: 'tap', x: p.x, y: p.y } : { kind: 'swipe', x1: down.p.x, y1: down.p.y, x2: p.x, y2: p.y, ms: Math.max(200, Math.min(ms, 800)) };
+    down = null; dot(e);
+    say(act.kind === 'tap' ? 'Tap…' : 'Swipe…');
+    post('/act', act).then(function (j) { say(j.ok ? '' : j.error, !j.ok); fresh(); });
+  });
+  img.addEventListener('pointercancel', function () { down = null; });
+
+  // Mouse wheel = scroll the part of the screen under the mouse (gathered for 120 ms, then one swipe)
+  var wheel = 0, wheelAt = null, wheelTimer = null;
+  img.addEventListener('wheel', function (e) {
+    if (!live) return; e.preventDefault();
+    wheel += e.deltaY; wheelAt = toDevice(e);
+    if (wheelTimer) return;
+    wheelTimer = setTimeout(function () {
+      var h = dims.h || img.naturalHeight, dist = Math.min(h * 0.55, Math.max(200, Math.abs(wheel) * 3));
+      var y1 = Math.max(h * 0.1, Math.min(h * 0.9, wheelAt.y)), y2 = wheel > 0 ? y1 - dist : y1 + dist;
+      y2 = Math.max(h * 0.08, Math.min(h * 0.92, y2));
+      wheel = 0; wheelTimer = null;
+      say('Scroll…');
+      post('/act', { kind: 'swipe', x1: wheelAt.x, y1: Math.round(y1), x2: wheelAt.x, y2: Math.round(y2), ms: 250 }).then(function (j) { say(j.ok ? '' : j.error, !j.ok); fresh(); });
+    }, 120);
+  }, { passive: false });
+
+  document.querySelectorAll('[data-key]').forEach(function (b) {
+    b.addEventListener('click', function () { if (!live) return; say(b.textContent.trim() + '…'); post('/act', { kind: 'key', key: b.dataset.key }).then(function (j) { say(j.ok ? '' : j.error, !j.ok); fresh(); }); });
+  });
+  var enter = document.getElementById('tlEnter');
+  if (enter) enter.addEventListener('click', function (e) { e.preventDefault(); if (live) post('/act', { kind: 'key', key: 'enter' }).then(function (j) { say(j.ok ? '' : j.error, !j.ok); }); });
+  document.getElementById('tlTypeForm').addEventListener('submit', function (e) {
+    e.preventDefault(); var t = document.getElementById('tlText').value; if (!t || !live) return;
+    say('Typing…'); post('/act', { kind: 'type', text: t }).then(function (j) { say(j.ok ? '' : j.error, !j.ok); if (j.ok) document.getElementById('tlText').value = ''; fresh(); });
+  });
+  document.getElementById('tlSave').addEventListener('click', function () {
+    if (!lastUrl) return; var a = document.createElement('a'); a.href = lastUrl;
+    a.download = {{ (s.device ~ '-' ~ s.os_version)|tojson }}.replace(/\s+/g, '_') + '-' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.png'; a.click();
+  });
+
+  setInterval(function () { if (!live) return; var s = Math.floor((Date.now() - started) / 1000); document.getElementById('tlTimer').textContent = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }, 1000);
+  document.getElementById('tlEndForm').addEventListener('submit', function () { live = false; });
+  window.addEventListener('pagehide', function () {   // closing the tab frees the device straight away
+    if (!live) return; var fd = new FormData(); fd.append('csrf', CSRF); fd.append('payload', '{}'); navigator.sendBeacon(BASE + '/end', fd);
+  });
+  poll();
+})();
+</script>
+{% endblock %}
