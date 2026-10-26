@@ -159,7 +159,7 @@ AUDIT_TARGET = {
 ENTITY_BY_PREFIX = [   # fallback entity from the endpoint name
     ('user', 'user'), ('environment', 'environment'), ('lessons.', 'lesson'), ('ai_', 'ai budget'), ('case', 'test case'),
     ('folder', 'folder'), ('project', 'project'), ('testruns.schedule', 'schedule'), ('testruns.', 'test run'),
-    ('run_', 'run'), ('settings.', 'settings'), ('login', 'sign-in'), ('logout', 'sign-in'), ('profile', 'profile'),
+    ('run_', 'run'), ('settings.', 'settings'), ('security.', 'security scan'), ('login', 'sign-in'), ('logout', 'sign-in'), ('profile', 'profile'),
 ]
 SECRET_PARTS = ('pass', 'secret', 'token', 'hash', 'enc')     # any column / field containing these
 SECRET_FIELDS = ('csrf', 'current', 'confirm', 'new', 'key')    # password-change form fields, exact names

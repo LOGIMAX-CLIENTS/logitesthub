@@ -2052,6 +2052,9 @@ brain_gaps.register(app, con, login_required, current_user, project_or_404)
 import coverage_page   # noqa: E402  (per module: test cases and their latest results; modules with no tests)
 coverage_page.register(app, con, login_required, project_or_404)
 
+import security   # noqa: E402  (admin: quick safe security checks on an environment's URL and code)
+security.register(app, con, admin_required, current_user)
+
 import pmtasks   # noqa: E402  (PM task codes on test cases: Start / Stop testing, task page, link attached to PM)
 pmtasks.register(app, con, login_required, current_user)
 
