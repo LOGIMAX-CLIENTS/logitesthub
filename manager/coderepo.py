@@ -12,6 +12,8 @@ its "Run on" box.
 - Sign-in to GitHub: the git credentials of this server (git credential manager / gh), or a read-only token stored
   encrypted (sent per command as a header, never written into the copy's git config).
 - Sync = fetch the branch tip and reset the copy to it. Nothing is ever pushed.
+- Kept fresh without anyone pressing Sync now: every copy once a day (start_auto_sync), and a copy more than an hour
+  old just before the Test Assistant reads it (refresh). An update fetches only the new commits: seconds.
 
 Registered from app.py with register(app, con, admin_required, project_or_404).
 """
@@ -21,6 +23,8 @@ import re
 import shutil
 import subprocess
 import threading
+import time
+from datetime import datetime
 
 from flask import Blueprint, abort, flash, redirect, request, url_for
 
@@ -35,6 +39,9 @@ PATH_RE = re.compile(r'^[\w./ -]{1,200}$')
 HISTORY = '100'
 _LOCK = threading.Lock()
 _RUNNING = set()
+_TRIED = {}           # environment id -> time.time() of the last automatic sync, so a failing one is not retried non-stop
+CHAT_AGE = 3600       # the Test Assistant brings a copy older than this up to date before reading it
+DAILY_AGE = 86400     # every copy is synced at least this often
 
 COLUMNS = [('repo_url', 'VARCHAR(300) NULL'), ('repo_branch', 'VARCHAR(100) NULL'), ('repo_paths', 'TEXT NULL'),
            ('repo_token_enc', 'TEXT NULL'), ('repo_commit', 'VARCHAR(64) NULL'), ('repo_synced_at', 'VARCHAR(32) NULL'),
@@ -175,6 +182,63 @@ def start_sync(eid):
     _set_status(eid, repo_status='syncing', repo_error=None)
     threading.Thread(target=sync, args=(eid,), daemon=True).start()
     return True
+
+
+def _age(env):
+    try:
+        return time.time() - datetime.strptime(str(env['repo_synced_at'])[:19], '%Y-%m-%d %H:%M:%S').timestamp()
+    except (TypeError, ValueError, KeyError):
+        return float('inf')
+
+
+def _auto(env, max_age):
+    """An environment with a git copy that is older than max_age and was not tried automatically within it."""
+    return bool(env and env.get('repo_url') and not is_local(env['repo_url']) and env.get('repo_commit')
+                and _age(env) >= max_age and time.time() - _TRIED.get(env['id'], 0) >= max_age)
+
+
+def _wait(eid, seconds):
+    end = time.time() + seconds
+    while time.time() < end:
+        with _LOCK:
+            if eid not in _RUNNING:
+                return True
+        time.sleep(0.5)
+    return False
+
+
+def refresh(env, on_wait=None, max_age=CHAT_AGE, wait=45):
+    """Before the Test Assistant reads the code: a copy older than an hour is synced first. Waits at most `wait`
+    seconds; a slower sync goes on in the background and this message reads the copy as it is."""
+    if not _auto(env, max_age):
+        return
+    _TRIED[env['id']] = time.time()
+    if on_wait:
+        on_wait()
+    start_sync(env['id'])
+    _wait(env['id'], wait)
+
+
+def start_auto_sync():
+    """Once a day every environment's code copy is synced (one at a time), so nobody has to press Sync now."""
+    def loop():
+        time.sleep(120)   # let the server finish starting
+        while True:
+            try:
+                c = db.connect()
+                try:
+                    rows = [dict(r) for r in c.execute('SELECT * FROM environments WHERE repo_url IS NOT NULL ORDER BY id')]
+                finally:
+                    c.close()
+                for e in rows:
+                    if _auto(e, DAILY_AGE):
+                        _TRIED[e['id']] = time.time()
+                        if start_sync(e['id']):
+                            _wait(e['id'], 900)
+            except Exception as ex:   # keep the loop alive; the next round retries
+                print(' * code auto-sync error:', ex)
+            time.sleep(600)
+    threading.Thread(target=loop, name='lth-code-sync', daemon=True).start()
 
 
 def form_values(f, existing=None):
