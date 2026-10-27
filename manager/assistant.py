@@ -606,6 +606,9 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
         # the code picked in the Code dropdown ('' = none); older pages without it: the Run on environment's code
         ce = body.get('code_env_id', env_id)
         code_env = envs.get(con(), ce, me) if str(ce or '').isdigit() else (None if ce == '' else envs.get(con(), None, me))
+        run_env = envs.get(con(), env_id, me)
+        for e in {x['id']: x for x in (code_env, run_env) if x}.values():   # a copy over an hour old: latest code first
+            coderepo.refresh(e, lambda e=e: set_progress(key, f"Getting the latest code of {e['name']}"))
         code = coderepo.code_dir(code_env)
         import knowledge   # flow docs (knowledge_brain) that match what the user is talking about
         talk = '\n'.join(h['text'] for h in hist if h['role'] == 'user')
@@ -629,7 +632,6 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
             add_message(tid, 'system', msg)
             return jsonify({'ok': False, 'thread_id': tid, 'error': msg})
         draft = data.get('draft')
-        run_env = envs.get(con(), env_id, me)
         import elementcheck
         code_root = coderepo.code_dir(run_env) or code   # the code of the site the test runs on, else the one it read
         def check(draft):

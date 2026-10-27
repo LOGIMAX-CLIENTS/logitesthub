@@ -155,7 +155,7 @@ document.querySelectorAll('.db-test').forEach(function (b) {
         {% else %}<span class="badge st-none">NOT SYNCED</span>{% endif %}</span>
       <span class="text-truncate" style="max-width: 420px" title="{{ e.repo_url }}">{{ e.repo_url }}</span>
       <form method="post" action="{{ url_for('coderepo.action', eid=e.id) }}" class="d-inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="sync">
-        <button class="btn btn-link btn-sm p-0 align-baseline" {{ 'disabled' if e.repo_status == 'syncing' }}>Sync now</button></form>
+        <button class="btn btn-link btn-sm p-0 align-baseline" {{ 'disabled' if e.repo_status == 'syncing' }} title="Syncs by itself once a day, and before the Test Assistant reads code more than an hour old. Press it right after a push you want the Assistant to see.">Sync now</button></form>
       {% endif %}
     </div>
     {% if e.repo_url and e.repo_error %}<div class="small t-fail mt-1">{{ e.repo_error }}</div>{% endif %}
