@@ -86,7 +86,7 @@ document.querySelectorAll('.db-test').forEach(function (b) {
         <div class="col-12 form-text">The branch running on this environment (Dev = development, Live = PRODUCTION …): only its latest commit is copied, read-only, nothing is ever pushed. Token: a GitHub fine-grained token with <b>Contents: Read-only</b>, stored encrypted. Clear the URL to disconnect.</div>
       </div></details></div>
     <div class="col-12"><details class="small" {{ 'open' if e and (e.login_steps or e.menu_url) }}>
-      <summary class="text-secondary">Advanced (optional): menu page and custom login steps, used by "Set up modules"</summary>
+      <summary class="text-secondary">Advanced (optional): this site's own login steps (test runs and "Set up modules") and menu page</summary>
       <div class="row g-2 mt-1">
         <div class="col-md-12"><label class="form-label" for="{{ pre }}Menu">Menu page URL</label>
           <input class="form-control form-control-sm" id="{{ pre }}Menu" name="menu_url" value="{{ e.menu_url or '' if e else '' }}" maxlength="500" placeholder="Leave blank: the page after login is used. e.g. index.php/admin/dashboard or https://app.example.com/home">
@@ -94,7 +94,10 @@ document.querySelectorAll('.db-test').forEach(function (b) {
         <div class="col-md-12"><label class="form-label" for="{{ pre }}Steps">Login steps</label>
           <textarea class="form-control form-control-sm font-monospace" id="{{ pre }}Steps" name="login_steps" rows="4" maxlength="4000" spellcheck="false"
             placeholder="Leave blank: the login form is found automatically. For unusual logins, one step per line, e.g.&#10;Type 'ACME' into the Company Code field.&#10;Type {{ '{{' }}username{{ '}}' }} into the User Id field.&#10;Type {{ '{{' }}password{{ '}}' }} into the Password field.&#10;Click the Sign In button.">{{ e.login_steps or '' if e else '' }}</textarea>
-          <div class="form-text">Standard steps only (Navigate / Type … into the X field / Select … from the X dropdown / Click the X button / Assert …). The Base URL is opened first.</div></div>
+          <div class="form-text">Standard steps only (Navigate / Type … into the X field / Select … from the X dropdown / Click the X button / Assert …). The Base URL is opened first.
+            <b>When set, test runs on this environment sign in with these steps instead of the project's login helper</b>
+            (e.g. a client site whose login or landing page differs). End with a check of the page after login, e.g.
+            <code>Assert the text 'Logged In At' is visible.</code></div></div>
       </div></details></div>
   </div>
 {% endmacro %}

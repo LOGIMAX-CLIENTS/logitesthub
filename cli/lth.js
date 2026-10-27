@@ -924,9 +924,15 @@ async function run() {
   }
 
   // The project's login helper runs first, exactly as in a web run (skip with --no-login or "login: none" in the case)
+  // With --env, that environment's own login steps win (e.g. a client site whose login page differs)
   let loginText = '';
   if (loginPid && !argv.includes('--no-login')) {
-    try { loginText = (await api(c, 'GET', `/projects/${loginPid}/login-helper`)).login_helper || ''; }
+    const loginEnv = flag('--env') && flag('--env') !== true ? flag('--env') : '';
+    try {
+      const lh = await api(c, 'GET', `/projects/${loginPid}/login-helper${loginEnv ? '?env=' + encodeURIComponent(loginEnv) : ''}`);
+      loginText = lh.login_helper || '';
+      if (lh.source === 'environment' && !JSON_OUT) console.error(`Login: the "${loginEnv}" environment's own login steps.`);
+    }
     catch (e) { console.error(`Note: could not read the project's login helper (${e.message}); running without it.`); }
     if (!loginText) console.error("Note: this project has no login helper yet (LogiTestHub -> project -> Login helper), so the test must sign in by itself.");
   }
