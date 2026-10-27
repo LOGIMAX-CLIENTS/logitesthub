@@ -1334,7 +1334,7 @@ def _run_case(run_id, content, no_ai=False, base_dir=None, env_id=None, project_
         try:
             with db.connect() as c:
                 env = envs.get(c, env_id)
-                login_path = db.login_helper_file(c, project_id)
+                login_path = db.login_helper_file(c, project_id, env)   # the environment's own login steps win
             vars_path = envs.vars_file(env) if env else None
             import api as _api
             with db.connect() as c:

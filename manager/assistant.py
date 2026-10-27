@@ -68,10 +68,10 @@ def project_context(con, p, env_id=None, code_env=None, user=None):
     links (so it picks the right screen and URL), the environment and the variable names it may use."""
     import envs
     lines = [f'Project: {p["name"]}' + (f' - {p["description"]}' if p.get('description') else '')]
-    helper = (p.get('login_helper') or '').strip()
+    env = envs.get(con, env_id, user)   # the 'Run on' environment picked on the page (else the default)
+    helper = (p.get('login_helper') or '').strip() or ((env.get('login_steps') if env else '') or '').strip()
     lines.append('Login helper: YES - the project signs in before every test; write NO login steps.' if helper
                  else 'Login helper: NO - start the test with a "Sign in" section using {{username}} / {{password}}.')
-    env = envs.get(con, env_id, user)   # the 'Run on' environment picked on the page (else the default)
     base = (env['base_url'] if env else '') or ''
     if env:
         lines.append(f'Environment the test will run on: {env["name"]}, base_url = {base}')
