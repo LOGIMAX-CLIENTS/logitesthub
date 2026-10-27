@@ -318,16 +318,31 @@ def get_or_create_folder(con, project_id, name):
     return con.execute('INSERT INTO folders(project_id, parent_id, name) VALUES (?,0,?)', (project_id, name)).lastrowid
 
 
-def login_helper_file(con, project_id):
-    """The project's login helper written to a temp file for run.js / codegen.js --login (caller deletes it),
-    or None when the project has none."""
-    import tempfile
+_NAV_RE = re.compile(r'(?im)^\s*(?:\d+[.)]\s*)?(navigate|go to|open)\b')
+
+
+def login_steps(con, project_id, env=None):
+    """(steps, source) that sign in before a case: the ENVIRONMENT's own login steps when it has them (a client site
+    whose login differs, e.g. Manepally on the Retail project), else the project's login helper; ('', None) if none.
+    Environment steps written for "Set up modules" may start at the login form: the run opens {{base_url}} first."""
+    own = ((env.get('login_steps') if env else None) or '').strip()
+    if own:
+        return (own if _NAV_RE.search(own) else 'Navigate to {{base_url}}.\n' + own), 'environment'
     row = con.execute('SELECT login_helper FROM projects WHERE id=?', (project_id,)).fetchone() if project_id else None
-    if not row or not (row['login_helper'] or '').strip():
+    helper = ((row['login_helper'] if row else '') or '').strip()
+    return (helper, 'project') if helper else ('', None)
+
+
+def login_helper_file(con, project_id, env=None):
+    """The login steps (see login_steps) written to a temp file for run.js / codegen.js --login (caller deletes it),
+    or None when there are none."""
+    import tempfile
+    steps, _ = login_steps(con, project_id, env)
+    if not steps:
         return None
     fd, path = tempfile.mkstemp(suffix='_login.md', dir=DATA)
     with os.fdopen(fd, 'w', encoding='utf-8') as f:
-        f.write(row['login_helper'])
+        f.write(steps)
     return path
 
 

@@ -308,11 +308,18 @@ def modules_push(pid):
 @bp.get('/projects/<int:pid>/login-helper')
 @api_auth
 def project_login_helper(pid):
-    """Login steps the CLI puts in front of every case of this project (the same as web runs)."""
+    """Login steps the CLI puts in front of every case of this project (the same as web runs). ?env=<name>: that
+    environment's own login steps when it has them (source "environment"), else the project's (source "project")."""
     r = g.api_con.execute('SELECT login_helper FROM projects WHERE id=?', (pid,)).fetchone()
     if not r:
         return _error(404, 'Project not found.')
-    return jsonify({'ok': True, 'login_helper': r['login_helper'] or ''})
+    env = None
+    if request.args.get('env'):
+        env, err = _env_from(request.args.get('env'))
+        if err:
+            return err
+    steps, source = db.login_steps(g.api_con, pid, env)
+    return jsonify({'ok': True, 'login_helper': steps, 'source': source, 'project_helper': r['login_helper'] or ''})
 
 
 @bp.put('/projects/<int:pid>/login-helper')
