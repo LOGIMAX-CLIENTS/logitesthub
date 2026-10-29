@@ -9,7 +9,7 @@
   <div class="min-w-0">
     <h1 class="trd-title">{{ m.status_icon(s.status if s else None) }} {{ tr.name }}</h1>
     <div class="trl-meta">
-      <span>{{ tr.project_name }}{% if tr.mode == 'fixed' %} · fixed list{% elif tr.folder_name %} · {{ tr.folder_name }}{% else %} · all folders{% endif %}</span>
+      <span>{{ tr.project_name }}{% if tr.mode == 'fixed' %} · fixed list{% elif tr.task_code %} · cases of PM task <a href="{{ url_for('pmtasks.page', code=tr.task_code) }}">{{ tr.task_code }}</a>{% elif tr.folder_name %} · {{ tr.folder_name }}{% else %} · all folders{% endif %}</span>
       <span>{{ cases|length }} case{{ 's' if cases|length != 1 }}{% if skip_ids %} · <b class="t-warn">{{ n_run }} will run</b>{% endif %}</span>
       {% if tr.only_ready %}<span class="qa-tag">Ready for QA only</span>{% endif %}
       <span class="trl-env">{{ tr.env_name or 'Default env' }}</span>
@@ -41,7 +41,8 @@
       <div class="col-md-4"><label class="form-label" for="eName">Name</label><input class="form-control form-control-sm" id="eName" name="name" value="{{ tr.name }}" required maxlength="160"></div>
       {% if tr.mode == 'dynamic' %}
       <div class="col-md-3"><label class="form-label" for="eFolder">Folder</label><select class="form-select form-select-sm" id="eFolder" name="folder_id"><option value="">All folders</option>
-        {% for f in folders %}<option value="{{ f.id }}" {{ 'selected' if f.id == tr.folder_id }}>{{ f.name }}</option>{% endfor %}</select></div>{% endif %}
+        {% for f in folders %}<option value="{{ f.id }}" {{ 'selected' if f.id == tr.folder_id }}>{{ f.name }}</option>{% endfor %}</select></div>
+      <div class="col-md-3"><label class="form-label" for="eTask">PM task code <span class="text-secondary">(optional)</span></label><input class="form-control form-control-sm" id="eTask" name="task_code" value="{{ tr.task_code or '' }}" maxlength="40" placeholder="PM-LMX-0042" title="Only the cases linked to this PM task"></div>{% endif %}
       <div class="col-md-3"><label class="form-label" for="eEnv">Environment</label><select class="form-select form-select-sm" id="eEnv" name="env_id">{% for e in env_list if e.owner is none %}<option value="{{ e.id }}" {{ 'selected' if e.id == tr.env_id }}>{{ e.name }}</option>{% endfor %}</select></div>
       <div class="col-md-2 d-flex align-items-end"><label class="form-check"><input class="form-check-input" type="checkbox" name="only_ready" {{ 'checked' if tr.only_ready }}> Ready for QA only</label></div>
       <div class="col-12"><label class="form-label" for="eDesc">Description</label><input class="form-control form-control-sm" id="eDesc" name="description" value="{{ tr.description or '' }}" maxlength="500"></div>
@@ -61,6 +62,7 @@
         <span class="min-w-0 flex-grow-1"><b>TC-{{ c.tc_no }}</b> <span class="text-truncate">{{ c.title }}</span></span>
         {% if c.qa_status == 'ready' %}<span class="qa-tag">Ready for QA</span>{% elif c.id in skip_ids %}<span class="skip-tag" title="Ready for QA only is on">Skipped: not Ready for QA</span>{% endif %}
         <span class="small text-secondary text-nowrap">{% if r and r.total %}{{ r.passed }}/{{ r.total }} steps · {{ r.duration_ms|secs }}{% elif r %}{{ r.status }}{% else %}not in this run{% endif %}</span>
+        {% if r and r.status in ('FAILED', 'ERROR', 'PARTIAL') %}<span class="fr-btn" role="link" tabindex="0" data-href="{{ url_for('run_fail_reason', rid=r.id) }}" title="Where and on which code it ran, the step that failed and why - for the developer">Fail reason</span>{% endif %}
       </a>
       {% else %}
       <div class="tr-empty"><b>No test cases {{ 'match' if tr.mode == 'dynamic' or tr.only_ready else 'selected yet' }}</b>
@@ -130,7 +132,14 @@
   <div class="modal-dialog modal-dialog-centered">{{ m.schedule_form([], env_list|selectattr('owner', 'none')|list, days, today, fixed_run=tr, back=url_for('testruns.detail', tid=tr.id)) }}</div>
 </div>
 {% endblock %}
-{% block scripts %}<script src="{{ static_v('case_picker.js') }}"></script>
+{% block scripts %}
+<script>
+document.querySelectorAll('.fr-btn[data-href]').forEach(function (b) {   // a link inside the row's link: open the report, not the case
+  function go(e) { e.preventDefault(); e.stopPropagation(); location.href = b.getAttribute('data-href'); }
+  b.addEventListener('click', go);
+  b.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') go(e); });
+});
+</script><script src="{{ static_v('case_picker.js') }}"></script>
 <script>
 (function () {   // test case picker
   var el = document.getElementById('cpData');

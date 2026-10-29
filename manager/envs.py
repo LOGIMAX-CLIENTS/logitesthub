@@ -83,7 +83,11 @@ def init(con):
                             ('environments', 'db_on_pc', 'ALTER TABLE environments ADD COLUMN db_on_pc TINYINT NOT NULL DEFAULT 0'),
                             # the project this environment's application belongs to: the Tester Assistant saves its test
                             # cases there when the environment is picked in "Run on" (NULL = any project)
-                            ('environments', 'project_id', 'ALTER TABLE environments ADD COLUMN project_id INT NULL')):
+                            ('environments', 'project_id', 'ALTER TABLE environments ADD COLUMN project_id INT NULL'),
+                            # the code a run ran against: the environment's synced branch / commit (server runs) or the
+                            # developer's own branch / commit (Tester CLI runs on a PC), shown in the run's Fail reason
+                            ('runs', 'code_commit', 'ALTER TABLE runs ADD COLUMN code_branch VARCHAR(120) NULL, '
+                             'ADD COLUMN code_commit VARCHAR(64) NULL, ADD COLUMN code_repo VARCHAR(300) NULL')):
         n = con.execute('SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() '
                         'AND TABLE_NAME=? AND COLUMN_NAME=?', (table, col)).fetchone()['n']
         if not n:
@@ -398,3 +402,31 @@ def normalise_url(url):
     if not re.match(r'^https?://[^\s/]+', url, re.I):
         return None
     return url if url.endswith('/') else url + '/'
+
+
+SHA_RE = re.compile(r'^[0-9a-f]{7,40}$')
+BRANCH_RE = re.compile(r'^[\w./-]{1,120}$')
+
+
+def code_ref(env):
+    """(branch, commit, repo) of the code an environment runs now: its synced repository copy, or for a code folder
+    on this server (e.g. the Local XAMPP site) that folder's own git branch and commit. (None, None, None) if unknown."""
+    if not env or not env.get('repo_url'):
+        return None, None, None
+    if env.get('repo_commit') == 'local':   # a folder read in place: ask git there
+        import subprocess
+        try:
+            run = lambda *a: subprocess.run(['git', '-C', env['repo_url'], *a], capture_output=True, text=True,
+                                            timeout=5).stdout.strip()
+            commit, branch = run('rev-parse', 'HEAD'), run('rev-parse', '--abbrev-ref', 'HEAD')
+        except Exception:
+            return None, None, None
+        return (branch if BRANCH_RE.match(branch or '') else None), (commit if SHA_RE.match(commit or '') else None), env['repo_url']
+    commit = env.get('repo_commit')
+    return env.get('repo_branch') or 'main', (commit if commit and SHA_RE.match(commit) else None), env['repo_url']
+
+
+def commit_url(repo, commit):
+    """GitHub-style link to a commit of an https repository; None otherwise."""
+    m = re.match(r'^(https://[^/]+/[^/]+/[^/]+?)(?:\.git)?/?$', repo or '')
+    return f'{m.group(1)}/commit/{commit}' if m and commit else None
