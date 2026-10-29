@@ -489,6 +489,11 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
             '(SELECT r.status FROM runs r WHERE r.case_id=t.case_id ORDER BY r.id DESC LIMIT 1) AS last_run '
             'FROM chat_threads t LEFT JOIN users u ON u.username=t.created_by LEFT JOIN cases cs ON cs.id=t.case_id '
             f'WHERE {" AND ".join(where)} ORDER BY t.updated_at DESC LIMIT 100', params).fetchall()
+        elsewhere = []   # an admin looking at someone's chats: the other projects they chatted in, to jump there
+        if who:
+            ow, op = ('t.project_id<>?', [pid]) if who == 'all' else ('t.project_id<>? AND t.created_by=?', [pid, who])
+            elsewhere = con().execute(f'SELECT t.project_id AS id, p.name, COUNT(*) AS n FROM chat_threads t JOIN projects p '
+                                      f'ON p.id=t.project_id WHERE {ow} GROUP BY t.project_id, p.name ORDER BY n DESC', op).fetchall()
         tid = request.args.get('t', type=int)
         thread = next((t for t in threads if t['id'] == tid), None)
         if tid and not thread and is_admin:   # an admin opening someone else's chat from a link
@@ -504,6 +509,7 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
             if thread and thread['task_code'] and not readonly else None
         thread_case = con().execute('SELECT id, tc_no FROM cases WHERE id=?', (thread['case_id'],)).fetchone()             if thread and thread['case_id'] else None
         return render_template('assistant.html', p=p, threads=threads, thread=thread, readonly=readonly, who=who, users=users,
+                               elsewhere=elsewhere,
                                thread_case=thread_case, review_task=thread['task_code'] if thread else None, review_block=review_block,
                                msgs=messages_of(thread['id']) if thread else [], folders=folders,
                                envs=all_envs, ai_ok=b['ok'], ai_msg=b['message'],
@@ -539,6 +545,10 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
                           "COALESCE(SUM(cost_usd),0) AS cost FROM ai_usage WHERE kind='chat' AND username=?"
                           + (' AND project_id=?' if pid else ''), [u['username']] + pp).fetchone()
             u.update({k: (r[k] or 0) for k in ('runs', 'passed', 'failed', 'other')}, calls=a['calls'], tok=a['tok'], cost=float(a['cost']))
+            # the projects they chatted in (most recent first): each opens their chats there, read-only
+            u['projects'] = c.execute('SELECT t.project_id AS id, p.name, COUNT(*) AS n, MAX(t.updated_at) AS last FROM chat_threads t '
+                                      f'JOIN projects p ON p.id=t.project_id WHERE t.created_by=?{pw} '
+                                      'GROUP BY t.project_id, p.name ORDER BY last DESC', [u['username']] + pp).fetchall()
         recent = c.execute(
             'SELECT t.id, t.project_id, t.title, t.created_by, t.created_at, t.updated_at, t.case_id, p.name AS project, cs.tc_no, '
             "(SELECT COUNT(*) FROM chat_messages m WHERE m.thread_id=t.id AND m.role='user') AS messages, "
