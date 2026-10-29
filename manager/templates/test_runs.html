@@ -42,7 +42,7 @@
     <div class="trl-main">
       <a class="trl-name" href="{{ url_for('testruns.detail', tid=r.id) }}">{{ r.name }}</a>
       <div class="trl-meta">
-        <span>{{ r.project_name }}{% if r.mode == 'fixed' %} · fixed list{% elif r.folder_name %} · {{ r.folder_name }}{% else %} · all folders{% endif %}</span>
+        <span>{{ r.project_name }}{% if r.mode == 'fixed' %} · fixed list{% elif r.task_code %} · PM task {{ r.task_code }}{% elif r.folder_name %} · {{ r.folder_name }}{% else %} · all folders{% endif %}</span>
         <span title="Test cases">{{ counts[r.id] }} case{{ 's' if counts[r.id] != 1 }}</span>
         {% if r.only_ready %}<span class="qa-tag">Ready for QA only</span>{% endif %}
         <span class="trl-env">{{ r.env_name or 'Default env' }}</span>
@@ -132,9 +132,12 @@
       </div>
       <div class="form-label mt-2">Which test cases</div>
       <div class="cp-mode">
-        <label><input type="radio" name="selection" value="pick" checked onchange="document.getElementById('trRule').hidden=true"> <b>Pick test cases</b><span>from any folders, next step</span></label>
+        <label><input type="radio" name="selection" value="pick" checked> <b>Pick test cases</b><span>from any folders, next step</span></label>
         <label><input type="radio" name="selection" value="rule" onchange="document.getElementById('trRule').hidden=false"> <b>By folder</b><span>everything in a folder, picked each time it runs</span></label>
+        <label><input type="radio" name="selection" value="task" id="trByTask"> <b>By PM task</b><span>the cases linked to a PM task, picked each time it runs</span></label>
       </div>
+      <div id="trTaskBox" hidden><label class="form-label mt-2" for="trTask">PM task code</label>
+        <input class="form-control form-control-sm" id="trTask" name="task_code" maxlength="40" placeholder="PM-LMX-0042" autocomplete="off"></div>
       <label class="form-label mt-2" for="trEnv">Environment</label>
       <select class="form-select form-select-sm" id="trEnv" name="env_id">{% for e in env_list if e.owner is none %}<option value="{{ e.id }}">{{ e.name }} · {{ e.base_url }}</option>{% endfor %}</select>
       <label class="form-check mt-3"><input class="form-check-input" type="checkbox" name="only_ready"> When it runs, skip cases not marked <b>Ready for QA</b></label>
@@ -200,6 +203,26 @@
 </div>
 {% endblock %}
 {% block scripts %}
+<script>
+(function () {   // Create Test Run: Pick / By folder / By PM task show their own field; ?new=1&task=CODE&project=ID opens it ready
+  var modal = document.getElementById('newRun'); if (!modal) return;
+  var rule = document.getElementById('trRule'), box = document.getElementById('trTaskBox'), code = document.getElementById('trTask');
+  function show() {
+    var v = (modal.querySelector('input[name="selection"]:checked') || {}).value;
+    rule.hidden = v !== 'rule'; box.hidden = v !== 'task'; code.required = v === 'task';
+  }
+  modal.querySelectorAll('input[name="selection"]').forEach(function (r) { r.addEventListener('change', show); });
+  show();
+  var q = new URLSearchParams(location.search);
+  if (q.get('new') && q.get('task')) {
+    document.getElementById('trByTask').checked = true; code.value = q.get('task').toUpperCase(); show();
+    var pr = document.getElementById('trProj'); if (q.get('project') && pr.querySelector('option[value="' + q.get('project') + '"]')) { pr.value = q.get('project'); if (window.trFolders) trFolders(pr.value); }
+    var nm = document.getElementById('trName'); if (!nm.value) nm.value = code.value + ' - test cases';
+    document.addEventListener('DOMContentLoaded', function () { bootstrap.Modal.getOrCreateInstance(modal).show(); });
+    if (document.readyState !== 'loading' && window.bootstrap) bootstrap.Modal.getOrCreateInstance(modal).show();
+  }
+})();
+</script>
 {{ m.schedule_js() }}
 <script src="{{ static_v('case_picker.js') }}"></script>
 <script>

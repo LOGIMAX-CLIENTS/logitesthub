@@ -19,6 +19,8 @@ from flask import Blueprint, abort, flash, redirect, render_template, request, u
 import db
 import envs
 
+TASK_CODE_RE = re.compile(r'^[A-Z0-9][A-Z0-9.-]{2,39}$')   # a PM task code, e.g. PM-LMX-0042 or PM-LMX-0042.1
+
 SCHEMA = (
     """CREATE TABLE IF NOT EXISTS test_runs (
   id INT AUTO_INCREMENT PRIMARY KEY, project_id INT NOT NULL, name VARCHAR(160) NOT NULL, description VARCHAR(500),
@@ -58,6 +60,10 @@ def init(con):
                     "AND TABLE_NAME='runs' AND COLUMN_NAME='exec_id'").fetchone()['n']
     if not n:
         con.execute('ALTER TABLE runs ADD COLUMN exec_id INT NULL, ADD KEY ix_runs_exec (exec_id)')
+    # a Test Run that runs the test cases linked to one PM task (picked each time it runs)
+    if not con.execute("SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() "
+                       "AND TABLE_NAME='test_runs' AND COLUMN_NAME='task_code'").fetchone()['n']:
+        con.execute('ALTER TABLE test_runs ADD COLUMN task_code VARCHAR(40) NULL')
 
 
 # ---------------------------------------------------------------- cases, results, schedule maths
@@ -72,6 +78,9 @@ def resolve_cases(con, tr, ignore_ready=False):
         if tr['folder_id']:
             where.append('c.folder_id=?')
             params.append(tr['folder_id'])
+        if tr.get('task_code'):   # the cases linked to that PM task now, including ones linked after it was made
+            where.append('c.id IN (SELECT case_id FROM case_tasks WHERE task_code=?)')
+            params.append(tr['task_code'])
         sql = (f'SELECT c.* FROM cases c WHERE {" AND ".join(where)}', params)
     q, params = sql
     if tr['only_ready'] and not ignore_ready:
@@ -329,7 +338,12 @@ def make_blueprint(deps):
         env_id = f.get('env_id', type=int) or None
         if env_id and not con().execute('SELECT 1 FROM environments WHERE id=? AND owner IS NULL', (env_id,)).fetchone():
             env_id = None   # a Test Run is shared: never a personal environment (another user could not reach it)
-        return {'name': name, 'project_id': pid, 'folder_id': folder_id, 'env_id': env_id,
+        task_code = f.get('task_code', '').strip().upper()[:40] or None
+        if task_code and not TASK_CODE_RE.match(task_code):
+            return None, 'PM task code: like PM-LMX-0042.'
+        if f.get('selection') == 'task' and not task_code:
+            return None, 'Type the PM task code whose test cases this Test Run runs.'
+        return {'name': name, 'project_id': pid, 'folder_id': folder_id, 'env_id': env_id, 'task_code': task_code,
                 'only_ready': 1 if f.get('only_ready') else 0, 'description': f.get('description', '').strip()[:500] or None}, None
 
     @bp.route('/test-runs/new', methods=['POST'])
@@ -346,10 +360,13 @@ def make_blueprint(deps):
         user = current_user()['username']
         c = con()
         with c:
+            by_task = mode == 'dynamic' and request.form.get('selection') == 'task'
             tid = c.execute('INSERT INTO test_runs(project_id, name, description, mode, folder_id, only_ready, env_id, created_by, '
-                            'created_at, updated_by, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
-                            (v['project_id'], v['name'], v['description'], mode, None if mode == 'fixed' else v['folder_id'],
-                             v['only_ready'], v['env_id'], user, db.now(), user, db.now())).lastrowid
+                            'created_at, updated_by, updated_at, task_code) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+                            (v['project_id'], v['name'], v['description'], mode,
+                             None if mode == 'fixed' or by_task else v['folder_id'],
+                             v['only_ready'], v['env_id'], user, db.now(), user, db.now(),
+                             v['task_code'] if by_task else None)).lastrowid
             if ids:
                 ok = [r['id'] for r in c.execute(f'SELECT id FROM cases WHERE project_id=? AND id IN ({",".join("?" * len(ids))})',
                                                  [v['project_id'], *ids]).fetchall()]
@@ -366,9 +383,11 @@ def make_blueprint(deps):
             flash(err, 'danger')
         else:
             with con():
-                con().execute('UPDATE test_runs SET name=?, description=?, folder_id=?, only_ready=?, env_id=?, updated_by=?, '
-                              'updated_at=? WHERE id=?', (v['name'], v['description'], v['folder_id'] if tr['mode'] == 'dynamic' else None,
-                                                          v['only_ready'], v['env_id'], current_user()['username'], db.now(), tid))
+                dyn = tr['mode'] == 'dynamic'
+                con().execute('UPDATE test_runs SET name=?, description=?, folder_id=?, only_ready=?, env_id=?, task_code=?, '
+                              'updated_by=?, updated_at=? WHERE id=?',
+                              (v['name'], v['description'], v['folder_id'] if dyn else None, v['only_ready'], v['env_id'],
+                               v['task_code'] if dyn else None, current_user()['username'], db.now(), tid))
             flash('Test Run saved.', 'success')
         return redirect(url_for('testruns.detail', tid=tid))
 

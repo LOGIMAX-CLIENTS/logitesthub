@@ -191,11 +191,27 @@ def codes_of(con, case_id):
                                                 (case_id,))]
 
 
+# a run on a server environment: not a Tester CLI run on a PC and not a localhost site (the rule the test case list
+# and the scheduled-run picker use); everything else is a local run
+_SERVER = ("{r}.env_name NOT LIKE '%(CLI)%' AND {e}.base_url NOT LIKE '%localhost%' AND {e}.base_url NOT LIKE '%127.0.0.1%'")
+_DONE = "{r}.status NOT IN ('running', 'queued')"
+# latest live / local run of case c as 'run id|status|started at|passed|total|environment'
+LIVE_RUN_SQL = ("(SELECT CONCAT_WS('|', rl.id, rl.status, rl.started_at, COALESCE(rl.passed, 0), COALESCE(rl.total, 0), el.name) "
+                "FROM runs rl JOIN environments el ON el.id=rl.env_id WHERE rl.case_id=c.id AND "
+                + _SERVER.format(r='rl', e='el') + ' AND ' + _DONE.format(r='rl') + ' ORDER BY rl.id DESC LIMIT 1)')
+LOCAL_RUN_SQL = ("(SELECT CONCAT_WS('|', rp.id, rp.status, rp.started_at, COALESCE(rp.passed, 0), COALESCE(rp.total, 0), "
+                 "COALESCE(ep.name, rp.env_name, 'Local')) FROM runs rp LEFT JOIN environments ep ON ep.id=rp.env_id "
+                 "WHERE rp.case_id=c.id AND NOT (ep.id IS NOT NULL AND " + _SERVER.format(r='rp', e='ep') + ') AND '
+                 + _DONE.format(r='rp') + ' ORDER BY rp.id DESC LIMIT 1)')
+
+
 def task_cases(con, code, by=None):
-    """The task's test cases, each with its latest run. by: only one tester's - the cases they linked or ran for
-    this task, with their own latest run."""
+    """The task's test cases, each with its latest run, and its latest local (Tester CLI / localhost) and live
+    (server environment) run. by: only one tester's - the cases they linked or ran for this task, with their own
+    latest run."""
     sel = ('SELECT c.id, c.tc_no, c.title, c.project_id, p.name AS project, t.added_by, t.added_at, t.source, '
-           'r.id AS run_id, r.status AS run_status, r.started_at AS run_at, r.run_by, r.passed, r.total, r.fail_step, r.fail_reason '
+           'r.id AS run_id, r.status AS run_status, r.started_at AS run_at, r.run_by, r.passed, r.total, r.fail_step, r.fail_reason, '
+           f'{LOCAL_RUN_SQL} AS local_run, {LIVE_RUN_SQL} AS live_run '
            'FROM case_tasks t JOIN cases c ON c.id=t.case_id JOIN projects p ON p.id=c.project_id ')
     if not by:
         return con.execute(sel + 'LEFT JOIN runs r ON r.id=(SELECT MAX(id) FROM runs WHERE case_id=c.id) '
