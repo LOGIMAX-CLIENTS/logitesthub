@@ -1350,6 +1350,10 @@ def _run_case(run_id, content, no_ai=False, base_dir=None, env_id=None, project_
         try:
             with db.connect() as c:
                 env = envs.get(c, env_id)
+            if coderepo.refresh(env, max_age=coderepo.RUN_AGE, wait=60):   # the branch's latest commit, not last night's
+                with db.connect() as c:
+                    env = envs.get(c, env_id)
+            with db.connect() as c:
                 login_path = db.login_helper_file(c, project_id, env)   # the environment's own login steps win
                 cb, cc, cr = envs.code_ref(env)   # the code this run runs against, for its Fail reason
                 if cc:

@@ -41,6 +41,7 @@ _LOCK = threading.Lock()
 _RUNNING = set()
 _TRIED = {}           # environment id -> time.time() of the last automatic sync, so a failing one is not retried non-stop
 CHAT_AGE = 3600       # the Test Assistant brings a copy older than this up to date before reading it
+RUN_AGE = 300         # a server run brings a copy older than this up to date first, so it records the branch's latest commit
 DAILY_AGE = 86400     # every copy is synced at least this often
 
 COLUMNS = [('repo_url', 'VARCHAR(300) NULL'), ('repo_branch', 'VARCHAR(100) NULL'), ('repo_paths', 'TEXT NULL'),
@@ -211,12 +212,13 @@ def refresh(env, on_wait=None, max_age=CHAT_AGE, wait=45):
     """Before the Test Assistant reads the code: a copy older than an hour is synced first. Waits at most `wait`
     seconds; a slower sync goes on in the background and this message reads the copy as it is."""
     if not _auto(env, max_age):
-        return
+        return False
     _TRIED[env['id']] = time.time()
     if on_wait:
         on_wait()
     start_sync(env['id'])
     _wait(env['id'], wait)
+    return True
 
 
 def start_auto_sync():
