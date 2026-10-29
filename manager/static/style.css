@@ -636,6 +636,7 @@ video.rec { display: block; width: 100%; aspect-ratio: 1366 / 768; object-fit: c
 .qa-draft { background: var(--surface-3, #eef0ee); color: var(--ink-2, #475467); box-shadow: inset 0 0 0 1px var(--line-2, #d0d5dd); }
 .qa-ready { background: var(--brand-tint); color: var(--brand); box-shadow: inset 0 0 0 1px var(--brand-line, #9fd9dd); }
 .qa-tag { flex: none; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--brand-tint); color: var(--brand); }
+.local-tag { flex: none; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--gold-tint, #fff3ea); color: var(--warn, #b45309); }
 
 /* ---- Test Runs + Scheduled Runs ---- */
 .trh-title { display: flex; align-items: center; gap: 8px; font-size: 22px; font-weight: 800; margin: 0; }

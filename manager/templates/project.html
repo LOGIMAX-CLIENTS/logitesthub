@@ -121,7 +121,7 @@
   <!-- ============ Right: cases / runs ============ -->
   <section class="tm-content">
     {% macro qs() -%}
-      {%- set base = {'folder': folder_id, 'q': q, 'sort': f.sort if f.sort != 'newest' else None, 'status': f.status or None, 'tag': f.tag or None, 'source': f.source or None, 'by': f.by or None, 'qa': f.qa or None, 'all': request.args.get('all') or None} -%}
+      {%- set base = {'folder': folder_id, 'q': q, 'sort': f.sort if f.sort != 'newest' else None, 'status': f.status or None, 'tag': f.tag or None, 'source': f.source or None, 'by': f.by or None, 'qa': f.qa or None, 'ran': f.ran or None, 'all': request.args.get('all') or None} -%}
       {%- set _ = base.update(kwargs) -%}
       {{- url_for('project', pid=p.id, **base) -}}
     {%- endmacro %}
@@ -168,7 +168,7 @@
     <div class="tb-filters">
       <input class="form-check-input tb-all" type="checkbox" id="selAll" aria-label="Select all test cases">
       <form method="get" class="tb-search">
-        {% for k in ('folder', 'sort', 'status', 'tag', 'source', 'by', 'qa') %}{% set v = folder_id if k == 'folder' else f[k] %}{% if v and not (k == 'sort' and v == 'newest') %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endif %}{% endfor %}
+        {% for k in ('folder', 'sort', 'status', 'tag', 'source', 'by', 'qa', 'ran') %}{% set v = folder_id if k == 'folder' else f[k] %}{% if v and not (k == 'sort' and v == 'newest') %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endif %}{% endfor %}
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
         <input name="q" id="caseSearch" value="{{ q }}" placeholder="Search by Test Case ID or Title" aria-label="Search test cases" autocomplete="off">
       </form>
@@ -189,9 +189,14 @@
       <div class="dropdown"><button class="tb-dd {{ 'set' if f.tag }}" data-bs-toggle="dropdown">Tags{% if f.tag %}: {{ f.tag }}{% endif %} {{ chev }}</button>
         <ul class="dropdown-menu tb-scroll"><li><a class="dropdown-item {{ 'active' if not f.tag }}" href="{{ qs(tag=None) }}">All tags</a></li>
           {% for t in all_tags %}<li><a class="dropdown-item {{ 'active' if f.tag == t }}" href="{{ qs(tag=t) }}">{{ t }}</a></li>{% else %}<li><span class="dropdown-item-text text-secondary small">No tags in these cases</span></li>{% endfor %}</ul></div>
-      <div class="dropdown"><button class="tb-dd {{ 'set' if f.source or f.qa }}" data-bs-toggle="dropdown">
+      <div class="dropdown"><button class="tb-dd {{ 'set' if f.source or f.qa or f.ran }}" data-bs-toggle="dropdown">
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M7 12h10M10 17h4"/></svg>More {{ chev }}</button>
         <ul class="dropdown-menu dropdown-menu-end tb-scroll">
+          <li><h6 class="dropdown-header">Where it ran</h6></li>
+          <li><a class="dropdown-item {{ 'active' if not f.ran }}" href="{{ qs(ran=None) }}">Any</a></li>
+          <li><a class="dropdown-item {{ 'active' if f.ran == 'local' }}" href="{{ qs(ran='local') }}" title="Run by a developer on a local PC (Tester CLI / localhost) but never on a server environment such as Stagging or UAT">Only on a local PC – not on a server yet</a></li>
+          <li><a class="dropdown-item {{ 'active' if f.ran == 'server' }}" href="{{ qs(ran='server') }}">On a server environment</a></li>
+          <li><hr class="dropdown-divider"></li>
           <li><h6 class="dropdown-header">QA status</h6></li>
           <li><a class="dropdown-item {{ 'active' if not f.qa }}" href="{{ qs(qa=None) }}">Any</a></li>
           <li><a class="dropdown-item {{ 'active' if f.qa == 'ready' }}" href="{{ qs(qa='ready') }}">Ready for QA</a></li>
@@ -201,7 +206,7 @@
           <li><a class="dropdown-item {{ 'active' if not f.source }}" href="{{ qs(source=None) }}">Any</a></li>
           <li><a class="dropdown-item {{ 'active' if f.source == 'imported' }}" href="{{ qs(source='imported') }}">Imported</a></li>
           <li><a class="dropdown-item {{ 'active' if f.source == 'web' }}" href="{{ qs(source='web') }}">Created in LogiTestHub</a></li>
-          {% if q or f.status or f.tag or f.source or f.by or f.qa or f.sort != 'newest' %}<li><hr class="dropdown-divider"></li>
+          {% if q or f.status or f.tag or f.source or f.by or f.qa or f.ran or f.sort != 'newest' %}<li><hr class="dropdown-divider"></li>
           <li><a class="dropdown-item text-danger" href="{{ url_for('project', pid=p.id, folder=folder_id) }}">Clear all filters</a></li>{% endif %}
         </ul></div>
     </div>
@@ -242,7 +247,8 @@
     <div class="small text-secondary mb-2" id="caseCount" data-today-view="1"><b class="text-body">Your runs today: {{ mine|length }} test case{{ 's' if mine|length != 1 }}</b>
       · pick a folder or search to find others · <a href="{{ qs(all='1') }}">Show all {{ cases|length }}</a></div>
     {% else %}
-    <div class="small text-secondary mb-2" id="caseCount">{{ cases|length }} test case{{ 's' if cases|length != 1 }}{% if request.args.get('all') == '1' %} · <a href="{{ qs(all=None) }}">Only my runs today</a>{% endif %}</div>
+    {% set local_only = cases|selectattr('last_status')|rejectattr('on_server')|list|length %}
+    <div class="small text-secondary mb-2" id="caseCount">{{ cases|length }} test case{{ 's' if cases|length != 1 }}{% if f.ran == 'local' %} run only on a local PC · <a href="{{ qs(ran=None) }}">Show all</a>{% elif local_only %} · <a href="{{ qs(ran='local') }}" title="Run on a local PC but not yet on a server environment">{{ local_only }} not run on a server yet</a>{% endif %}{% if request.args.get('all') == '1' %} · <a href="{{ qs(all=None) }}">Only my runs today</a>{% endif %}</div>
     {% endif %}
     {% if today_view and not mine %}
     <div class="panel text-secondary mb-2" id="todayEmpty">You haven't run any test case in this project today. Pick a folder on the left, search above, or
@@ -261,11 +267,12 @@
             {% if my %}<div class="small my-today">You ran it today{% if my.n > 1 %} {{ my.n }}×{% endif %} · last at {{ my.at[11:16] }} · <span class="t-{{ {'PASSED': 'pass', 'FAILED': 'fail'}.get(my.status, 'warn') }}">{{ my.status|capitalize }}</span></div>{% endif %}
           </div>
           {% if c.qa_status == 'ready' %}<span class="qa-tag">Ready for QA</span>{% endif %}
+          {% if c.last_status and not c.on_server %}<span class="local-tag" title="Run only on a local PC (Tester CLI / localhost): not yet on a server environment">Local only</span>{% endif %}
           {% if c.last_status %}<span class="badge st-{{ c.last_status|lower }}">{{ c.last_status }}</span>{% endif %}
         </a>
       </div>
       {% else %}
-      <div class="panel text-secondary">{{ 'No test cases match these filters.' if (q or f.status or f.tag or f.source or f.by) else 'No test cases here yet.' }}</div>
+      <div class="panel text-secondary">{{ 'No test cases match these filters.' if (q or f.status or f.tag or f.source or f.by or f.ran) else 'No test cases here yet.' }}</div>
       {% endfor %}
     </div>
 

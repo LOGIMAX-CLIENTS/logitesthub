@@ -743,7 +743,9 @@ def project(pid):
     n_runs = con().execute('SELECT COUNT(*) FROM runs r JOIN cases c ON c.id=r.case_id WHERE c.project_id=?',
                            (pid,)).fetchone()[0]
     cases, runs, dups = [], [], []
-    f = {k: request.args.get(k, '').strip() for k in ('sort', 'status', 'tag', 'source', 'by', 'qa')}
+    f = {k: request.args.get(k, '').strip() for k in ('sort', 'status', 'tag', 'source', 'by', 'qa', 'ran')}
+    if f['ran'] not in RAN_FILTERS:
+        f['ran'] = ''
     if f['sort'] not in SORTS:
         f['sort'] = 'newest'
     if f['status'] not in STATUS_FILTERS:
@@ -773,8 +775,12 @@ def project(pid):
         if f['qa'] in ('ready', 'draft'):
             where.append('c.qa_status=?')
             params.append(f['qa'])
+        if f['ran'] == 'local':   # run by developers on their PC, never yet on a server environment
+            where.append(f'lr.id IS NOT NULL AND NOT {SERVER_RUN_SQL}')
+        elif f['ran'] == 'server':
+            where.append(SERVER_RUN_SQL)
         rows = con().execute(
-            'SELECT c.*, f.name AS folder_name, lr.status AS last_status, lr.started_at AS last_run '
+            f'SELECT c.*, f.name AS folder_name, lr.status AS last_status, lr.started_at AS last_run, {SERVER_RUN_SQL} AS on_server '
             'FROM cases c LEFT JOIN folders f ON f.id=c.folder_id '
             'LEFT JOIN runs lr ON lr.id=(SELECT MAX(id) FROM runs WHERE case_id=c.id) '
             f'WHERE {" AND ".join(where)} ORDER BY {SORTS[f["sort"]][1]}', params).fetchall()
@@ -834,6 +840,12 @@ SORTS = {   # key -> (label, ORDER BY); fixed whitelist, never built from the re
     'lastrun': ('Recently run', 'lr.started_at IS NULL, lr.started_at DESC'),
 }
 STATUS_FILTERS = {'never': 'Never run', 'PASSED': 'Passed', 'FAILED': 'Failed', 'PARTIAL': 'Partial', 'ERROR': 'Error'}
+RAN_FILTERS = {'local': 'Only on a local PC', 'server': 'On a server environment'}
+# a finished run of case c on a server environment: not a Tester CLI run on a developer's PC, not a localhost site
+# (the same rule the scheduled-run picker uses to show where a case last ran)
+SERVER_RUN_SQL = ("EXISTS (SELECT 1 FROM runs sr JOIN environments se ON se.id=sr.env_id WHERE sr.case_id=c.id "
+                  "AND sr.env_name NOT LIKE '%(CLI)%' AND se.base_url NOT LIKE '%localhost%' "
+                  "AND se.base_url NOT LIKE '%127.0.0.1%' AND sr.status NOT IN ('running', 'queued'))")
 
 
 def _norm_steps(content):
