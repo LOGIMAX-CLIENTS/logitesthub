@@ -62,6 +62,7 @@
         <span class="min-w-0 flex-grow-1"><b>TC-{{ c.tc_no }}</b> <span class="text-truncate">{{ c.title }}</span></span>
         {% if c.qa_status == 'ready' %}<span class="qa-tag">Ready for QA</span>{% elif c.id in skip_ids %}<span class="skip-tag" title="Ready for QA only is on">Skipped: not Ready for QA</span>{% endif %}
         <span class="small text-secondary text-nowrap">{% if r and r.total %}{{ r.passed }}/{{ r.total }} steps · {{ r.duration_ms|secs }}{% elif r %}{{ r.status }}{% else %}not in this run{% endif %}</span>
+        {% if r and r.status in ('FAILED', 'ERROR', 'PARTIAL') %}<span class="fr-btn" role="link" tabindex="0" data-href="{{ url_for('run_fail_reason', rid=r.id) }}" title="Where and on which code it ran, the step that failed and why - for the developer">Fail reason</span>{% endif %}
       </a>
       {% else %}
       <div class="tr-empty"><b>No test cases {{ 'match' if tr.mode == 'dynamic' or tr.only_ready else 'selected yet' }}</b>
@@ -131,7 +132,14 @@
   <div class="modal-dialog modal-dialog-centered">{{ m.schedule_form([], env_list|selectattr('owner', 'none')|list, days, today, fixed_run=tr, back=url_for('testruns.detail', tid=tr.id)) }}</div>
 </div>
 {% endblock %}
-{% block scripts %}<script src="{{ static_v('case_picker.js') }}"></script>
+{% block scripts %}
+<script>
+document.querySelectorAll('.fr-btn[data-href]').forEach(function (b) {   // a link inside the row's link: open the report, not the case
+  function go(e) { e.preventDefault(); e.stopPropagation(); location.href = b.getAttribute('data-href'); }
+  b.addEventListener('click', go);
+  b.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') go(e); });
+});
+</script><script src="{{ static_v('case_picker.js') }}"></script>
 <script>
 (function () {   // test case picker
   var el = document.getElementById('cpData');

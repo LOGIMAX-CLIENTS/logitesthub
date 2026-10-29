@@ -1351,6 +1351,11 @@ def _run_case(run_id, content, no_ai=False, base_dir=None, env_id=None, project_
             with db.connect() as c:
                 env = envs.get(c, env_id)
                 login_path = db.login_helper_file(c, project_id, env)   # the environment's own login steps win
+                cb, cc, cr = envs.code_ref(env)   # the code this run runs against, for its Fail reason
+                if cc:
+                    with c:
+                        c.execute('UPDATE runs SET code_branch=?, code_commit=?, code_repo=? WHERE id=?',
+                                  (cb, cc, (cr or '')[:300] or None, run_id))
             vars_path = envs.vars_file(env) if env else None
             import api as _api
             with db.connect() as c:
@@ -1457,6 +1462,58 @@ def _send_artifact(run, name):
     if not run or not run['run_dir'] or not SAFE_FILE.match(name):
         abort(404)
     return send_from_directory(run['run_dir'], name, conditional=True)
+
+
+def _is_server_run(env, env_name):
+    """A run on a server environment: not a Tester CLI run on a PC, not a localhost site."""
+    return bool(env) and '(CLI)' not in (env_name or '') and not re.search(r'localhost|127\.0\.0\.1', env['base_url'] or '')
+
+
+@app.route('/runs/<int:rid>/fail-reason')
+@login_required
+def run_fail_reason(rid):
+    """What a developer needs to fix a failed run: where and on which code it ran, the step that failed and why, the
+    screenshot, the case's latest local run to compare with, and its PM tasks; one Copy for developer text."""
+    run = con().execute('SELECT * FROM runs WHERE id=?', (rid,)).fetchone() or abort(404)
+    c = con().execute('SELECT c.*, p.name AS project FROM cases c JOIN projects p ON p.id=c.project_id WHERE c.id=?',
+                      (run['case_id'],)).fetchone() or abort(404)
+    env = con().execute('SELECT * FROM environments WHERE id=?', (run['env_id'],)).fetchone() if run['env_id'] else None
+    server = _is_server_run(env, run['env_name'])
+    now_branch, now_commit, _ = envs.code_ref(env) if server else (None, None, None)
+    tr = con().execute('SELECT t.id, t.name FROM test_run_execs x JOIN test_runs t ON t.id=x.test_run_id WHERE x.id=?',
+                       (run['exec_id'],)).fetchone() if run['exec_id'] else None
+    local = con().execute(   # the case's latest finished run on a PC (Tester CLI / localhost), to compare with
+        'SELECT r.* FROM runs r LEFT JOIN environments e ON e.id=r.env_id WHERE r.case_id=? AND r.id<>? '
+        "AND (e.id IS NULL OR r.env_name LIKE '%(CLI)%' OR e.base_url LIKE '%localhost%' OR e.base_url LIKE '%127.0.0.1%') "
+        "AND r.status NOT IN ('running', 'queued') ORDER BY r.id DESC LIMIT 1", (c['id'], rid)).fetchone() if server else None
+    tasks = [r['task_code'] for r in con().execute('SELECT task_code FROM case_tasks WHERE case_id=? ORDER BY added_at', (c['id'],))]
+    shot = None
+    if run['fail_step'] and run['run_dir']:
+        name = f"step-{int(run['fail_step']):02d}.png"
+        shot = name if os.path.isfile(os.path.join(run['run_dir'], name)) else None
+    link = url_for('run_fail_reason', rid=rid, _external=True)
+    code = f"{run['code_branch'] or '?'} @ {run['code_commit'][:10]}" if run['code_commit'] else 'not recorded'
+    lines = [f"TC-{c['tc_no']} {c['title']}",
+             f"Result: {run['status']} on {run['env_name'] or '-'} ({env['base_url'] if env else '-'}) at {run['started_at'][:16]}"
+             + (f" - Test Run: {tr['name']}" if tr else ''),
+             f"Code: {code}" + (f" ({run['code_repo']})" if run['code_repo'] else '')]
+    if run['fail_step']:
+        lines.append(f"Failed at step {run['fail_step']}: {run['fail_text'] or ''}".rstrip())
+    if run['fail_reason']:
+        lines.append(f"Why: {run['fail_reason']}")
+    if run['error'] and run['status'] == 'ERROR':
+        lines.append(f"Error: {run['error']}")
+    if local:
+        lines.append(f"Latest local run: {local['status']} at {local['started_at'][:16]} by {local['run_by'] or '-'}"
+                     + (f" on {local['code_branch'] or '?'} @ {local['code_commit'][:10]}" if local['code_commit'] else ''))
+    if now_commit and run['code_commit'] and now_commit != run['code_commit']:
+        lines.append(f"Code on {run['env_name']} has changed since: now {now_branch} @ {now_commit[:10]} - run it again")
+    if tasks:
+        lines.append('PM task: ' + ', '.join(tasks))
+    lines.append(f'Details: {link}')
+    return render_template('fail_reason.html', run=run, c=c, env=env, server=server, tr=tr, local=local, tasks=tasks,
+                           shot=shot, now_branch=now_branch, now_commit=now_commit, copy_text='\n'.join(lines),
+                           commit_url=envs.commit_url)
 
 
 @app.route('/runs/<int:rid>/file/<name>')

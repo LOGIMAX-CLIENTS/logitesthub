@@ -165,7 +165,8 @@
     <td class="text-end">{{ (r.passed ~ ' / ' ~ r.total) if r.total else '-' }}</td>
     <td class="text-end text-nowrap">{{ r.duration_ms|secs if r.duration_ms else '-' }}</td>
     <td class="text-start hist-why">{% if r.status == 'ERROR' %}<span class="t-fail">{{ r.error or 'Could not finish' }}</span>
-      {% elif r.fail_reason %}<span class="hist-at">Step {{ r.fail_step }}:</span> {{ r.fail_reason }}{% endif %}</td>
+      {% elif r.fail_reason %}<span class="hist-at">Step {{ r.fail_step }}:</span> {{ r.fail_reason }}{% endif %}
+      {% if r.status in ('FAILED', 'ERROR', 'PARTIAL') %} <a class="fr-btn" href="{{ url_for('run_fail_reason', rid=r.id) }}" onclick="event.stopPropagation()">Fail reason</a>{% endif %}</td>
   </tr>
   {% else %}<tr><td colspan="8" class="text-secondary text-start">Never run. Press ▶ Run test.</td></tr>{% endfor %}
   </tbody>
