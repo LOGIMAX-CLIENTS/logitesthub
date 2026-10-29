@@ -33,7 +33,9 @@
       <tbody>
       {% for u in users %}
       <tr>
-        <td class="text-start"><b>{{ u.username }}</b>{% if u.name %} <span class="text-secondary">{{ u.name }}</span>{% endif %}</td>
+        <td class="text-start">{% set first = u.projects[0] if u.projects else none %}
+          {% if first %}<a href="{{ url_for('assistant.page', pid=first.id, who=u.username) }}" title="Open {{ u.username }}'s chats (read-only)"><b>{{ u.username }}</b></a>{% else %}<b>{{ u.username }}</b>{% endif %}{% if u.name %} <span class="text-secondary">{{ u.name }}</span>{% endif %}
+          {% if u.projects %}<div class="small">{% for pr in u.projects %}<a class="me-2" href="{{ url_for('assistant.page', pid=pr.id, who=u.username) }}" title="{{ u.username }}'s chats in {{ pr.name }}">{{ pr.name }} {{ pr.n }}</a>{% endfor %}</div>{% endif %}</td>
         <td class="text-start">{{ u.department or '' }}</td>
         <td class="text-end">{{ u.chats }}</td><td class="text-end">{{ u.messages }}</td><td class="text-end">{{ u.saved }}</td>
         <td class="text-end">{{ u.runs }}</td><td class="text-end t-pass">{{ u.passed or 0 }}</td><td class="text-end t-fail">{{ u.failed or 0 }}</td><td class="text-end">{{ u.other or 0 }}</td>

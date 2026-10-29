@@ -27,8 +27,10 @@
         <span class="as-thread-meta">{% if t.created_by != me.username %}<b>{{ t.owner_name or t.created_by }}</b> · {% endif %}{{ t.updated_at|dmy }}
           {% if t.tc_no %} · TC-{{ t.tc_no }}{% endif %}{% if t.last_run %} <span class="badge st-{{ t.last_run|lower }}">{{ t.last_run }}</span>{% endif %}</span></a>
       {% else %}
-      <div class="small text-secondary p-3">No conversations yet.</div>
+      <div class="small text-secondary p-3">{{ 'No conversations in ' ~ p.name ~ '.' if who else 'No conversations yet.' }}</div>
       {% endfor %}
+      {% if elsewhere %}<div class="small text-secondary px-3 pb-2 pt-1">{{ 'Everyone' if who == 'all' else who }} also chatted in:
+        {% for pr in elsewhere %}<a class="d-inline-block me-2" href="{{ url_for('assistant.page', pid=pr.id, who=who) }}">{{ pr.name }} ({{ pr.n }})</a>{% endfor %}</div>{% endif %}
     </nav>
   </aside>
 
