@@ -247,7 +247,7 @@
     <div class="small text-secondary mb-2" id="caseCount" data-today-view="1"><b class="text-body">Your runs today: {{ mine|length }} test case{{ 's' if mine|length != 1 }}</b>
       · pick a folder or search to find others · <a href="{{ qs(all='1') }}">Show all {{ cases|length }}</a></div>
     {% else %}
-    {% set local_only = cases|selectattr('last_status')|rejectattr('on_server')|list|length %}
+    {% set local_only = cases|selectattr('last_status')|rejectattr('server_last')|list|length %}
     <div class="small text-secondary mb-2" id="caseCount">{{ cases|length }} test case{{ 's' if cases|length != 1 }}{% if f.ran == 'local' %} run only on a local PC · <a href="{{ qs(ran=None) }}">Show all</a>{% elif local_only %} · <a href="{{ qs(ran='local') }}" title="Run on a local PC but not yet on a server environment">{{ local_only }} not run on a server yet</a>{% endif %}{% if request.args.get('all') == '1' %} · <a href="{{ qs(all=None) }}">Only my runs today</a>{% endif %}</div>
     {% endif %}
     {% if today_view and not mine %}
@@ -267,7 +267,8 @@
             {% if my %}<div class="small my-today">You ran it today{% if my.n > 1 %} {{ my.n }}×{% endif %} · last at {{ my.at[11:16] }} · <span class="t-{{ {'PASSED': 'pass', 'FAILED': 'fail'}.get(my.status, 'warn') }}">{{ my.status|capitalize }}</span></div>{% endif %}
           </div>
           {% if c.qa_status == 'ready' %}<span class="qa-tag">Ready for QA</span>{% endif %}
-          {% if c.last_status and not c.on_server %}<span class="local-tag" title="Run only on a local PC (Tester CLI / localhost): not yet on a server environment">Local only</span>{% endif %}
+          {% if c.server_last %}{% set sv = c.server_last.split('|') %}<span class="env-tag env-{{ (sv[1] or '')|lower }}" title="Last run on a server environment: {{ sv[0] }} · {{ sv[1]|capitalize }} · {{ sv[2] }}">{{ sv[0] }}</span>
+          {% elif c.last_status %}<span class="local-tag" title="Run only on a local PC (Tester CLI / localhost): not yet on a server environment">Local only</span>{% endif %}
           {% if c.last_status %}<span class="badge st-{{ c.last_status|lower }}">{{ c.last_status }}</span>{% endif %}
         </a>
       </div>
