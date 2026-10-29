@@ -122,6 +122,10 @@ SYSTEM = [   # key, label, help, default
      'the provider is the API.', 'claude-opus-5-5'),
     ('sys.claude_model', 'Claude subscription model', 'Model for Claude Code (provider: Claude subscription). Empty = the API model.', ''),
     ('sys.audit_days', 'Keep audit log (days)', 'Older audit entries are removed automatically (7 to 365).', '90'),
+    ('sys.video_days_passed', 'Keep videos of passed runs (days)', 'The video of a passed run (~6 MB) is removed after this many days; '
+     'its result, steps and screenshots stay (1 to 365).', '7'),
+    ('sys.video_days_failed', 'Keep videos of failed runs (days)', 'The same for failed / error / partial runs, whose video a '
+     'developer may need for longer (1 to 365).', '7'),
 ]
 SYS_DEFAULT = {k: d for k, _, _, d in SYSTEM}
 AI_PROVIDERS = {'api': 'Anthropic API (credits)', 'claude-code': 'Claude subscription via Claude Code (testing)'}
@@ -828,6 +832,9 @@ def register(app, con, admin_required, current_user):
             errors.append('Claude subscription model: choose one from the list.')
         if not new['sys.audit_days'].isdigit() or not 7 <= int(new['sys.audit_days']) <= 365:
             errors.append('Keep audit log: a whole number of days from 7 to 365.')
+        for k, what in (('sys.video_days_passed', 'passed'), ('sys.video_days_failed', 'failed')):
+            if not new[k].isdigit() or not 1 <= int(new[k]) <= 365:
+                errors.append(f'Keep videos of {what} runs: a whole number of days from 1 to 365.')
         secrets = {n: re.sub(r'\s+', '', f.get(n, '')) for n in SECRETS}   # empty = keep the saved one
         for n, v in secrets.items():
             if v and not SECRETS[n][1].match(v):
