@@ -31,7 +31,7 @@
       <h2 class="h6">Where and on which code</h2>
       <table class="table table-sm mb-0 fr-kv">
         <tr><th>Environment</th><td>{{ run.env_name or '-' }}{% if env %} · <a href="{{ env.base_url }}" target="_blank" rel="noopener">{{ env.base_url }}</a>{% endif %}</td></tr>
-        <tr><th>Code</th><td>{{ code(run.code_branch, run.code_commit, run.code_repo) }}{% if run.code_repo %}<div class="small text-secondary text-break">{{ run.code_repo }}</div>{% endif %}</td></tr>
+        <tr><th>Code</th><td>{{ code(run.code_branch, run.code_commit, run.code_repo) }}{% if run.code_commit and server %}<div class="small text-secondary">Latest commit on this branch when the run started</div>{% endif %}{% if run.code_repo %}<div class="small text-secondary text-break">{{ run.code_repo }}</div>{% endif %}</td></tr>
         {% if server and now_commit %}<tr><th>{{ run.env_name }} now</th><td>{{ code(now_branch, now_commit, env.repo_url) }}{% if run.code_commit and now_commit != run.code_commit %} <span class="badge text-bg-warning">changed since</span>{% endif %}</td></tr>{% endif %}
         {% if tasks %}<tr><th>PM task</th><td>{% for t in tasks %}<a class="task-badge" href="{{ url_for('pmtasks.page', code=t) }}">📌 {{ t }}</a> {% endfor %}</td></tr>{% endif %}
       </table>
