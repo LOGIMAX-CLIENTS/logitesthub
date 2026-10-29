@@ -14,6 +14,14 @@
   </div>
 </div>
 
+{% if who %}
+<section class="fr-who fr-who-{{ who.kind }} mb-3" aria-label="Who should fix it">
+  <div class="fr-who-head"><span class="fr-who-tag">Likely: {{ who.label }}</span><span class="fr-who-by">Who fixes: <b>{{ who.who }}</b></span></div>
+  <div class="small mt-1">{{ who.why }}</div>
+  <div class="small text-secondary mt-1">A best guess from the error and {{ run.env_name or 'the' }}'s code, not a verdict.</div>
+</section>
+{% endif %}
+
 <div class="row g-3">
   <div class="col-lg-7">
     <section class="panel mb-3">

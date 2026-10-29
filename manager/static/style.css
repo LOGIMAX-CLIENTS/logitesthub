@@ -1670,3 +1670,11 @@ html:has(main.as-page), body:has(main.as-page) { overflow: hidden; }
 .fr-shot { display: block; max-width: 100%; border: 1px solid var(--line); border-radius: 8px; }
 .fr-note { font-size: 13px; padding: 8px 10px; border-radius: 8px; background: var(--gold-tint, #fff3ea); }
 .fr-step { padding: 8px 10px; border-radius: 8px; background: var(--surface-2, #f5f6fb); }
+.fr-who { padding: 12px 14px; border-radius: 10px; border: 1px solid var(--line); border-left-width: 4px; background: var(--card); }
+.fr-who-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
+.fr-who-tag { font-weight: 700; font-size: 14px; }
+.fr-who-by { font-size: 13px; color: var(--muted); }
+.fr-who-app, .fr-who-not_merged { border-left-color: #dc3545; }
+.fr-who-test { border-left-color: var(--brand); }
+.fr-who-env { border-left-color: var(--warn, #b45309); }
+.fr-who-unknown { border-left-color: var(--line-2, #c9cde0); }

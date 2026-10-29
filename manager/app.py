@@ -1495,6 +1495,14 @@ def run_fail_reason(rid):
     if run['fail_step'] and run['run_dir']:
         name = f"step-{int(run['fail_step']):02d}.png"
         shot = name if os.path.isfile(os.path.join(run['run_dir'], name)) else None
+    who = None
+    if run['status'] != 'PASSED':   # best guess at who fixes it: the failed step's elements looked up in this env's code
+        import elementcheck
+        import failwho
+        root = coderepo.code_dir(env) if env else None
+        idx = elementcheck.index(root) if root else None   # None while a first index build runs: then "Not sure"
+        who = failwho.classify(run['status'], run['fail_text'], run['fail_reason'], run['error'], run['env_name'],
+                               local['status'] if local else None, bool(idx), failwho.missing_elements(run['fail_text'], idx))
     link = url_for('run_fail_reason', rid=rid, _external=True)
     code = f"{run['code_branch'] or '?'} @ {run['code_commit'][:10]}" if run['code_commit'] else 'not recorded'
     lines = [f"TC-{c['tc_no']} {c['title']}",
@@ -1514,8 +1522,10 @@ def run_fail_reason(rid):
         lines.append(f"Code on {run['env_name']} has changed since: now {now_branch} @ {now_commit[:10]} - run it again")
     if tasks:
         lines.append('PM task: ' + ', '.join(tasks))
+    if who:
+        lines.append(f"Likely: {who['label']} - who fixes: {who['who']}. {who['why']}")
     lines.append(f'Details: {link}')
-    return render_template('fail_reason.html', run=run, c=c, env=env, server=server, tr=tr, local=local, tasks=tasks,
+    return render_template('fail_reason.html', run=run, c=c, env=env, server=server, tr=tr, local=local, tasks=tasks, who=who,
                            shot=shot, now_branch=now_branch, now_commit=now_commit, copy_text='\n'.join(lines),
                            commit_url=envs.commit_url)
 
