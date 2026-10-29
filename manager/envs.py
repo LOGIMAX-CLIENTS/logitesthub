@@ -80,7 +80,10 @@ def init(con):
                             ('environments', 'owner', 'ALTER TABLE environments ADD COLUMN owner VARCHAR(64) NULL'),
                             # a personal environment whose database is on its owner's PC (e.g. XAMPP MySQL): the Tester
                             # CLI on that PC runs the SQL steps; this server cannot reach it and keeps no password for it
-                            ('environments', 'db_on_pc', 'ALTER TABLE environments ADD COLUMN db_on_pc TINYINT NOT NULL DEFAULT 0')):
+                            ('environments', 'db_on_pc', 'ALTER TABLE environments ADD COLUMN db_on_pc TINYINT NOT NULL DEFAULT 0'),
+                            # the project this environment's application belongs to: the Tester Assistant saves its test
+                            # cases there when the environment is picked in "Run on" (NULL = any project)
+                            ('environments', 'project_id', 'ALTER TABLE environments ADD COLUMN project_id INT NULL')):
         n = con.execute('SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() '
                         'AND TABLE_NAME=? AND COLUMN_NAME=?', (table, col)).fetchone()['n']
         if not n:
@@ -191,7 +194,7 @@ def all_envs(con, user=None):
                        'db_write_user, (db_write_password_enc IS NOT NULL) AS has_db_write_password, db_allow_write, '
                        '(password_enc IS NOT NULL) AS has_password, repo_url, repo_branch, repo_paths, repo_commit, '
                        'repo_synced_at, repo_status, repo_error, (repo_token_enc IS NOT NULL) AS has_repo_token, owner, created_by, '
-                       'db_on_pc '
+                       'db_on_pc, project_id '
                        f'FROM environments {where} ORDER BY owner IS NOT NULL, is_default DESC, name', params).fetchall()
     if not user:
         return rows

@@ -52,8 +52,9 @@
         {% elif is_admin %}<a class="as-code" href="{{ url_for('environments') }}" title="Set an environment's code repository in Settings → Environments">Connect code</a>{% endif %}
         <label class="small text-secondary" for="asEnv">Run on</label>
         <select class="form-select form-select-sm w-auto" id="asEnv">
-          {% for e in envs %}<option value="{{ e.id }}" data-db="{{ 1 if e.db_host else 0 }}" {{ 'selected' if e.is_default }}>{{ e.name }}</option>{% endfor %}
+          {% for e in envs %}<option value="{{ e.id }}" data-db="{{ 1 if e.db_host else 0 }}" data-project="{{ e.project_id or '' }}" {{ 'selected' if e.is_default }}>{{ e.name }}{% if e.project_id and e.project_id != p.id %} · {{ project_names.get(e.project_id, '') }}{% endif %}</option>{% endfor %}
         </select>
+        <span class="small" id="asProjNote" hidden></span>
         {% if thread %}<form method="post" action="{{ url_for('assistant.delete', pid=p.id, tid=thread.id) }}" onsubmit="return confirm('Delete this conversation? A saved test case stays.')">
           <input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn btn-sm btn-outline-secondary" title="Delete conversation">Delete</button></form>{% endif %}
       </div>
@@ -96,17 +97,38 @@
   function fit() { wrap.style.setProperty('--as-h', Math.max(420, window.innerHeight - wrap.getBoundingClientRect().top - 12) + 'px'); }
   fit(); window.addEventListener('resize', fit);
 })();
-(function () {   // Run on picks its own code when it has one; otherwise the Code choice stays (e.g. read Dev's code, run on Local)
-  var run = document.getElementById('asEnv'), code = document.getElementById('asCodeSel');
+(function () {   // Run on and Code follow each other; an environment set to another project opens that project's assistant
+  var run = document.getElementById('asEnv'), code = document.getElementById('asCodeSel'), note = document.getElementById('asProjNote');
   if (!run) return;
+  var PID = {{ p.id }}, THREAD = {{ (thread.id if thread else none)|tojson }}, URLS = {{ project_urls|tojson }};
   function has(sel, v) { for (var i = 0; i < sel.options.length; i++) if (sel.options[i].value === v) return true; return false; }
-  var KEY = 'lth.assistant.runOn.{{ p.id }}';   // the last "Run on" this user picked here comes back on the next visit
-  try { var saved = localStorage.getItem(KEY); if (saved && has(run, saved)) run.value = saved; } catch (e) {}
-  run.addEventListener('change', function () {
-    try { localStorage.setItem(KEY, run.value); } catch (e) {}
-    if (code && has(code, run.value)) code.value = run.value;
-  });
+  function projOf(v) { for (var i = 0; i < run.options.length; i++) if (run.options[i].value === v) return run.options[i].getAttribute('data-project') || ''; return ''; }
+  function key(pid) { return 'lth.assistant.runOn.' + pid; }   // the last "Run on" this user picked, per project
+  try { var saved = localStorage.getItem(key(PID)); if (saved && has(run, saved)) run.value = saved; } catch (e) {}
+  var pj = projOf(run.value);
+  if (pj && +pj !== PID) {   // never start on another project's environment: this project's own, else one with no project
+    var pick = null;
+    for (var i = 0; i < run.options.length && !pick; i++) if (+run.options[i].getAttribute('data-project') === PID) pick = run.options[i].value;
+    for (var j = 0; j < run.options.length && !pick; j++) if (!run.options[j].getAttribute('data-project')) pick = run.options[j].value;
+    if (pick) run.value = pick;
+  }
   if (code && has(code, run.value)) code.value = run.value;
+  function onRun() {
+    try { localStorage.setItem(key(PID), run.value); } catch (e) {}
+    if (code && has(code, run.value)) code.value = run.value;
+    var to = projOf(run.value);
+    note.hidden = true;
+    if (!to || +to === PID || !URLS[to]) return;
+    try { localStorage.setItem(key(to), run.value); } catch (e) {}
+    if (!THREAD) { location.href = URLS[to]; return; }   // nothing typed yet: move to that project's assistant
+    note.textContent = ''; note.hidden = false;           // a conversation is open here: offer the move, do not lose it
+    var a = document.createElement('a'); a.href = URLS[to]; a.textContent = 'This environment saves to another project: start a new chat there →';
+    note.appendChild(a);
+  }
+  run.addEventListener('change', onRun);
+  if (code) code.addEventListener('change', function () {   // Code picked: Run on follows when that environment can run
+    if (code.value && has(run, code.value) && run.value !== code.value) { run.value = code.value; onRun(); }
+  });
 })();
 (function () {
   var CSRF = {{ csrf|tojson }}, PID = {{ p.id }}, THREAD = {{ (thread.id if thread else none)|tojson }}, READONLY = {{ readonly|tojson }};

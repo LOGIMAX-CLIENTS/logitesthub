@@ -499,6 +499,7 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
         folders = con().execute('SELECT * FROM folders WHERE project_id=? AND archived=0 ORDER BY sort, name', (pid,)).fetchall()
         b = budget.status(con(), me)
         all_envs = envs.all_envs(con(), me)
+        projects = con().execute('SELECT id, name FROM projects ORDER BY name').fetchall()
         review_block = pmtasks.review_check(con(), me['username'], thread['task_code']) \
             if thread and thread['task_code'] and not readonly else None
         thread_case = con().execute('SELECT id, tc_no FROM cases WHERE id=?', (thread['case_id'],)).fetchone()             if thread and thread['case_id'] else None
@@ -508,7 +509,8 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
                                envs=all_envs, ai_ok=b['ok'], ai_msg=b['message'],
                                code_envs=[e for e in all_envs if coderepo.code_dir(e)],
                                code_provider_ok=os.environ.get('LTH_AI_PROVIDER') == 'claude-code',
-                               projects=con().execute('SELECT id, name FROM projects ORDER BY name').fetchall())
+                               projects=projects, project_names={r['id']: r['name'] for r in projects},
+                               project_urls={str(r['id']): url_for('assistant.page', pid=r['id']) for r in projects})
 
     @bp.route('/assistant/activity')
     @login_required
