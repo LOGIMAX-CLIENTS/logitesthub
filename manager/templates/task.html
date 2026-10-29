@@ -49,7 +49,8 @@
         {% for v in (r.local_run, r.live_run) %}<td>{% if v %}{% set x = v.split('|') %}<a href="{{ url_for('case', cid=r.id, run=x[0]) }}"><span class="badge st-{{ x[1]|lower }}">{{ x[1] }}</span></a>
             <span class="small text-secondary">{% if loop.index == 2 %}<b>{{ x[5] }}</b> · {% endif %}{{ x[3] }}/{{ x[4] }} · {{ x[2]|ago }}</span>
             {% else %}<span class="small text-secondary">Not run{{ ' on a server yet' if loop.index == 2 }}</span>{% endif %}</td>{% endfor %}
-        <td class="small">{% if r.run_status in ('FAILED', 'ERROR') %}{% if r.fail_step %}Step {{ r.fail_step }}: {% endif %}{{ (r.fail_reason or '')[:140] }}{% endif %}</td>
+        <td class="small">{% if r.run_status in ('FAILED', 'ERROR') %}{% if r.fail_step %}Step {{ r.fail_step }}: {% endif %}{{ (r.fail_reason or '')[:140] }}
+          <a class="fr-btn" href="{{ url_for('run_fail_reason', rid=r.run_id) }}">Fail reason</a>{% endif %}</td>
         <td class="small text-secondary">{{ r.added_by }} · {{ r.source }} · {{ r.added_at|ago }}</td>
       </tr>
       {% else %}

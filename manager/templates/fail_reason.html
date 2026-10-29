@@ -1,0 +1,68 @@
+{% extends 'base.html' %}
+{% block title %}Fail reason · TC-{{ c.tc_no }}{% endblock %}
+{% block content %}
+{% macro code(branch, commit, repo) %}{% if commit %}<code>{{ branch or '?' }}</code> @ {% set u = commit_url(repo, commit) %}{% if u %}<a href="{{ u }}" target="_blank" rel="noopener"><code>{{ commit[:10] }}</code></a>{% else %}<code>{{ commit[:10] }}</code>{% endif %}{% else %}<span class="text-secondary">not recorded</span>{% endif %}{% endmacro %}
+
+<div class="d-flex flex-wrap gap-2 align-items-start justify-content-between mb-3">
+  <div class="min-w-0">
+    <h1 class="h5 mb-1"><span class="badge st-{{ run.status|lower }} me-1">{{ run.status }}</span> TC-{{ c.tc_no }} {{ c.title }}</h1>
+    <div class="small text-secondary">{{ c.project }} · Run #{{ run.id }} · {{ run.started_at[:16] }} · by {{ run.run_by or '-' }}{% if tr %} · Test Run <a href="{{ url_for('testruns.detail', tid=tr.id) }}">{{ tr.name }}</a>{% endif %}</div>
+  </div>
+  <div class="d-flex gap-2">
+    <button type="button" class="btn btn-primary btn-sm" id="frCopy">Copy for developer</button>
+    <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('case', cid=c.id, run=run.id) }}">Open the run</a>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-7">
+    <section class="panel mb-3">
+      <h2 class="h6">What failed</h2>
+      {% if run.fail_step %}<div class="fr-step"><b>Step {{ run.fail_step }}</b>{% if run.fail_text %}: {{ run.fail_text }}{% endif %}</div>{% endif %}
+      {% if run.fail_reason %}<div class="mt-1"><b>Why:</b> {{ run.fail_reason }}</div>{% endif %}
+      {% if run.error and run.status == 'ERROR' %}<div class="mt-1 t-fail"><b>Error:</b> {{ run.error }}</div>{% endif %}
+      {% if not (run.fail_step or run.fail_reason or run.error) %}<div class="text-secondary">{{ 'This run passed.' if run.status == 'PASSED' else 'No failed step was recorded for this run.' }}</div>{% endif %}
+      {% if run.total %}<div class="small text-secondary mt-1">{{ run.passed or 0 }} of {{ run.total }} steps passed</div>{% endif %}
+      {% if shot %}<a href="{{ url_for('run_file', rid=run.id, name=shot) }}" target="_blank" rel="noopener"><img class="fr-shot mt-2" src="{{ url_for('run_file', rid=run.id, name=shot) }}" alt="Screenshot of step {{ run.fail_step }}"></a>{% endif %}
+    </section>
+  </div>
+  <div class="col-lg-5">
+    <section class="panel mb-3">
+      <h2 class="h6">Where and on which code</h2>
+      <table class="table table-sm mb-0 fr-kv">
+        <tr><th>Environment</th><td>{{ run.env_name or '-' }}{% if env %} · <a href="{{ env.base_url }}" target="_blank" rel="noopener">{{ env.base_url }}</a>{% endif %}</td></tr>
+        <tr><th>Code</th><td>{{ code(run.code_branch, run.code_commit, run.code_repo) }}{% if run.code_repo %}<div class="small text-secondary text-break">{{ run.code_repo }}</div>{% endif %}</td></tr>
+        {% if server and now_commit %}<tr><th>{{ run.env_name }} now</th><td>{{ code(now_branch, now_commit, env.repo_url) }}{% if run.code_commit and now_commit != run.code_commit %} <span class="badge text-bg-warning">changed since</span>{% endif %}</td></tr>{% endif %}
+        {% if tasks %}<tr><th>PM task</th><td>{% for t in tasks %}<a class="task-badge" href="{{ url_for('pmtasks.page', code=t) }}">📌 {{ t }}</a> {% endfor %}</td></tr>{% endif %}
+      </table>
+      {% if server and run.code_commit and now_commit and now_commit != run.code_commit and run.status != 'PASSED' %}
+      <div class="fr-note mt-2">The code on {{ run.env_name }} has changed since this run. If the fix is in, run it again.
+        <form method="post" action="{{ url_for('case_run', cid=c.id) }}" class="d-inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="env_id" value="{{ run.env_id }}">
+          <button class="btn btn-sm btn-outline-primary ms-1">↻ Run again on {{ run.env_name }}</button></form></div>{% endif %}
+    </section>
+    {% if server %}
+    <section class="panel mb-3">
+      <h2 class="h6">Latest local run (developer PC)</h2>
+      {% if local %}
+      <div><a href="{{ url_for('case', cid=c.id, run=local.id) }}"><span class="badge st-{{ local.status|lower }}">{{ local.status }}</span></a>
+        <span class="small text-secondary">{{ local.started_at[:16] }} · by {{ local.run_by or '-' }} · {{ local.env_name or 'Local' }}</span></div>
+      <div class="small mt-1">Code: {{ code(local.code_branch, local.code_commit, local.code_repo) }}</div>
+      {% if local.status == 'PASSED' and run.status != 'PASSED' %}<div class="fr-note mt-2">It passes on a developer PC{% if local.code_commit and run.code_commit and local.code_commit != run.code_commit %} on other code{% endif %}: the fix may not be on {{ run.env_name }} yet.</div>{% endif %}
+      {% else %}<div class="text-secondary small">Not run on a developer PC.</div>{% endif %}
+    </section>
+    {% endif %}
+  </div>
+</div>
+<textarea id="frText" class="visually-hidden" readonly>{{ copy_text }}</textarea>
+{% endblock %}
+{% block scripts %}
+<script>
+document.getElementById('frCopy').addEventListener('click', function () {
+  var b = this, t = document.getElementById('frText').value;
+  function done() { var o = b.textContent; b.textContent = 'Copied'; setTimeout(function () { b.textContent = o; }, 1400); }
+  if (navigator.clipboard) navigator.clipboard.writeText(t).then(done, function () { fallback(); });
+  else fallback();
+  function fallback() { var a = document.getElementById('frText'); a.classList.remove('visually-hidden'); a.select(); try { document.execCommand('copy'); done(); } catch (e) {} a.classList.add('visually-hidden'); }
+});
+</script>
+{% endblock %}

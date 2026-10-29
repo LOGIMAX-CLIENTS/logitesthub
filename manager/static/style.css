@@ -1662,3 +1662,11 @@ html:has(main.as-page), body:has(main.as-page) { overflow: hidden; }
 .env-access-row { display: flex; align-items: center; gap: 8px; margin: 0; }
 .env-access-role { flex: 0 0 90px; font-size: 13px; font-weight: 600; }
 .env-access-row select { flex: 1 1 auto; }
+
+/* ---- Fail reason (a failed run, for the developer) ---- */
+.fr-btn { flex: none; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--brand); cursor: pointer; text-decoration: none; white-space: nowrap; }
+.fr-btn:hover, .fr-btn:focus-visible { background: var(--brand-tint); }
+.fr-kv th { width: 34%; font-weight: 600; color: var(--muted); }
+.fr-shot { display: block; max-width: 100%; border: 1px solid var(--line); border-radius: 8px; }
+.fr-note { font-size: 13px; padding: 8px 10px; border-radius: 8px; background: var(--gold-tint, #fff3ea); }
+.fr-step { padding: 8px 10px; border-radius: 8px; background: var(--surface-2, #f5f6fb); }

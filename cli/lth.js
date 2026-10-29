@@ -814,9 +814,19 @@ function runRunner(mdPath, varsPath, env, loginPath, baseDir) {
   });
 }
 
+// The branch / commit / remote of the git repo the CLI runs in: LogiTestHub keeps them on the run only when that repo
+// is the project's own code repo, so a failed run on a server can be compared with the developer's code.
+function gitCode(dir) {
+  try {
+    const git = a => execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    return { code_commit: git(['rev-parse', 'HEAD']), code_branch: git(['rev-parse', '--abbrev-ref', 'HEAD']),
+             code_remote: git(['remote', 'get-url', 'origin']) };
+  } catch (_) { return {}; }
+}
+
 async function upload(c, runDir, fields) {
   const form = new FormData();
-  for (const [k, v] of Object.entries(fields)) if (v != null) form.append(k, String(v));
+  for (const [k, v] of Object.entries({ ...gitCode(process.cwd()), ...fields })) if (v != null) form.append(k, String(v));
   for (const name of fs.readdirSync(runDir)) {
     const p = path.join(runDir, name);
     // Only the run's own files: a page the app opens in a new tab leaves an extra 'page@<hash>.webm' recording

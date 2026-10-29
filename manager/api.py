@@ -960,6 +960,16 @@ def run_upload():
                                  (case_id, 'running', db.to_local(summary.get('at')), user,
                                   (f"{env_row['name']} (CLI)" if env_row else 'Local (CLI)')[:40],
                                   env_row['id'] if env_row else None)).lastrowid
+            # the developer's branch / commit: only when the folder the CLI ran in is this project's code repository
+            # (a tests repository, or another app's code, says nothing about the code under test)
+            import envs as _envs
+            import onboard
+            cb, cc, cr = (f.get('code_branch') or '').strip(), (f.get('code_commit') or '').strip().lower(), f.get('code_remote')
+            linked = onboard.project_of_repo(con, onboard.repo_key(cr)) if cr and onboard.repo_key(cr) else None
+            if linked and linked['id'] == cur['project_id'] and _envs.SHA_RE.match(cc):
+                con.execute('UPDATE runs SET code_branch=?, code_commit=?, code_repo=? WHERE id=?',
+                            (cb if _envs.BRANCH_RE.match(cb) else None, cc,
+                             re.sub(r'^([a-z+]+://)[^/@]+@', r'\1', str(cr), flags=re.I)[:300], run_id))   # never keep a token
             import cleanup   # kept data the CLI removed at the start of this run (tester run --clean)
             cleanup.mark(con, (f.get('cleared') or '').split(','), case_id, run_id)
             db.record_finished_run(con, run_id, run_dir)
