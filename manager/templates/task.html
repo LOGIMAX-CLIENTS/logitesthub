@@ -14,6 +14,8 @@
     <a class="btn btn-success btn-sm" href="{{ url_for('pmtasks.start_task', code=code) }}">▶ Start testing</a>
     {% endif %}
     <a class="btn btn-primary btn-sm" href="{{ url_for('pmtasks.assistant', code=code) }}">Tester Assistant</a>
+    <a class="btn btn-outline-primary btn-sm" href="{{ url_for('testruns.index', new=1, task=code, project=rows[0].project_id if rows else none) }}"
+       title="A Test Run of this task's test cases (new ones linked later are included), to run now or on a schedule">🗓 Schedule a Test Run</a>
   </div>
 </div>
 
@@ -38,20 +40,20 @@
 
 <div class="panel p-0 mb-3">
   <table class="table table-sm align-middle mb-0">
-    <thead><tr><th class="ps-3">Test case</th><th>Project</th><th>Latest run</th><th>Why it failed</th><th>Linked by</th></tr></thead>
+    <thead><tr><th class="ps-3">Test case</th><th>Project</th><th title="Latest run on a developer's PC: Tester CLI or a localhost site">Local run</th><th title="Latest run on a server environment such as Stagging / UAT">Live run</th><th>Why it failed</th><th>Linked by</th></tr></thead>
     <tbody>
       {% for r in rows %}
       <tr>
         <td class="ps-3"><a href="{{ url_for('case', cid=r.id) }}"><b>TC-{{ r.tc_no }}</b></a> {{ r.title }}</td>
         <td class="small text-secondary">{{ r.project }}</td>
-        <td>{% if r.run_status %}<a href="{{ url_for('case', cid=r.id, run=r.run_id) }}"><span class="badge st-{{ r.run_status|lower }}">{{ r.run_status }}</span></a>
-            <span class="small text-secondary">{{ r.passed or 0 }}/{{ r.total or 0 }} · {{ r.run_at|ago }}</span>
-            {% else %}<span class="badge st-none">NOT RUN</span>{% endif %}</td>
+        {% for v in (r.local_run, r.live_run) %}<td>{% if v %}{% set x = v.split('|') %}<a href="{{ url_for('case', cid=r.id, run=x[0]) }}"><span class="badge st-{{ x[1]|lower }}">{{ x[1] }}</span></a>
+            <span class="small text-secondary">{% if loop.index == 2 %}<b>{{ x[5] }}</b> · {% endif %}{{ x[3] }}/{{ x[4] }} · {{ x[2]|ago }}</span>
+            {% else %}<span class="small text-secondary">Not run{{ ' on a server yet' if loop.index == 2 }}</span>{% endif %}</td>{% endfor %}
         <td class="small">{% if r.run_status in ('FAILED', 'ERROR') %}{% if r.fail_step %}Step {{ r.fail_step }}: {% endif %}{{ (r.fail_reason or '')[:140] }}{% endif %}</td>
         <td class="small text-secondary">{{ r.added_by }} · {{ r.source }} · {{ r.added_at|ago }}</td>
       </tr>
       {% else %}
-      <tr><td colspan="5" class="text-center text-secondary py-4">No test cases linked yet. Click <b>Start testing</b>, then create or run tests, or open the <b>Tester Assistant</b>.</td></tr>
+      <tr><td colspan="6" class="text-center text-secondary py-4">No test cases linked yet. Click <b>Start testing</b>, then create or run tests, or open the <b>Tester Assistant</b>.</td></tr>
       {% endfor %}
     </tbody>
   </table>
