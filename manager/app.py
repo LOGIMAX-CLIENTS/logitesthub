@@ -1582,7 +1582,11 @@ def _env_form(existing=None, owner=None):
         db_host = db_name = db_user = db_pw_enc = db_wuser = db_wpw_enc = None
         db_port = ''
         allow_write = 0
-    return {'db_host': db_host, 'db_port': int(db_port) if db_port else None, 'db_name': db_name, 'db_user': db_user,
+    pj = f.get('project_id', '').strip()   # the project the Tester Assistant saves this environment's test cases in
+    if pj and not (pj.isdigit() and con().execute('SELECT 1 FROM projects WHERE id=?', (int(pj),)).fetchone()):
+        return None, 'Project: pick one from the list.'
+    return {'project_id': int(pj) if pj else None,
+            'db_host': db_host, 'db_port': int(db_port) if db_port else None, 'db_name': db_name, 'db_user': db_user,
             'db_password_enc': db_pw_enc, 'db_write_user': db_wuser, 'db_write_password_enc': db_wpw_enc,
             'db_allow_write': allow_write,
             'name': name, 'base_url': url, 'username': f.get('username', '').strip()[:120] or None,
@@ -1611,12 +1615,12 @@ def environments():
                     'SELECT COUNT(*) AS n FROM environments WHERE owner IS NULL').fetchone()['n']
                 eid = con().execute('INSERT INTO environments(name, base_url, username, password_enc, branch, note, is_default, '
                                     'created_by, updated_at, login_steps, menu_url, db_host, db_port, db_name, db_user, '
-                                    'db_password_enc, db_write_user, db_write_password_enc, db_allow_write, owner) '
-                                    'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                                    'db_password_enc, db_write_user, db_write_password_enc, db_allow_write, owner, project_id) '
+                                    'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                                     (v['name'], v['base_url'], v['username'], v['password_enc'], v['branch'], v['note'],
                                      1 if first else 0, me['username'], db.now(), v['login_steps'], v['menu_url'],
                                      v['db_host'], v['db_port'], v['db_name'], v['db_user'], v['db_password_enc'],
-                                     v['db_write_user'], v['db_write_password_enc'], v['db_allow_write'], owner)).lastrowid
+                                     v['db_write_user'], v['db_write_password_enc'], v['db_allow_write'], owner, v['project_id'])).lastrowid
                 coderepo.save(con(), eid, rv)
             if rv['repo_url']:
                 coderepo.start_sync(eid)   # after the save is committed, so the copy reads the new settings
@@ -1630,6 +1634,7 @@ def environments():
     access = {e['id']: envs.access_map(con(), e['id']) for e in me_envs if e['owner'] is None} if _is_admin(me) else {}
     return render_template('environments.html', envs=me_envs, can_shared=_is_admin(me), env_access=access,
                            manage_ids=manage_ids,
+                           projects=con().execute('SELECT id, name FROM projects ORDER BY name').fetchall(),
                            access_roles=[(r, settings.ROLE_LABEL.get(r, r)) for r in settings.EDITABLE_ROLES])
 
 
@@ -1673,11 +1678,11 @@ def environment_update(eid):
             else:
                 con().execute('UPDATE environments SET name=?, base_url=?, username=?, password_enc=?, branch=?, note=?, '
                               'login_steps=?, menu_url=?, db_host=?, db_port=?, db_name=?, db_user=?, db_password_enc=?, '
-                              'db_write_user=?, db_write_password_enc=?, db_allow_write=?, updated_at=? WHERE id=?',
+                              'db_write_user=?, db_write_password_enc=?, db_allow_write=?, project_id=?, updated_at=? WHERE id=?',
                               (v['name'], v['base_url'], v['username'], v['password_enc'], v['branch'], v['note'],
                                v['login_steps'], v['menu_url'], v['db_host'], v['db_port'], v['db_name'], v['db_user'],
                                v['db_password_enc'], v['db_write_user'], v['db_write_password_enc'], v['db_allow_write'],
-                               db.now(), eid))
+                               v['project_id'], db.now(), eid))
                 coderepo.save(con(), eid, rv)
                 resync = coderepo.needs_sync(e, rv)
                 flash(f'Environment "{v["name"]}" saved.' + (' Copying its code repository now.' if resync else ''), 'success')

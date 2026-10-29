@@ -42,6 +42,11 @@ document.querySelectorAll('.db-test').forEach(function (b) {
       <input class="form-control form-control-sm" id="{{ pre }}Br" name="branch" value="{{ e.branch or '' if e else '' }}" placeholder="All"></div>
     <div class="col-md-3"><label class="form-label" for="{{ pre }}Note">Note</label>
       <input class="form-control form-control-sm" id="{{ pre }}Note" name="note" value="{{ e.note or '' if e else '' }}" maxlength="255"></div>
+    <div class="col-md-3"><label class="form-label" for="{{ pre }}Proj">Project</label>
+      <select class="form-select form-select-sm" id="{{ pre }}Proj" name="project_id" title="Tester Assistant saves the test cases it writes for this environment in this project">
+        <option value="">Any project</option>
+        {% for pr in projects %}<option value="{{ pr.id }}" {{ 'selected' if e and e.project_id == pr.id }}>{{ pr.name }}</option>{% endfor %}
+      </select></div>
     <div class="col-12"><details class="small" {{ 'open' if e and e.db_host }}>
       <summary class="text-secondary">Database, read-only (optional): lets tests check what was saved with "Assert SQL" / "Remember SQL"</summary>
       <div class="row g-2 mt-1">
@@ -124,7 +129,7 @@ document.querySelectorAll('.db-test').forEach(function (b) {
     <div class="env-head">
       <span class="env-dot"></span>
       <b class="env-name">{{ e.name }}</b>
-      {% if e.is_default %}<span class="env-badge">Default</span>{% endif %}{% if mine %}<span class="env-badge">Only me</span>{% endif %}
+      {% if e.is_default %}<span class="env-badge">Default</span>{% endif %}{% for pr in projects if pr.id == e.project_id %}<span class="env-badge" title="Tester Assistant saves this environment's test cases in {{ pr.name }}">Project: {{ pr.name }}</span>{% endfor %}{% if mine %}<span class="env-badge">Only me</span>{% endif %}
       <a class="env-url" href="{{ e.base_url }}" target="_blank" rel="noopener">{{ e.base_url }}</a>
       <div class="ms-auto d-flex gap-1">
         {% if not e.owner and can_shared %}
