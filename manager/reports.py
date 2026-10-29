@@ -61,11 +61,14 @@ def make_blueprint(con, admin_required):
         cases = c.execute('SELECT c.created_by AS u, COUNT(*) AS n FROM cases c '
                           f'WHERE c.created_at >= ? AND c.created_at < ?{pc} GROUP BY c.created_by',
                           [d_from, d_end] + pp).fetchall()
-        runs = c.execute("SELECT r.run_by AS u, COUNT(*) AS n, SUM(r.status='PASSED') AS passed, "
+        # runs of the test cases created in the period (only), counted against who created the case - so a row
+        # reads "made N cases, they were run M times"; runs of older cases are not counted here
+        runs = c.execute("SELECT c.created_by AS u, COUNT(*) AS n, SUM(r.status='PASSED') AS passed, "
                          "SUM(r.status='FAILED') AS failed, SUM(r.status NOT IN ('PASSED','FAILED')) AS other "
                          'FROM runs r JOIN cases c ON c.id=r.case_id '
-                         f'WHERE r.started_at >= ? AND r.started_at < ?{pc} GROUP BY r.run_by',
-                         [d_from, d_end] + pp).fetchall()
+                         'WHERE r.started_at >= ? AND r.started_at < ? AND c.created_at >= ? AND c.created_at < ?'
+                         f'{pc} GROUP BY c.created_by',
+                         [d_from, d_end, d_from, d_end] + pp).fetchall()
         ai = c.execute('SELECT u.username AS u, SUM(u.calls) AS calls, SUM(u.input_tokens) AS tin, '
                        'SUM(u.output_tokens) AS tout, SUM(u.cost_usd) AS cost FROM ai_usage u '
                        f'WHERE u.at >= ? AND u.at < ?{" AND u.project_id=?" if pid else ""} GROUP BY u.username',
@@ -104,20 +107,22 @@ def make_blueprint(con, admin_required):
         if pid:
             where.append('c.project_id=?')
             params.append(pid)
-        return con().execute(
+        return con().execute(   # runs = this case's runs in the period, the same count the summary row adds up
             'SELECT c.id, c.tc_no, c.title, c.created_at, p.name AS project, f.name AS folder, '
-            '(SELECT COUNT(*) FROM runs x WHERE x.case_id=c.id) AS runs, lr.status AS last_status, lr.started_at AS last_run, '
+            '(SELECT COUNT(*) FROM runs x WHERE x.case_id=c.id AND x.started_at >= ? AND x.started_at < ?) AS runs, '
+            'lr.status AS last_status, lr.started_at AS last_run, '
             'COALESCE(au.calls, 0) AS calls, COALESCE(au.tok, 0) AS tok, COALESCE(au.cost, 0) AS cost '
             'FROM cases c JOIN projects p ON p.id=c.project_id LEFT JOIN folders f ON f.id=c.folder_id '
             'LEFT JOIN runs lr ON lr.id=(SELECT MAX(id) FROM runs WHERE case_id=c.id) '
             'LEFT JOIN (SELECT case_id, SUM(calls) AS calls, SUM(input_tokens + output_tokens) AS tok, SUM(cost_usd) AS cost '
             '           FROM ai_usage WHERE case_id IS NOT NULL GROUP BY case_id) au ON au.case_id=c.id '
-            f'WHERE {" AND ".join(where)} ORDER BY c.id DESC LIMIT 1000', params).fetchall()
+            f'WHERE {" AND ".join(where)} ORDER BY c.id DESC LIMIT 1000', [d_from, d_end] + params).fetchall()
 
     def run_rows(user, d_from, d_end, pid, status):
-        cond, params = _user_cond('r.run_by', user)
-        where = [cond, 'r.started_at >= ?', 'r.started_at < ?']
-        params += [d_from, d_end]
+        # the runs the summary counts: runs in the period of cases the user created in the period
+        cond, params = _user_cond('c.created_by', user)
+        where = [cond, 'r.started_at >= ?', 'r.started_at < ?', 'c.created_at >= ?', 'c.created_at < ?']
+        params += [d_from, d_end, d_from, d_end]
         if pid:
             where.append('c.project_id=?')
             params.append(pid)
