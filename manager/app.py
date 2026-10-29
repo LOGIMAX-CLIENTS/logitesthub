@@ -780,7 +780,7 @@ def project(pid):
         elif f['ran'] == 'server':
             where.append(SERVER_RUN_SQL)
         rows = con().execute(
-            f'SELECT c.*, f.name AS folder_name, lr.status AS last_status, lr.started_at AS last_run, {SERVER_RUN_SQL} AS on_server '
+            f'SELECT c.*, f.name AS folder_name, lr.status AS last_status, lr.started_at AS last_run, {SERVER_LAST_SQL} AS server_last '
             'FROM cases c LEFT JOIN folders f ON f.id=c.folder_id '
             'LEFT JOIN runs lr ON lr.id=(SELECT MAX(id) FROM runs WHERE case_id=c.id) '
             f'WHERE {" AND ".join(where)} ORDER BY {SORTS[f["sort"]][1]}', params).fetchall()
@@ -843,9 +843,13 @@ STATUS_FILTERS = {'never': 'Never run', 'PASSED': 'Passed', 'FAILED': 'Failed', 
 RAN_FILTERS = {'local': 'Only on a local PC', 'server': 'On a server environment'}
 # a finished run of case c on a server environment: not a Tester CLI run on a developer's PC, not a localhost site
 # (the same rule the scheduled-run picker uses to show where a case last ran)
-SERVER_RUN_SQL = ("EXISTS (SELECT 1 FROM runs sr JOIN environments se ON se.id=sr.env_id WHERE sr.case_id=c.id "
-                  "AND sr.env_name NOT LIKE '%(CLI)%' AND se.base_url NOT LIKE '%localhost%' "
-                  "AND se.base_url NOT LIKE '%127.0.0.1%' AND sr.status NOT IN ('running', 'queued'))")
+SERVER_RUN_FROM = ("FROM runs sr JOIN environments se ON se.id=sr.env_id WHERE sr.case_id=c.id "
+                   "AND sr.env_name NOT LIKE '%(CLI)%' AND se.base_url NOT LIKE '%localhost%' "
+                   "AND se.base_url NOT LIKE '%127.0.0.1%' AND sr.status NOT IN ('running', 'queued')")
+SERVER_RUN_SQL = f'EXISTS (SELECT 1 {SERVER_RUN_FROM})'
+# the latest server run: its environment (the name as set in Settings > Environments now), status and time
+SERVER_LAST_SQL = (f"(SELECT CONCAT_WS('|', se.name, sr.status, LEFT(sr.started_at, 16)) {SERVER_RUN_FROM} "
+                   "ORDER BY sr.id DESC LIMIT 1)")
 
 
 def _norm_steps(content):
