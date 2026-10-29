@@ -2183,6 +2183,8 @@ if __name__ == '__main__':
     testruns_bp.start_scheduler()   # checks due schedules every 30 s while this server runs
     pmtasks.start_cli_poller()      # PM's Tester CLI button: requests queued in PM, picked up here (when switched on)
     coderepo.start_auto_sync()      # every environment's code copy once a day, so nobody has to press Sync now
+    import retention
+    retention.start()               # run videos past Settings > System's days are removed (results and screenshots stay)
     port = int(os.environ.get('PORT', '5050'))
     host = os.environ.get('HOST', '0.0.0.0')   # 127.0.0.1 behind nginx: only the proxy can reach the app
     if os.environ.get('LTH_BEHIND_PROXY') == '1':   # nginx / load balancer: trust X-Forwarded-* so links use https + the domain
