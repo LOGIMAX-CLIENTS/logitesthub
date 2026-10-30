@@ -966,7 +966,8 @@ def run_upload():
             import onboard
             cb, cc, cr = (f.get('code_branch') or '').strip(), (f.get('code_commit') or '').strip().lower(), f.get('code_remote')
             linked = onboard.project_of_repo(con, onboard.repo_key(cr)) if cr and onboard.repo_key(cr) else None
-            if linked and linked['id'] == cur['project_id'] and _envs.SHA_RE.match(cc):
+            case_pid = con.execute('SELECT project_id FROM cases WHERE id=?', (case_id,)).fetchone()['project_id']
+            if linked and linked['id'] == case_pid and _envs.SHA_RE.match(cc):   # a new case has no `cur`
                 con.execute('UPDATE runs SET code_branch=?, code_commit=?, code_repo=? WHERE id=?',
                             (cb if _envs.BRANCH_RE.match(cb) else None, cc,
                              re.sub(r'^([a-z+]+://)[^/@]+@', r'\1', str(cr), flags=re.I)[:300], run_id))   # never keep a token
