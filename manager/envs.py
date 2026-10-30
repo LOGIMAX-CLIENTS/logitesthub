@@ -87,7 +87,9 @@ def init(con):
                             # the code a run ran against: the environment's synced branch / commit (server runs) or the
                             # developer's own branch / commit (Tester CLI runs on a PC), shown in the run's Fail reason
                             ('runs', 'code_commit', 'ALTER TABLE runs ADD COLUMN code_branch VARCHAR(120) NULL, '
-                             'ADD COLUMN code_commit VARCHAR(64) NULL, ADD COLUMN code_repo VARCHAR(300) NULL')):
+                             'ADD COLUMN code_commit VARCHAR(64) NULL, ADD COLUMN code_repo VARCHAR(300) NULL'),
+                            # the run's files moved to Amazon S3 (comma-separated names); see s3store.py
+                            ('runs', 's3_files', 'ALTER TABLE runs ADD COLUMN s3_files TEXT NULL')):
         n = con.execute('SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() '
                         'AND TABLE_NAME=? AND COLUMN_NAME=?', (table, col)).fetchone()['n']
         if not n:

@@ -979,6 +979,8 @@ def run_upload():
     except Exception as e:   # nothing half-saved: remove the folder
         shutil.rmtree(run_dir, ignore_errors=True)
         return _error(400, f'Upload failed: {e}')
+    import s3store
+    s3store.offload_later(run_id)   # screenshots / video to S3 when it is set up
     if task:
         pmtasks.run_finished(run_id)   # the run's link goes to the PM task, as the user who ran it
     base = request.host_url.rstrip('/')
