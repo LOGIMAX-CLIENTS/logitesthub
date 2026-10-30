@@ -25,7 +25,9 @@ ENV_FILE = os.path.join(db.DATA, 'aws.env')
 KEEP = ('events.ndjson', 'report.html')   # the steps (run page, Fail reason, auto-heal, clean-up) + a few KB: stay
 SETTLE_S = 120              # a run finished this long ago is offloaded by the sweep (the run itself offloads at once)
 EVERY_S = 300
+AGAIN_S = 30                # older runs still waiting: the next sweep starts soon instead of after EVERY_S
 BATCH = 60                  # runs per sweep, so a first sweep over months of old runs never blocks for long
+WORKERS = 4                 # runs uploaded at the same time (each one file at a time): light on the server
 LINK_S = 3600               # a signed link works this long (a page left open: reload it)
 _LOCK = threading.Lock()
 _BUSY = set()
@@ -297,23 +299,23 @@ def expire(con):
 
 
 def sweep():
-    """Moves finished runs still on the disk (newest first) and deletes expired ones. Returns (moved, freed, expired)."""
+    """Moves finished runs still on the disk (newest first) and deletes expired ones.
+    Returns (moved, freed, expired, more): more = runs still waiting after this sweep."""
     if not enabled():
-        return 0, 0, 0
+        return 0, 0, 0, False
     settle = (datetime.now() - timedelta(seconds=SETTLE_S)).strftime('%Y-%m-%d %H:%M:%S')
     with db.connect() as con:
         rows = con.execute("SELECT id, run_dir FROM runs WHERE run_dir IS NOT NULL AND status NOT IN ('running', 'queued') "
                            'AND started_at < ? ORDER BY id DESC', (settle,)).fetchall()
         gone = expire(con)
         if not switched_on(con):
-            return 0, 0, gone
+            return 0, 0, gone, False
     todo = [r['id'] for r in rows if _ours(r['run_dir']) and os.path.isdir(r['run_dir'])
             and any(n not in KEEP for n in os.listdir(r['run_dir']))]
-    moved = freed = 0
-    for rid in todo[:BATCH]:
-        m, f = offload(rid)
-        moved, freed = moved + m, freed + f
-    return moved, freed, gone
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(WORKERS, thread_name_prefix='lth-s3-up') as pool:
+        done = list(pool.map(offload, todo[:BATCH]))
+    return sum(m for m, _ in done), sum(f for _, f in done), gone, len(todo) > BATCH
 
 
 _STARTED = False
@@ -330,10 +332,12 @@ def start():
         time.sleep(60)
         while True:
             try:
-                moved, freed, gone = sweep()
+                moved, freed, gone, more = sweep()
                 if moved or gone:
-                    print(f' * S3: moved {moved} run files ({freed / 1e6:.0f} MB freed), deleted {gone} past their days')
+                    print(f' * S3: moved {moved} run files ({freed / 1e6:.0f} MB freed), deleted {gone} past their days'
+                          + (' - more to move' if more else ''))
             except Exception as ex:   # never stop the server over storage
                 print(' * S3 sweep error:', ex)
-            time.sleep(EVERY_S)
+                more = False
+            time.sleep(AGAIN_S if more else EVERY_S)
     threading.Thread(target=loop, daemon=True, name='lth-s3').start()
