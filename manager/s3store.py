@@ -64,6 +64,21 @@ def enabled():
     return config() is not None
 
 
+def switched_on(con=None):
+    """Set up and switched on in Settings > System. Off: new runs stay on the disk; files already on S3 still load
+    and are still deleted after their days."""
+    if not enabled():
+        return False
+    import settings
+    own = con is None
+    con = con or db.connect()
+    try:
+        return settings._get(con, 'sys.s3_on') == '1'
+    finally:
+        if own:
+            con.close()
+
+
 # ---------------------------------------------------------------- AWS Signature V4
 def _hmac(key, msg):
     return hmac.new(key, msg.encode('utf-8'), hashlib.sha256).digest()
@@ -202,7 +217,7 @@ def _ours(run_dir):
 def offload(run_id):
     """Moves the files of one finished run to S3. Returns (files moved, bytes freed)."""
     c = config()
-    if not c:
+    if not c or not switched_on():
         return 0, 0
     with _LOCK:
         if run_id in _BUSY:
@@ -242,7 +257,7 @@ def offload(run_id):
 
 def offload_later(run_id):
     """After a run: move its files without holding up the caller."""
-    if enabled():
+    if switched_on():
         threading.Thread(target=offload, args=(run_id,), daemon=True, name=f'lth-s3-run-{run_id}').start()
 
 
@@ -290,6 +305,8 @@ def sweep():
         rows = con.execute("SELECT id, run_dir FROM runs WHERE run_dir IS NOT NULL AND status NOT IN ('running', 'queued') "
                            'AND started_at < ? ORDER BY id DESC', (settle,)).fetchall()
         gone = expire(con)
+        if not switched_on(con):
+            return 0, 0, gone
     todo = [r['id'] for r in rows if _ours(r['run_dir']) and os.path.isdir(r['run_dir'])
             and any(n not in KEEP for n in os.listdir(r['run_dir']))]
     moved = freed = 0
