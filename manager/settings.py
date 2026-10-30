@@ -126,6 +126,9 @@ SYSTEM = [   # key, label, help, default
      'its result, steps and screenshots stay (1 to 365).', '7'),
     ('sys.video_days_failed', 'Keep videos of failed runs (days)', 'The same for failed / error / partial runs, whose video a '
      'developer may need for longer (1 to 365).', '7'),
+    ('sys.s3_days_passed', 'Keep files of passed runs on S3 (days)', 'With Amazon S3 set up, the screenshots and video of a '
+     'finished run move there; they are deleted from S3 after this many days (1 to 3650). The result and steps stay.', '90'),
+    ('sys.s3_days_failed', 'Keep files of failed runs on S3 (days)', 'The same for failed / error / partial runs (1 to 3650).', '365'),
 ]
 SYS_DEFAULT = {k: d for k, _, _, d in SYSTEM}
 AI_PROVIDERS = {'api': 'Anthropic API (credits)', 'claude-code': 'Claude subscription via Claude Code (testing)'}
@@ -527,7 +530,18 @@ def _system_info(con):
         ('Claude subscription token', secret_source(con, 'sys.claude_token') or 'Not set: on a server, paste one under AI provider'),
         ('Runner folder', db.RUNNER_DIR),
         ('Run recordings', f'{runs} run folders in {db.RUNS_DIR}'),
+        ('Run files storage', _s3_info(con)),
     ]
+
+
+def _s3_info(con):
+    import s3store
+    c = s3store.config()
+    if not c:
+        return f'The disk of this server (Amazon S3 not set: {s3store.ENV_FILE})'
+    n = con.execute("SELECT COUNT(*) AS n FROM runs WHERE s3_files IS NOT NULL AND s3_files<>''").fetchone()['n']
+    return f"Amazon S3: s3://{c['bucket']}/{c['prefix']}/ ({c['region']}) · {n} runs there"
+
 
 
 def dmy(ts, seconds=False):
@@ -835,6 +849,9 @@ def register(app, con, admin_required, current_user):
         for k, what in (('sys.video_days_passed', 'passed'), ('sys.video_days_failed', 'failed')):
             if not new[k].isdigit() or not 1 <= int(new[k]) <= 365:
                 errors.append(f'Keep videos of {what} runs: a whole number of days from 1 to 365.')
+        for k, what in (('sys.s3_days_passed', 'passed'), ('sys.s3_days_failed', 'failed')):
+            if not new[k].isdigit() or not 1 <= int(new[k]) <= 3650:
+                errors.append(f'Keep files of {what} runs on S3: a whole number of days from 1 to 3650.')
         secrets = {n: re.sub(r'\s+', '', f.get(n, '')) for n in SECRETS}   # empty = keep the saved one
         for n, v in secrets.items():
             if v and not SECRETS[n][1].match(v):
@@ -900,6 +917,14 @@ def register(app, con, admin_required, current_user):
                         {**({name: ['', 'replaced']} if v else {}), **({mkey: m or 'same as the API model'} if keep_model else {})},
                         request.remote_addr)
         flash(msg + (' Saved: it is in use now.' if ok and (v or keep_model) else ' Not saved.' if v else ''), 'success' if ok else 'danger')
+        return redirect(url_for('settings.system'))
+
+    @bp.route('/system/s3-test', methods=['POST'])
+    @super_required
+    def system_s3_test():
+        import s3store
+        ok, msg = s3store.test()
+        flash(msg, 'success' if ok else 'danger')
         return redirect(url_for('settings.system'))
 
     # ------------------------------------------------------------ Integrations: PM (task links, test report link)

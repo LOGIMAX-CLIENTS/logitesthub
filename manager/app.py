@@ -22,6 +22,7 @@ import db
 import envs
 import pm_auth
 import pricing
+import s3store
 import services
 
 app = Flask(__name__)
@@ -1112,8 +1113,10 @@ def run_view_data(run):
     if not run or not run['run_dir'] or not os.path.isdir(run['run_dir']):
         return [], False
     _, steps = db.read_run_events(run['run_dir'])
-    has_video = os.path.isfile(os.path.join(run['run_dir'], 'video.webm'))
-    return steps, has_video
+    for s in steps:   # a screenshot past its days on S3 is gone: no broken image
+        if s.get('shot') and not s3store.has(run, s['shot']):
+            s['shot'] = ''
+    return steps, s3store.has(run, 'video.webm')
 
 
 _STATUS_RANK = {'failed': 3, 'needs-ai': 2, 'skipped': 1, 'passed': 0}
@@ -1142,7 +1145,7 @@ def case_tags(content):
 
 def run_has(run, name):
     """True when a finished run folder holds this artifact (e.g. poster.png from newer runs)."""
-    return bool(run and run['run_dir'] and SAFE_FILE.match(name) and os.path.isfile(os.path.join(run['run_dir'], name)))
+    return bool(run and SAFE_FILE.match(name) and s3store.has(run, name))
 
 
 app.jinja_env.globals.update(group_steps=group_steps, case_tags=case_tags, run_has=run_has)
@@ -1405,6 +1408,7 @@ def _run_case(run_id, content, no_ai=False, base_dir=None, env_id=None, project_
                 print(f' * auto-heal of run {run_id}: {ex}')
         import pmtasks
         pmtasks.run_finished(run_id)   # the run's PM task (if it had one) gets this run's link
+        s3store.offload_later(run_id)   # screenshots / video to S3 when it is set up
 
 
 def start_case_run(c, env_id=None, cleanup_choice=None):
@@ -1465,6 +1469,10 @@ def case_run(cid):
 def _send_artifact(run, name):
     if not run or not run['run_dir'] or not SAFE_FILE.match(name):
         abort(404)
+    if not os.path.isfile(os.path.join(run['run_dir'], name)):
+        url = s3store.link(run, name)   # moved to S3: the browser loads it from there
+        if url:
+            return redirect(url)
     return send_from_directory(run['run_dir'], name, conditional=True)
 
 
@@ -1494,7 +1502,7 @@ def run_fail_reason(rid):
     shot = None
     if run['fail_step'] and run['run_dir']:
         name = f"step-{int(run['fail_step']):02d}.png"
-        shot = name if os.path.isfile(os.path.join(run['run_dir'], name)) else None
+        shot = name if s3store.has(run, name) else None
     who = None
     if run['status'] != 'PASSED':   # best guess at who fixes it: the failed step's elements looked up in this env's code
         import elementcheck
@@ -2185,6 +2193,7 @@ if __name__ == '__main__':
     coderepo.start_auto_sync()      # every environment's code copy once a day, so nobody has to press Sync now
     import retention
     retention.start()               # run videos past Settings > System's days are removed (results and screenshots stay)
+    s3store.start()                 # with manager/data/aws.env: finished runs' files move to Amazon S3
     port = int(os.environ.get('PORT', '5050'))
     host = os.environ.get('HOST', '0.0.0.0')   # 127.0.0.1 behind nginx: only the proxy can reach the app
     if os.environ.get('LTH_BEHIND_PROXY') == '1':   # nginx / load balancer: trust X-Forwarded-* so links use https + the domain
