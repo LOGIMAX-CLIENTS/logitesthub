@@ -12,6 +12,7 @@ const { parseCase } = require('./lib/testcase');
 const { showIntro } = require('./lib/intro');
 const { aiStep, healStep, listElements, explain, MODEL: AI_MODEL } = require('./lib/ai');
 const dbsteps = require('./lib/dbsteps');
+const { saveShot, flushShots } = require('./lib/shot');
 
 const DEFAULT_VARS = process.env.LTH_VARS_FILE || 'tests/variables/variables.json';   // Settings -> System
 
@@ -262,7 +263,8 @@ function parseArgs(argv) {
     }
     r.ms = Date.now() - t0;
     r.shot = `step-${String(r.n).padStart(2, '0')}.png`;
-    await page.screenshot({ path: path.join(runDir, r.shot) }).catch(() => { r.shot = ''; });
+    await saveShot(page, path.join(runDir, r.shot)).catch(() => { r.shot = ''; });
+    try { r.url = mask(page.url()); } catch { /* page closed */ }   // the address bar is not in the screenshot
     results.push(r);
     emit({ type: 'step', ...r });
     const note = (r.server_error ? `SERVER ERROR (${r.server_error}) ` : '') + (r.error || (r.status === 'needs-ai' && r.ai) || '')
@@ -270,6 +272,7 @@ function parseArgs(argv) {
     console.log(`${String(r.n).padStart(2)}. [${r.status.toUpperCase()}] ${r.text}${note ? '  -> ' + note : ''}`);
   }
 
+  await flushShots();
   const video = page.video();
   await context.close();
   await browser.close();

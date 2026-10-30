@@ -279,6 +279,7 @@
     <div class="alert alert-danger">The run could not finish: {{ run.error }}</div>
     {% else %}
       {% if has_video %}<div class="sm-hint">Click any step to jump the recording to that moment.</div>{% endif %}
+      {% set pg = namespace(url='') %}
       {% for g in group_steps(steps) %}
       <div class="sg" id="sg{{ loop.index }}">
         <span class="sg-num">{{ loop.index }}</span>
@@ -301,6 +302,7 @@
                 {% else %}
                 <div class="sr-text">{{ s.text }}</div>
                 {% endif %}
+                {% if s.url and s.url != pg.url %}<div class="sr-note sr-url" title="{{ s.url }}">Page: {{ s.url }}</div>{% set pg.url = s.url %}{% endif %}
                 {% if s.error %}<div class="sr-note t-fail">{{ s.error }}</div>{% endif %}
                 {% for w in s.warnings or [] %}<div class="sr-note t-warn">{{ w }}</div>{% endfor %}
                 {% if s.status == 'needs-ai' %}<div class="sr-note">Free-text step, not run{% if s.ai %}: {{ s.ai }}{% endif %}.</div>
@@ -333,6 +335,7 @@
       </div>
       {% if shots %}
       <div class="pl" id="pl" tabindex="0" aria-label="Step player: arrow keys move between steps, space plays">
+        {% if steps|selectattr('url')|list %}<div class="pl-url" title="Page address at this step"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg><span></span></div>{% endif %}
         <div class="pl-stage">
           <img class="pl-img" alt=""><img class="pl-img" alt="">
           <div class="pl-none">No screenshot for this step</div>
@@ -347,7 +350,7 @@
           <button type="button" class="pl-btn pl-speed" data-pl="speed" title="Autoplay speed">1x</button>
         </div>
       </div>
-      <script type="application/json" id="plData">[{% for s in steps %}{"n": {{ s.n|tojson }}, "text": {{ s.text|tojson }}, "status": {{ s.status|tojson }}, "shot": {{ (file_url(s.shot)|trim if s.shot else '')|tojson }}}{{ ',' if not loop.last }}{% endfor %}]</script>
+      <script type="application/json" id="plData">[{% for s in steps %}{"n": {{ s.n|tojson }}, "text": {{ s.text|tojson }}, "status": {{ s.status|tojson }}, "shot": {{ (file_url(s.shot)|trim if s.shot else '')|tojson }}, "url": {{ (s.url or '')|tojson }}}{{ ',' if not loop.last }}{% endfor %}]</script>
       {% endif %}
       {% if has_video %}
       <video id="vid" class="rec {{ 'd-none' if shots }}" src="{{ file_url('video.webm') }}" controls preload="metadata" playsinline
@@ -509,6 +512,7 @@ document.getElementById('copyCode').addEventListener('click', function () {
   if (!steps.length) return;
   var imgs = pl.querySelectorAll('.pl-img'), front = 0, cur = -1, speeds = [1, 2, 0.5], sp = 0;
   var bar = document.getElementById('plBar'), count = document.getElementById('plCount');
+  var urlBox = pl.querySelector('.pl-url span');
   var chip = pl.querySelector('.pl-chip'), txt = pl.querySelector('.pl-text'), none = pl.querySelector('.pl-none');
   var LABEL = { passed: 'Passed', failed: 'Failed', 'needs-ai': 'Needs AI', skipped: 'Skipped' };
   steps.forEach(function (s, i) {   // one segment per step, coloured by its result
@@ -530,6 +534,10 @@ document.getElementById('copyCode').addEventListener('click', function () {
     chip.textContent = LABEL[s.status] || s.status; chip.className = 'pl-chip st-' + s.status;
     txt.textContent = 'Step ' + s.n + ' \u00b7 ' + s.text;
     count.textContent = (i + 1) + ' / ' + steps.length;
+    if (urlBox) {   // a step without one keeps the page it was on
+      for (var u = i; u >= 0 && !steps[u].url; u--) {}
+      urlBox.textContent = u >= 0 ? steps[u].url : '';
+    }
     for (var k = 0; k < segs.length; k++) { segs[k].classList.toggle('cur', k === i); segs[k].classList.toggle('done', k < i); }
     rows.forEach(function (r, k) { r.classList.toggle('current', k === i); });
     if (rows[i] && timer) rows[i].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
