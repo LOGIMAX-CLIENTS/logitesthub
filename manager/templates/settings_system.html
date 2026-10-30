@@ -21,6 +21,9 @@
           {% for m in models %}<option {{ 'selected' if vals[key] == m }}>{{ m }}</option>{% endfor %}</select>
         {% elif key in ('sys.video_days_passed', 'sys.video_days_failed') %}
         <input class="form-control form-control-sm set-num" id="s{{ loop.index }}" name="{{ key }}" type="number" min="1" max="365" step="1" value="{{ vals[key] }}" required>
+        {% elif key == 'sys.s3_on' %}
+        <select class="form-select form-select-sm set-num" id="s{{ loop.index }}" name="{{ key }}">
+          <option value="0" {{ 'selected' if vals[key] != '1' }}>Off</option><option value="1" {{ 'selected' if vals[key] == '1' }}>On</option></select>
         {% elif key in ('sys.s3_days_passed', 'sys.s3_days_failed') %}
         <input class="form-control form-control-sm set-num" id="s{{ loop.index }}" name="{{ key }}" type="number" min="1" max="3650" step="1" value="{{ vals[key] }}" required>
         {% elif key == 'sys.audit_days' %}
