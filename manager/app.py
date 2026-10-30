@@ -29,6 +29,8 @@ app = Flask(__name__)
 db.init()
 with db.connect() as _c:
     envs.init(_c)   # environments table, runs.env_name, cases.qa_status
+    import onboard
+    onboard.ensure(_c)   # now, not inside an upload: MySQL commits a transaction at a CREATE / ALTER, half-saving it
 
 
 def recover_interrupted_runs():
