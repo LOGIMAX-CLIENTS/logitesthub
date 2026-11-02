@@ -1197,6 +1197,7 @@ function help() {
   tester run --case <case id> --url <site>           run a saved test case
   tester run --case <id> ... --clean | --keep          a passed run kept its test data: delete it first, or leave it
   tester check --case <id> | --file x_test.md --env <name>   before a run: settings + test data there? (read-only)
+  tester sql "SELECT ..." --env <name>                one read-only query on that environment's database (max 20 rows)
   tester settings --project <id> --env <name>        live profile / retail settings: is the action allowed?
   tester env list                                    the environments you can use (shared + only yours)
   tester env add --name Local --url <your site URL> [--login-user u] [--login-password p] [--branch b]
@@ -1539,6 +1540,22 @@ async function check() {
   process.exitCode = j.status === 'failed' ? 1 : j.status === 'no_database' ? 2 : 0;
 }
 
+// One read-only SELECT on an environment's database (READ ONLY session, max 20 rows), e.g. what a bill saved, to
+// compare with its print / PDF. A database on this PC (tester env add) is queried from here, like the runner does.
+async function sqlCmd() {
+  const c = needLogin();
+  const sql = (process.argv.slice(3).find(a => !a.startsWith('--') && a !== flag('--env')) || '').trim();
+  const env = flag('--env') && flag('--env') !== true ? flag('--env') : (loadConfig().env || '');
+  if (!sql || !env) fail('usage: tester sql "SELECT ... FROM ... WHERE ..." --env <name> --json   (read-only, one statement)');
+  Object.assign(process.env, { LTH_SERVER: c.server, LTH_USER: c.username, LTH_KEY: c.key, LTH_ENV: env });
+  if (localDbFor(c, env)) process.env.LTH_LOCAL_DB = JSON.stringify(localDbFor(c, env));
+  let r;
+  try { r = await require('../lib/dbsteps').query(sql); } catch (e) { fail(e.message); }
+  const cols = r.columns || [];
+  const table = [cols.join(' | '), ...(r.rows || []).map(row => row.map(v => v == null ? 'NULL' : String(v)).join(' | '))].join('\n');
+  print({ ok: true, env, ...r }, `${env}: ${r.count} row(s)${r.count > (r.rows || []).length ? ` (first ${(r.rows || []).length} shown)` : ''}\n${table}`);
+}
+
 // Settings / permissions that decide whether a test can run (knowledge_brain/<project>/settings.json), read now
 async function settingsCmd() {
   const c = needLogin();
@@ -1739,7 +1756,7 @@ async function envCmd() {
     (note ? `\n${note}` : '') + `\nUse it: tester run --file <case>_test.md --env "${e.name}"`);
 }
 
-const COMMANDS = { env: envCmd, init, 'login-helper': loginHelperCmd, test: testAll, task: taskCmd, check, settings: settingsCmd, brain: brainCmd, login, logout, whoami, projects, cases, case: caseCmd, usage, generate, run, setup, help, modules, skill, lessons, lesson, upload: uploadCmd };
+const COMMANDS = { env: envCmd, init, 'login-helper': loginHelperCmd, test: testAll, task: taskCmd, check, sql: sqlCmd, settings: settingsCmd, brain: brainCmd, login, logout, whoami, projects, cases, case: caseCmd, usage, generate, run, setup, help, modules, skill, lessons, lesson, upload: uploadCmd };
 (async () => {
   const cmd = argv[0];
   if (!cmd || cmd === '--help' || cmd === '-h') return help();

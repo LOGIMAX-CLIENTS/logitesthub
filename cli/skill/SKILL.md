@@ -1,6 +1,6 @@
 ---
 name: tester
-description: LogiTestHub (Tester CLI) — run plain-English UI tests in a headless browser and save the run (video, step screenshots, PASS/FAIL) in LogiTestHub; run saved test cases; generate test cases for a code change (git diff); list projects/cases; sync an app's menu into LogiTestHub modules. Use after changing UI code to verify it in a real browser, when the user asks to test / run / verify a page or flow, to run a LogiTestHub case by id, or to create test cases for a task, bug or requirement. Learns from failures: reads the project's lessons before testing and records a lesson after a failure is understood, so the same mistake does not happen twice.
+description: LogiTestHub (Tester CLI) — run plain-English UI tests in a headless browser and save the run (video, step screenshots, PASS/FAIL) in LogiTestHub; run saved test cases; generate test cases for a code change (git diff); list projects/cases; sync an app's menu into LogiTestHub modules; check a print copy or PDF of the app (bill, receipt, report) against the saved data and its arithmetic. Use after changing UI code to verify it in a real browser, when the user asks to test / run / verify a page or flow, to run a LogiTestHub case by id, or to create test cases for a task, bug or requirement. Learns from failures: reads the project's lessons before testing and records a lesson after a failure is understood, so the same mistake does not happen twice.
 ---
 
 # LogiTestHub — `tester` CLI
@@ -368,6 +368,18 @@ tester modules push logitesthub.modules.json --dry-run
 tester modules push logitesthub.modules.json        # only after the user agrees with the dry-run
 ```
 Push only adds; it never deletes or renames.
+
+## 7. Check a print copy or PDF
+
+When the user gives a printed document of the app - a PDF, a photo / scan of a print, a screenshot (bill, estimation,
+receipt, chit slip, report) - and asks whether it is right: follow `references/print-check.md`. In short: read every
+value on it; find the print view in the code and the columns it prints; read what was saved with
+```
+tester sql "SELECT ... FROM <table> WHERE <doc no column> = '<number on the print>'" --env <name> --json
+```
+(read-only, one statement, max 20 rows); check saved value, arithmetic (lines, taxes, round off, amount in words) and
+the rules / settings for each value; report a table of OK / MISMATCH / CANNOT READ with the code line behind each
+mismatch, then the verdict JSON. Never guess a digit you cannot read; never a live database without asking.
 
 ## Other
 
