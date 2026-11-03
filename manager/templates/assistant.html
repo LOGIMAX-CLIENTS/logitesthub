@@ -135,6 +135,7 @@
 (function () {
   var CSRF = {{ csrf|tojson }}, PID = {{ p.id }}, THREAD = {{ (thread.id if thread else none)|tojson }}, READONLY = {{ readonly|tojson }};
   var TASK = {{ (thread.task_code if thread else none)|tojson }};   // PM task of a chat opened from PM's Test Assistant button
+  var BRAIN_ON = {{ brain_on|tojson }};   // WinBrain connected and this project mapped (Settings -> Integrations)
   var REVIEW_BLOCK = {{ (review_block is not none and review_block != '')|tojson }};   // signed in here as someone other than the PM reviewer
   var CASE_TC = {{ (thread_case.tc_no if thread_case else none)|tojson }};   // the test case this chat saved: Save updates it
   var URL_SEND = {{ url_for('assistant.send', pid=p.id)|tojson }}, URL_BASE = {{ url_for('assistant.page', pid=p.id)|tojson }};
@@ -342,6 +343,44 @@
     }
   }
 
+  // a chat with no PM task: nobody to send it to here, so an app bug the assistant found goes to WinBrain as a triage,
+  // where the tester reviews it and raises the task. The analysis takes minutes, so this polls for the outcome.
+  function brainBox(card, rid, brain) {
+    var line = el('div'), row = el('div', 'd-flex flex-wrap align-items-center gap-2'); line.appendChild(row);
+    var btn = el('button', 'btn btn-sm btn-outline-danger align-self-start', '🧠 Send to Brain'); btn.type = 'button';
+    var note = el('span', 'small text-secondary'), bug = null;
+    row.appendChild(btn); row.appendChild(note); card.appendChild(line);
+    function show(b) {
+      note.className = 'small text-secondary'; note.textContent = '';
+      if (b.status === 'sent') {
+        var a = el('a', 'btn btn-sm btn-outline-success align-self-start', '🧠 Open the triage in WinBrain');
+        a.href = b.url; a.target = '_blank'; a.rel = 'noopener'; row.replaceChild(a, btn);
+        note.textContent = b.message || '';
+      } else if (b.status === 'sending') {
+        btn.disabled = true; note.textContent = b.message || ''; setTimeout(check, 5000);
+      } else {
+        btn.disabled = false; note.className = 'small t-fail'; note.textContent = b.message || 'Not sent.';
+      }
+      line.hidden = false; scrollDown();
+    }
+    function check() {
+      fetch(URL_BASE + '/run/' + rid).then(function (r) { return r.json(); }).then(function (j) {
+        if (j.brain) show(j.brain); else setTimeout(check, 5000);
+      }).catch(function () { setTimeout(check, 5000); });
+    }
+    btn.addEventListener('click', function () {
+      btn.disabled = true; note.className = 'small text-secondary'; note.textContent = 'Sending to WinBrain…';
+      post(URL_BASE + '/' + THREAD + '/brain-send', { run_id: rid, bug: bug }).then(function (j) {
+        if (j.ok) check(); else { btn.disabled = false; note.className = 'small t-fail'; note.textContent = j.message || j.error || 'Not sent.'; }
+      });
+    });
+    if (brain) { show(brain); return; }
+    line.hidden = true;   // shown once the assistant says this failure is an app bug
+    var found = function (b) { bug = b; line.hidden = false; scrollDown(); note.textContent = 'The assistant found an app bug: ' + b; };
+    if (READONLY) return;
+    if (bugFor[rid]) found(bugFor[rid]); else bugShow[rid] = found;
+  }
+
   function runCard(rid, live) {
     lastRun = rid;
     var card = el('div', 'as-card as-runcard');
@@ -388,6 +427,7 @@
           card.appendChild(again);
         }
         if (TASK && j.pm && j.pm.via === 'assistant') pmBox(card, rid, st, j.pm);
+        if (!TASK && BRAIN_ON && st !== 'PASSED') brainBox(card, rid, j.brain);
         scrollDown();
       }).catch(function () { setTimeout(poll, 5000); });
     }
