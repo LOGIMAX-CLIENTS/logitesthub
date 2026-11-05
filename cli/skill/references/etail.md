@@ -3,9 +3,15 @@
 Read when the project is **Retail** (eTail, PHP CodeIgniter 2, MySQL). Also read the eTail repo's own CLAUDE.md.
 
 ## Login and pages
-- Login helper (runs first): opens `{{base_url}}index.php/admin/dashboard`, types `{{username}}` / `{{password}}`,
-  selects the first branch in `#branch_select`, clicks Sign In, asserts title 'Dashboard'. Write no login steps.
-- `{{base_url}}` ends with `/admin/` (e.g. `http://localhost/wt-prod/admin/`). Pages are
+- Login helper (runs first): opens `{{base_url}}`, types `{{username}}` / `{{password}}`, selects the first branch in
+  `#branch_select`, clicks Sign In, asserts the login form is gone: `Assert the User Name field (#username) is not visible.`
+  Write no login steps.
+- **The helper must work on every site:** titles differ per company (`<company> | Admin`), so never assert a title or a
+  screen name in it. Assert the URL or page text in a case. A site whose login page really differs gets its own login
+  steps on its environment (Settings > Environments), they win over the helper. The same login step failing on every
+  case: fix the helper, not the case.
+- `{{base_url}}` ends with `/admin/` (e.g. `http://localhost/wt-prod/admin/`), never with `index.php/admin/login/`: paths
+  added to that give 404. Ask for the environment's site address to be corrected. Pages are
   `{{base_url}}index.php/<controller>/<method>[/add]`, e.g. `index.php/admin_ret_lot/lot_inward/add`,
   `index.php/admin_ret_tagging/tagging/add`. Take the path from the controller / menu link, not from memory.
 - After login eTail redirects; a Navigate right after it can get ERR_ABORTED (the runner retries once).
@@ -52,13 +58,25 @@ Read when the project is **Retail** (eTail, PHP CodeIgniter 2, MySQL). Also read
   Click the suggestion link (.ui-autocomplete .ui-menu-item).
   Assert the <hidden id> field (#id_...) shows '{{the id}}'.     the pick really took
   ```
-  Never click a suggestion by its visible text (the step cannot find it); use the CSS hint above.
+  Never click a suggestion by its visible text (the step cannot find it); use the CSS hint above. Make sure by SQL that
+  the search returns one match. A dropdown filled by the pick (scheme account, customer orders) stays empty until the
+  suggestion is clicked: typing alone never loads it.
 - Dropdowns that depend on another (Category → Purity, Product → Design → Sub Design, Lot → Product) are filled by
   AJAX: `Wait 2 seconds.` after the parent choice.
 - Line items are added to a preview table first (`Add Item` / `Add`), then saved with `Save All` (or similar). Check
   both: the row in the preview, then the database after the save.
-- Messages come from JS (`$.toaster`, `alert`): copy the exact text from the view's JS file, including spaces before
-  the full stop (eTail texts often look like `Warning! Enter Category Name .`).
+- Messages come from JS: copy the exact text from the view's JS file, including spaces before the full stop (eTail
+  texts often look like `Warning! Enter Category Name .`). `$.toaster` is on the page; a native `alert()` is not, so
+  never assert its text (write-case.md).
+- **A Save that redirects:** grep the target view for `flashdata('chit_alert')` before asserting the success message. Not
+  printed there: prove the save by the redirect URL plus SQL on the new row.
+- **Print URLs (`generate_invoice`, bill / receipt prints) are PDF downloads:** never Navigate to them. Check the saved
+  data with SQL and leave the PDF to the tester, or check a given PDF with `references/print-check.md`.
+- **A branch select on an Add form may start empty** (Lot Inward clears it on purpose): select the branch as the first
+  form step, then check it in SQL. `#branch_select` on reports exists only for an all-branches session, and the branch
+  name is not on the page: pick it from the dropdown, never assert it as text.
+- **bootstrap-switch:** click the ON handle to turn a flag off, the OFF handle to turn it on
+  (`.bootstrap-switch-handle-on` / `-off`); a click on the wrapper does nothing.
 - Weights show 3 decimals, amounts 2 decimals with Indian grouping (1,23,456.78). `NaN` / `undefined` on screen is a bug.
 
 ## Database (read-only checks)
@@ -67,7 +85,8 @@ Read when the project is **Retail** (eTail, PHP CodeIgniter 2, MySQL). Also read
   check the model before asserting anything else).
 - Bill types: 1 Sales, 2 Sales+Purchase, 3 Sales+Purchase+Return, 4 Purchase, 5 Order Advance, 7 Sales Return,
   8 Credit Collection, 9 Order Delivery, 10 Chit Pre-Close, 11 Repair Delivery, 13/14 Sales Transfer out/return, 15 Suspense.
-- Find the newest record of this test with a time window: `... WHERE created_on >= NOW() - INTERVAL 10 MINUTE`.
+- Find the newest record of this test with a time window: `... WHERE created_on >= NOW() - INTERVAL 10 MINUTE`. Never
+  use a window to prove nothing was written (write-case.md: compare counts).
 - Dropdown options come from the table the controller's AJAX method reads, not from a setting: e.g. the reorder
   report's Sub Design list is `ret_sub_design_mapping` for the chosen product + design. Check the option exists there.
 - Other inventory (packaging / gift items): items `ret_other_inventory_item` (`issue_to`), branch transfer lines
