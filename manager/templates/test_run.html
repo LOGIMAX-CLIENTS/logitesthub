@@ -54,6 +54,7 @@
 <div class="trd-grid">
   <section class="panel p-0">
     <div class="au-head"><b>{% if sel %}Run #{{ sel }} results{% else %}Test cases{% endif %} <span class="small text-secondary fw-normal">· run in this order, one after another</span></b>{% if s %}{{ m.result_bar(s) }}{% endif %}</div>
+    {% if cases and newest %}<div class="trd-overall"><b>{{ overall.passed }} / {{ overall.total }}</b> test cases pass now <span class="text-secondary">· each case's last result, from this run or an earlier one</span></div>{% endif %}
     {% if cases %}
     <form method="post" action="{{ url_for('testruns.run_now', tid=tr.id) }}" class="trd-pick" id="trPick">
       <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="selected" value="1"><input type="hidden" name="env_id" value="{{ tr.env_id or '' }}">
@@ -67,14 +68,14 @@
     {% endif %}
     <div class="trd-cases">
       {% set shown = results.keys()|list %}
-      {% for c in cases %}{% set r = results.get(c.id) %}
-      <a class="trd-case {{ 'is-skip' if c.id in skip_ids }}" href="{{ url_for('case', cid=c.id, run=r.id) if r else url_for('case', cid=c.id) }}">
-        {% set bad = latest.get(c.id) and latest.get(c.id) != 'PASSED' %}
+      {% for c in cases %}{% set own = results.get(c.id) %}{% set r = own or (latest.get(c.id) if newest else none) %}
+      <a class="trd-case {{ 'is-skip' if c.id in skip_ids }} {{ 'is-earlier' if r and not own }}" href="{{ url_for('case', cid=c.id, run=r.id) if r else url_for('case', cid=c.id) }}">
+        {% set bad = latest.get(c.id) and latest.get(c.id).status != 'PASSED' %}
         <input class="form-check-input trd-pick-cb" type="checkbox" form="trPick" name="ids" value="{{ c.id }}" data-failed="{{ '1' if bad else '0' }}" {{ 'checked' if bad }} aria-label="Run TC-{{ c.tc_no }}" onclick="event.stopPropagation()">
         <span class="trd-order">{{ loop.index }}</span>{{ m.status_icon(r.status if r else None) }}
         <span class="min-w-0 flex-grow-1"><b>TC-{{ c.tc_no }}</b> <span class="text-truncate">{{ c.title }}</span></span>
         {% if c.qa_status == 'ready' %}<span class="qa-tag">Ready for QA</span>{% elif c.id in skip_ids %}<span class="skip-tag" title="Ready for QA only is on">Skipped: not Ready for QA</span>{% endif %}
-        <span class="small text-secondary text-nowrap">{% if r and r.total %}{{ r.passed }}/{{ r.total }} steps · {{ r.duration_ms|secs }}{% elif r %}{{ r.status }}{% else %}not in this run{% endif %}</span>
+        <span class="small text-secondary text-nowrap">{% if r and r.total %}{{ r.passed }}/{{ r.total }} steps · {{ r.duration_ms|secs }}{% elif r %}{{ r.status }}{% else %}not in this run{% endif %}{% if r and not own %} · <span title="Not in this run: its last result">{{ ('from Run #' ~ r.exec_id) if r.exec_id else 'own run' }}</span>{% endif %}</span>
         {% if r and r.status in ('FAILED', 'ERROR', 'PARTIAL') %}<span class="fr-btn" role="link" tabindex="0" data-href="{{ url_for('run_fail_reason', rid=r.id) }}" title="Where and on which code it ran, the step that failed and why - for the developer">Fail reason</span>{% endif %}
       </a>
       {% else %}

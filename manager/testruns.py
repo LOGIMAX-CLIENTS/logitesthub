@@ -319,13 +319,16 @@ def make_blueprint(deps):
                            'WHERE s.test_run_id=? ORDER BY s.id', (tid,)).fetchall()
         any_running = any(r['status'] in ('running', 'queued') for r in results.values())
         # each case's newest run from anywhere: a case fixed by its own Run button is not ticked to run again
-        latest = {r['case_id']: r['status'] for r in c.execute(
-            f"SELECT case_id, status FROM runs WHERE id IN (SELECT MAX(id) FROM runs WHERE case_id IN ({','.join('?' * len(cases))}) GROUP BY case_id)",
+        latest = {r['case_id']: r for r in c.execute(
+            f"SELECT * FROM runs WHERE id IN (SELECT MAX(id) FROM runs WHERE case_id IN ({','.join('?' * len(cases))}) GROUP BY case_id)",
             [x['id'] for x in cases]).fetchall()} if cases else {}
+        # the newest execution of a part of the list: the other cases keep showing their last result, so a pass stays
+        newest = bool(execs) and sel == execs[0]['id']
+        overall = {'passed': sum(1 for x in cases if (latest.get(x['id']) or {}).get('status') == 'PASSED'), 'total': len(cases)}
         folders = c.execute('SELECT id, name FROM folders WHERE project_id=? AND archived=0 ORDER BY name', (tr['project_id'],)).fetchall()
         picker = {**picker_data(c, tr['project_id'], me=current_user()['username']),
                   'selected': [x['id'] for x in cases] if tr['mode'] == 'fixed' else [x['id'] for x in cases if x['id'] not in skip_ids]}
-        return render_template('test_run.html', tr=tr, latest=latest, folders=folders, picker=picker, skip_ids=skip_ids, n_run=n_run, cases=cases, execs=execs, summ=summ, sel=sel, results=results,
+        return render_template('test_run.html', tr=tr, latest=latest, newest=newest, overall=overall, folders=folders, picker=picker, skip_ids=skip_ids, n_run=n_run, cases=cases, execs=execs, summ=summ, sel=sel, results=results,
                                scheds=scheds, describe=describe, any_running=any_running, days=DAYS,
                                today=date.today().isoformat())
 
