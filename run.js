@@ -49,7 +49,9 @@ function parseArgs(argv) {
 
   const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
   const slug = path.basename(args.file).replace(/_test\.md$|\.md$/, '').slice(0, 40);
-  const runDir = path.join(process.env.LTH_RUNS_DIR || path.join(__dirname, 'runs'), `${stamp}-${slug}`);   // lth CLI: ~/.lth/runs
+  // The random part keeps two runs started in the same second apart: they shared a folder and their results mixed.
+  const unique = require('crypto').randomBytes(3).toString('hex');
+  const runDir = path.join(process.env.LTH_RUNS_DIR || path.join(__dirname, 'runs'), `${stamp}-${slug}-${unique}`);   // lth CLI: ~/.lth/runs
   fs.mkdirSync(runDir, { recursive: true });
   const log = fs.createWriteStream(path.join(runDir, 'events.ndjson'));
   const emit = ev => { log.write(JSON.stringify(ev) + '\n'); };
@@ -286,7 +288,7 @@ function parseArgs(argv) {
   const needsAI = results.filter(r => r.status === 'needs-ai').length;
   if (cleanupFailed) failed = true;
   if (keptSteps.length && !failed) emit({ type: 'cleanup_pending', steps: keptSteps });
-  const status = failed ? 'FAILED' : needsAI ? 'PARTIAL' : 'PASSED';
+  const status = failed || !results.length ? 'FAILED' : needsAI ? 'PARTIAL' : 'PASSED';   // no steps = nothing was proved
   const summary = {
     healed: results.filter(r => r.healed).length,
     test: tc.title, file: args.file, status, durationMs: Date.now() - started,

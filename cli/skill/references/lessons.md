@@ -100,3 +100,8 @@ the server: `tester lessons <project> --json` (read them too - they are newer an
 39. **A click on a Select2's real `<select>` timed out** (server #151). Select2 clips it to 1px. Fixed: the click goes to its box.
 40. **Two lessons disagreed on which site a run opens** (server #127, #131). The order is `--url`, `tester.json`,
     `variables.json`. `--env` is the database only, and the CLI now says so when the sites differ.
+41. **Two runs started in the same second shared a folder** (server #219). Results mixed and a run saved PASSED with 0
+    steps. Fixed: each run has its own folder, and a run with no steps is FAILED.
+42. **`tester run show 1875` ran as a test** (server #225) and saved two new cases. Fixed for short words like this, longer
+    ones still run. Avoid: check a subcommand in `tester help` first. Server run details are on the run page.
+43. **A click on the hidden input of a Bootstrap toggle button timed out** (server #220). Fixed: the click goes to its label.

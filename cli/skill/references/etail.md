@@ -19,6 +19,7 @@ Read when the project is **Retail** (eTail, PHP CodeIgniter 2, MySQL). Also read
 ## Screens
 - Almost every `<select>` is **Select2** (the real select is hidden). Use `Select '<text>' from the X dropdown (#id)` or
   `Select the first available option in the X dropdown (#id)` - never Click the box and Type.
+- Save / Save and Print on payment/add sit in a `data-toggle="buttons"` group. `(#pay_save)` works: the runner clicks its label.
 - Radio buttons come in three kinds - open the view and check which one before writing the step:
   | In the view | Example | Step |
   |---|---|---|
