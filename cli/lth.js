@@ -888,6 +888,11 @@ async function run() {
   const caseRef = flag('--case');
   const file = flag('--file');
   const text = positional().join(' ').trim();
+  // Any words run as a test and save a new case, so a mistyped command must stop here.
+  if (/^(show|get|view|status|open|delete|list|logs?|help)(\s+#?\d+)?$/i.test(text)) {
+    fail(`"tester run ${text}" is not a command, and it is too short to be a test: nothing was run. Commands: tester help. ` +
+      'A test is a sentence: tester run "<what to test, in plain English>".');
+  }
   const pid = Number(flag('--project') || c.project) || null;
   let content, caseId = null, title = flag('--title'), loginPid = pid, savedFile = null;
 
