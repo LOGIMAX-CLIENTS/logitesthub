@@ -38,6 +38,36 @@ test('a hint the runner cannot read fails clearly, never goes to AI', () => {
   assert.ok(!a.needsAI);
 });
 
+test('a quoted value with spaces and a hint runs without AI (lesson 199)', () => {
+  for (const s of ["Type 'ZT TEST ONE' into the Name field (#name).", 'Type "ZT TEST ONE" into the Name field (#name).']) {
+    const a = parseStep(s);
+    assert.strictEqual(a.kind, 'type', s);
+    assert.strictEqual(a.value, 'ZT TEST ONE');
+    assert.strictEqual(a.css, '#name');
+  }
+  assert.strictEqual(parseStep('Type a numeric HSN code into the HSN field (#hsn).').kind, 'unknown');
+});
+
+test('is not visible with a hint runs without AI (lesson 115)', () => {
+  const a = parseStep("Assert the dropdown showing 'Select Bank' (#upi_type_0 .id_bank) is not visible.");
+  assert.strictEqual(a.kind, 'assertHidden');
+  assert.strictEqual(a.css, '#upi_type_0 .id_bank');
+});
+
+test('no source file holds a lost regex back-reference (a raw 0x01 byte)', () => {
+  const fs = require('node:fs'), path = require('node:path');
+  for (const f of ['lib/actions.js', 'run.js']) {
+    assert.ok(!fs.readFileSync(path.join(__dirname, '..', f), 'latin1').includes('\x01'), f);
+  }
+});
+
+test('login: none and a case with its own sign-in skip the helper (lesson 107)', () => {
+  const { skipsLogin } = require('../lib/testcase');
+  assert.ok(skipsLogin('---\nlogin: none\n---\n\n# T\n\nWait 2 seconds.\n'));
+  assert.ok(skipsLogin('# T\n\n## Sign in\nWait 2 seconds.\n'));
+  assert.ok(!skipsLogin('---\ncase_id: 7\n---\n\n# T\n\nWait 2 seconds.\n'));
+});
+
 test('several hints in one sentence are several actions (AI)', () => {
   assert.strictEqual(parseStep('Fill Metal (#metal), Tax Group (#tax_group) and Save.').kind, 'unknown');
 });

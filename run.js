@@ -72,7 +72,7 @@ function parseArgs(argv) {
   let curStep = 0, sinceNav = 0;
   const ERROR_PAGE = /A Database Error Occurred|A PHP Error was encountered|Fatal error|Uncaught (?:Error|Exception)|An uncaught Exception/i;
   const errorText = body => {
-    const t = String(body || '').replace(/<(style|script)[\s\S]*?<\/>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&#39;|&quot;/g, "'").replace(/\s+/g, ' ').trim();
+    const t = String(body || '').replace(/<(style|script)[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&#39;|&quot;/g, "'").replace(/\s+/g, ' ').trim();
     let m = t.match(/Error Number:\s*(\d+)\s*(.+?)\s+(?:SELECT|INSERT|UPDATE|DELETE|CALL|Filename:)/i);
     if (m) return `Database Error ${m[1]}: ${m[2]}`.slice(0, 300);
     m = t.match(/Severity:\s*(.+?)\s*Message:\s*(.+?)\s*Filename:\s*(\S+)\s*Line Number:\s*(\d+)/i);

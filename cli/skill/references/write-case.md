@@ -34,9 +34,10 @@ For the screen under test open (Glob / Grep / Read):
 
 Use the real id in the step: `Type '10.500' into the Gross Weight field (#gross_wt).` A `(#id)` hint makes the step
 exact and AI-free. Never invent an id; if the element has no id, use its visible label / button text.
-A hint may use ids, classes (`.a.b`), tag names, `:first-child` / `:last-child` / `:nth-child(n)` and `>` only, e.g.
-`(#billing_list tbody tr:first-child .btn-warning)`. Never `[attr]` or quotes: the runner fails such a step, and
-`tester check` reports it before the run.
+A hint starts with `#` or `.`; after that it may use ids, classes (`.a.b`), tag names, `:first-child` / `:last-child` /
+`:nth-child(n)`, spaces and `>` only, e.g. `(#billing_list tbody tr:first-child .btn-warning)`. Never start with a tag
+(`img.x`, `li.x a.y`: write `.x`, `.x a.y`) and never use `[attr]` or quotes: the runner fails such a step, and
+`tester check` reports it before the run. A tab with no id: its position, `(.nav-pills > li:nth-child(18) > a)`.
 
 **Pick the most stable hint, in this order** (TC-13: a `*` found by `.col-sm-12 > .row > .col-sm-2:nth-child(5) > label
 > .error` could have matched the item row's `*` and passed while the fix was missing):
@@ -74,6 +75,7 @@ Wait 2 seconds.                                        only after an action that
 Assert the text '<text>' is visible.
 Assert the <label> field (#id) shows '<value>'.
 Assert the <label> (#id) is visible.
+Assert the <label> (#id) is not visible.               hidden, or not on the page
 Assert the page title contains '<text>'.  /  Assert the current URL contains '<text>'.
 Remember SQL "<SELECT ...>" as <name>.
 Assert SQL "<SELECT ...>" returns '<value>'.  /  returns a row  /  returns no rows
@@ -140,5 +142,22 @@ when credits are not available, use only the shapes above.
 - **Safe to run twice.** A test that saves changes the data it started from (stock, counts, next number). Read those
   values with `Remember SQL` at the start and assert `{{name}}`, never a number copied from today's database.
 - Number inputs (`type=number`) cannot take letters; check letter filtering only on text inputs.
+- **What "Assert the text" can see:** only visible page text. A value inside an input (tag code, weight, rate):
+  `Assert the X field (#id) shows '...'`. A message from a native `alert()`: not on the page at all, so prove the block
+  with the URL plus an `Assert SQL` that the row did not change.
+- **A failed Save wrote nothing:** `Remember SQL` the row count before and `Assert SQL` the same count after. A
+  "last 10 minutes" window also counts rows from an earlier case.
+- **A negative test on a one-row settings screen** sets its own starting state first (choose the option, Save). Passed
+  runs keep their data, so never rely on run order or on another test's Clean up.
+- **A multi-select:** `Select '<option>' ...` REPLACES what is selected. For more values: the Select step once, then
+  `Type the keys 'X' into the ... field (.col .select2-selection--multiple .select2-search__field).` and `Press Enter`
+  in the same field. Scope it with a class of the column, other multi-selects share that class.
+- **Opening a Select2 list** to look at its options: `Click the X dropdown (#id)`, click it again to close. Pick an entry
+  from it with `(.select2-results__options .select2-results__option:first-child)`.
+- **A free-text AI check sees one screenshot of the visible part.** A long table can "miss" rows below the fold: assert exact
+  texts that appear only in the rows. Never ask it to judge alignment or spacing; measure the saved step PNG instead.
+- **A section repeated per instalment / item:** read the count with SQL in preflight and write exactly that many
+  sections, never take it from the number of modes the user listed.
+- **Read-only SQL:** the words INSERT, UPDATE, SLEEP ... are refused even as string functions. `REPLACE(...)` is allowed.
 - Before selecting an option, make sure it is in the source the dropdown is filled from (the AJAX method's table),
   for the parent values the test picks.
