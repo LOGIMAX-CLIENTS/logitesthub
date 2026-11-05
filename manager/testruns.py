@@ -242,9 +242,11 @@ def make_blueprint(deps):
                            'LEFT JOIN environments e ON e.id=t.env_id WHERE t.id=?', (tid,)).fetchone()
         return tr or abort(404)
 
-    def execute(c, tr, username, env_id=None, schedule_id=None):
-        """Starts one execution. Returns (exec_id or None, message)."""
+    def execute(c, tr, username, env_id=None, schedule_id=None, only_ids=None):
+        """Starts one execution (only_ids: just these of the Test Run's cases). Returns (exec_id or None, message)."""
         cases = resolve_cases(c, tr)
+        if only_ids is not None:
+            cases = [x for x in cases if x['id'] in only_ids]
         if not cases:
             return None, ('No test cases match this Test Run' + (' (none are Ready for QA)' if tr['only_ready'] else '') + '.')
         env = envs.get(c, env_id or tr['env_id'])
@@ -316,10 +318,14 @@ def make_blueprint(deps):
         scheds = c.execute('SELECT s.*, e.name AS env_name FROM schedules s LEFT JOIN environments e ON e.id=s.env_id '
                            'WHERE s.test_run_id=? ORDER BY s.id', (tid,)).fetchall()
         any_running = any(r['status'] in ('running', 'queued') for r in results.values())
+        # each case's newest run from anywhere: a case fixed by its own Run button is not ticked to run again
+        latest = {r['case_id']: r['status'] for r in c.execute(
+            f"SELECT case_id, status FROM runs WHERE id IN (SELECT MAX(id) FROM runs WHERE case_id IN ({','.join('?' * len(cases))}) GROUP BY case_id)",
+            [x['id'] for x in cases]).fetchall()} if cases else {}
         folders = c.execute('SELECT id, name FROM folders WHERE project_id=? AND archived=0 ORDER BY name', (tr['project_id'],)).fetchall()
         picker = {**picker_data(c, tr['project_id'], me=current_user()['username']),
                   'selected': [x['id'] for x in cases] if tr['mode'] == 'fixed' else [x['id'] for x in cases if x['id'] not in skip_ids]}
-        return render_template('test_run.html', tr=tr, folders=folders, picker=picker, skip_ids=skip_ids, n_run=n_run, cases=cases, execs=execs, summ=summ, sel=sel, results=results,
+        return render_template('test_run.html', tr=tr, latest=latest, folders=folders, picker=picker, skip_ids=skip_ids, n_run=n_run, cases=cases, execs=execs, summ=summ, sel=sel, results=results,
                                scheds=scheds, describe=describe, any_running=any_running, days=DAYS,
                                today=date.today().isoformat())
 
@@ -429,7 +435,13 @@ def make_blueprint(deps):
         tr = tr_or_404(tid)
         want = request.form.get('env_id', type=int)
         env = envs.get(con(), want, current_user()) if want else None   # the user's own Local is fine for a run now
-        eid, msg = execute(con(), tr, current_user()['username'], env['id'] if env else None)
+        only = None
+        if request.form.get('selected') == '1':   # the ticked cases of the results list; the Test Run's own list stays
+            only = {int(x) for x in request.form.getlist('ids') if x.isdigit()}
+            if not only:
+                flash('Tick the test cases to run.', 'warning')
+                return redirect(url_for('testruns.detail', tid=tid))
+        eid, msg = execute(con(), tr, current_user()['username'], env['id'] if env else None, only_ids=only)
         flash(msg, 'info' if eid else 'warning')
         return redirect(url_for('testruns.detail', tid=tid, exec=eid) if eid else url_for('testruns.detail', tid=tid))
 
