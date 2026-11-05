@@ -1684,3 +1684,6 @@ html:has(main.as-page), body:has(main.as-page) { overflow: hidden; }
 .fr-who-test { border-left-color: var(--brand); }
 .fr-who-env { border-left-color: var(--warn, #b45309); }
 .fr-who-unknown { border-left-color: var(--line-2, #c9cde0); }
+/* Test Run results: tick the cases to run again */
+.trd-pick { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--bs-border-color, #e3e6ec); }
+.trd-pick-cb { flex: none; margin: 0; }

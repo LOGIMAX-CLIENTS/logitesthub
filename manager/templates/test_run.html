@@ -54,10 +54,23 @@
 <div class="trd-grid">
   <section class="panel p-0">
     <div class="au-head"><b>{% if sel %}Run #{{ sel }} results{% else %}Test cases{% endif %} <span class="small text-secondary fw-normal">· run in this order, one after another</span></b>{% if s %}{{ m.result_bar(s) }}{% endif %}</div>
+    {% if cases %}
+    <form method="post" action="{{ url_for('testruns.run_now', tid=tr.id) }}" class="trd-pick" id="trPick">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="selected" value="1"><input type="hidden" name="env_id" value="{{ tr.env_id or '' }}">
+      <button class="btn btn-success btn-sm" id="trPickRun" {{ 'disabled' if any_running }}>▶ Run selected (<span id="trPickN">0</span>)</button>
+      <span class="small text-secondary">Select:</span>
+      <button type="button" class="btn btn-link btn-sm p-0" data-pick="failed">Failed</button>
+      <button type="button" class="btn btn-link btn-sm p-0" data-pick="all">All</button>
+      <button type="button" class="btn btn-link btn-sm p-0" data-pick="none">None</button>
+      <span class="small text-secondary">Only these run, in this order. The Test Run's list does not change.</span>
+    </form>
+    {% endif %}
     <div class="trd-cases">
       {% set shown = results.keys()|list %}
       {% for c in cases %}{% set r = results.get(c.id) %}
       <a class="trd-case {{ 'is-skip' if c.id in skip_ids }}" href="{{ url_for('case', cid=c.id, run=r.id) if r else url_for('case', cid=c.id) }}">
+        {% set bad = latest.get(c.id) and latest.get(c.id) != 'PASSED' %}
+        <input class="form-check-input trd-pick-cb" type="checkbox" form="trPick" name="ids" value="{{ c.id }}" data-failed="{{ '1' if bad else '0' }}" {{ 'checked' if bad }} aria-label="Run TC-{{ c.tc_no }}" onclick="event.stopPropagation()">
         <span class="trd-order">{{ loop.index }}</span>{{ m.status_icon(r.status if r else None) }}
         <span class="min-w-0 flex-grow-1"><b>TC-{{ c.tc_no }}</b> <span class="text-truncate">{{ c.title }}</span></span>
         {% if c.qa_status == 'ready' %}<span class="qa-tag">Ready for QA</span>{% elif c.id in skip_ids %}<span class="skip-tag" title="Ready for QA only is on">Skipped: not Ready for QA</span>{% endif %}
@@ -134,6 +147,25 @@
 {% endblock %}
 {% block scripts %}
 <script>
+(function () {   // results list: tick the cases to run again (those whose newest run did not pass are ticked)
+  var form = document.getElementById('trPick');
+  if (!form) return;
+  var boxes = document.querySelectorAll('.trd-pick-cb'), run = document.getElementById('trPickRun'), locked = run.disabled;
+  function count() {
+    var n = 0; boxes.forEach(function (b) { if (b.checked) n++; });
+    document.getElementById('trPickN').textContent = n;
+    run.disabled = locked || !n;
+  }
+  boxes.forEach(function (b) { b.addEventListener('change', count); });
+  form.querySelectorAll('[data-pick]').forEach(function (x) {
+    x.addEventListener('click', function () {
+      var how = x.dataset.pick;
+      boxes.forEach(function (b) { b.checked = how === 'all' || (how === 'failed' && b.dataset.failed === '1'); });
+      count();
+    });
+  });
+  count();
+})();
 document.querySelectorAll('.fr-btn[data-href]').forEach(function (b) {   // a link inside the row's link: open the report, not the case
   function go(e) { e.preventDefault(); e.stopPropagation(); location.href = b.getAttribute('data-href'); }
   b.addEventListener('click', go);
