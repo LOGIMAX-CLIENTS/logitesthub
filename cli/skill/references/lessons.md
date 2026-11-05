@@ -90,3 +90,13 @@ the server: `tester lessons <project> --json` (read them too - they are newer an
     step texts show the steps after `{{variables}}` are filled: `Navigate to https://dev.../admin/...` was really
     `Navigate to {{base_url}}...` in the case. Avoid: before saying a case hard-codes a URL, id or value, read the
     saved case (`tester case pull <id>`), not the run.
+35. **A lost regex back-reference sent values to AI for a month** (server #199). `lib/actions.js` held a raw 0x01 byte in
+    place of `\1`, so `Type 'ZT TEST ONE' into the X field (#id).` was not read and spent AI on every run until credits ran
+    out. Fixed; `run.js` had the same damage. Avoid: when a plain step shows `ai` in a run, test it with `parseStep`.
+36. **`Select 'All'` picked 'Allocated'** (server #187). An option with an empty value was skipped, so the prefix won.
+    Fixed: an exact label wins. Avoid: after a Select, assert what it should have changed.
+37. **`Assert ... (#id) is not visible` was judged by AI from a screenshot** (server #115). It runs without AI now.
+38. **`login: none` still asked for login values** (server #107). Fixed: the CLI skips the helper before checking them.
+39. **A click on a Select2's real `<select>` timed out** (server #151). Select2 clips it to 1px. Fixed: the click goes to its box.
+40. **Two lessons disagreed on which site a run opens** (server #127, #131). The order is `--url`, `tester.json`,
+    `variables.json`. `--env` is the database only, and the CLI now says so when the sites differ.

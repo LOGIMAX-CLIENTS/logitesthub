@@ -248,7 +248,7 @@ def vars_file(env):
 # ---------------------------------------------------------------- read-only database of the app under test
 
 SELECT_RE = re.compile(r'^\s*(select|with)\b', re.I)
-WRITE_WORDS = re.compile(r'\b(insert|update|delete|replace|drop|alter|create|truncate|grant|revoke|rename|lock|unlock|'
+WRITE_WORDS = re.compile(r'\b(insert|update|delete|replace(?!\s*\()|drop|alter|create|truncate|grant|revoke|rename|lock|unlock|'
                          r'call|handler|load|set|into\s+outfile|into\s+dumpfile|sleep|benchmark|get_lock)\b', re.I)
 MAX_ROWS = 20
 

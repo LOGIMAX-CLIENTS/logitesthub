@@ -936,7 +936,7 @@ async function run() {
   // The project's login helper runs first, exactly as in a web run (skip with --no-login or "login: none" in the case)
   // With --env, that environment's own login steps win (e.g. a client site whose login page differs)
   let loginText = '';
-  if (loginPid && !argv.includes('--no-login')) {
+  if (loginPid && !argv.includes('--no-login') && !require('../lib/testcase').skipsLogin(content)) {
     const loginEnv = flag('--env') && flag('--env') !== true ? flag('--env') : '';
     try {
       const lh = await api(c, 'GET', `/projects/${loginPid}/login-helper${loginEnv ? '?env=' + encodeURIComponent(loginEnv) : ''}`);
@@ -948,6 +948,17 @@ async function run() {
   }
   const vars = buildVars();
   if (/\{\{\s*(base_url|start_url)\s*\}\}/.test(content + loginText) && !vars.base_url) fail('this test needs the site address: add --url <site address> (or --vars file.json).');
+  // --env picks only the database. The site is --url, else tester.json's url, else variables.json's base_url.
+  const siteEnv = flag('--env') && flag('--env') !== true ? flag('--env') : '';
+  if (siteEnv && vars.base_url) {
+    const clean = u => String(u || '').replace(/^https?:\/\//i, '').replace(/\/+$/, '').toLowerCase();
+    const site = clean(vars.base_url.value ?? vars.base_url);
+    const env = ((await api(c, 'GET', '/environments').catch(() => ({}))).environments || []).find(e => e.name === siteEnv);
+    if (env && env.base_url && !clean(env.base_url).startsWith(site) && !site.startsWith(clean(env.base_url))) {
+      console.error(`Note: this run opens ${site}, but the "${siteEnv}" environment's site is ${clean(env.base_url)}. ` +
+        '--env changes only the database for SQL steps; add --url to open that site.');
+    }
+  }
   // A login helper value left out is typed literally ("{{username}}") and every step after it fails on the login page
   const loginMissing = [...new Set([...loginText.matchAll(/\{\{\s*(\w+)\s*\}\}/g)].map(x => x[1]))].filter(n => !vars[n]);
   if (loginMissing.length) fail(`the project's login helper needs ${loginMissing.join(', ')}: add ` +

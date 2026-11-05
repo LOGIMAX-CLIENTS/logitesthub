@@ -1062,7 +1062,7 @@ Type {{username}} into the User Name field.
 Type {{password}} into the Password field.
 Select '{{branch}}' from the Select Branch dropdown.
 Click the Sign In button.
-Assert the page title contains 'Dashboard'.
+Assert the User Name field (#username) is not visible.
 
 ## <What this test does>
 """

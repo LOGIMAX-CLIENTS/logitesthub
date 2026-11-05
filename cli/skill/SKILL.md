@@ -175,7 +175,11 @@ folder. Older setups use `<repo>/tests/`; both work the same.
 - `tester test --json` runs every `*_test.md` in `<tests>` (same options as `run`); exit code = the worst result.
 - Fix a failing case **in its file**, run it, then `tester case push <case_id> --file <file>`.
 - No tests folder yet (`tester init` not done): a case is not saved as a file - run `tester init` first.
-- `--no-save`: do not write a file (a one-off check).
+- `--no-save`: do not write a file (a one-off check). The run is still uploaded and shows in LogiTestHub under "CLI runs".
+- To look at a screen, read its view and JS first. If a live check is still needed, add `--no-upload` so it does not
+  fill the project's run history.
+- **Which site a run opens:** `--url`, else `tester.json`'s url, else `variables.json`'s `base_url`. `--env` changes only
+  the database for SQL steps, never the site. Read the first Navigate step in the result before trusting a run on another site.
 - `<tests>/helpers/`: `@import` files (`@import ../helpers/login.md`). `<tests>/variables/variables.json`: test data
   (base_url, username, password as `{"value": .., "secret": true}`), used by every run there, kept out of git - with it
   filled in, `--var` / `--secret` are not needed. The user fills the password in themselves, never in the chat.
