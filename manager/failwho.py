@@ -50,9 +50,32 @@ KINDS = {   # kind -> (label, who fixes)
 }
 
 
-def classify(status, fail_text, fail_reason, error, env_name, local_status, code_checked, missing):
+SERVER_ERR_RE = re.compile(r'^Server error (\d{3}) on (\S+?):\s*(.*)$')
+
+
+def page_server_errors(steps, fail_step):
+    """The server errors the page's own calls got on the failed step's page: from the last Navigate up to the failed
+    step. A list that stays empty because its data call answered 500 then fails as "element not found" (TC-224:
+    lot_tag_detail). -> [{'step', 'status', 'url', 'text'}]"""
+    if not fail_step:
+        return []
+    # the login helper's pages (dashboard alerts that fail on every run) are not the page under test
+    upto = [s for s in steps if s.get('n') and s['n'] <= fail_step and not re.match(r'\s*sign in', str(s.get('section') or ''), re.I)]
+    start = max((s['n'] for s in upto if str(s.get('text', '')).lower().startswith('navigate to')), default=1)
+    out = []
+    for s in upto:
+        if s['n'] < start:
+            continue
+        for w in s.get('warnings') or []:
+            m = SERVER_ERR_RE.match(str(w))
+            if m:
+                out.append({'step': s['n'], 'status': m.group(1), 'url': m.group(2), 'text': m.group(3)[:200]})
+    return out
+
+
+def classify(status, fail_text, fail_reason, error, env_name, local_status, code_checked, missing, server_errors=None):
     """{kind, label, who, why}. code_checked: the environment's code was available to look elements up in;
-    missing: the failed step's ids / classes not found in that code."""
+    missing: the failed step's ids / classes not found in that code; server_errors: page_server_errors()."""
     env_name = env_name or 'this environment'
     msg = ' '.join(x for x in (fail_reason, error) if x).strip().rstrip('.')
 
@@ -62,6 +85,12 @@ def classify(status, fail_text, fail_reason, error, env_name, local_status, code
 
     if ENV_RE.search(msg):
         return out('env', f'The run could not use the site or its setup: "{msg[:160]}".')
+    if server_errors and not missing:
+        e = server_errors[-1]
+        more = f' (and {len(server_errors) - 1} more)' if len(server_errors) > 1 else ''
+        return out('app', f'On this page the call {e["url"]} answered {e["status"]} at step {e["step"]}{more}, so the '
+                          f'screen did not get its data and the failed step could not work. Server reply: "{e["text"]}". '
+                          f'Check {env_name}\'s server error log for that address.')
     if missing:
         names = ', '.join(missing)
         if local_status == 'PASSED':

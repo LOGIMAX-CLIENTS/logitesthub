@@ -1511,8 +1511,10 @@ def run_fail_reason(rid):
         import failwho
         root = coderepo.code_dir(env) if env else None
         idx = elementcheck.index(root) if root else None   # None while a first index build runs: then "Not sure"
+        _, run_steps = db.read_run_events(run['run_dir']) if run['run_dir'] and os.path.isdir(run['run_dir']) else (None, [])
         who = failwho.classify(run['status'], run['fail_text'], run['fail_reason'], run['error'], run['env_name'],
-                               local['status'] if local else None, bool(idx), failwho.missing_elements(run['fail_text'], idx))
+                               local['status'] if local else None, bool(idx), failwho.missing_elements(run['fail_text'], idx),
+                               failwho.page_server_errors(run_steps, run['fail_step']))
     link = url_for('run_fail_reason', rid=rid, _external=True)
     code = f"{run['code_branch'] or '?'} @ {run['code_commit'][:10]}" if run['code_commit'] else 'not recorded'
     lines = [f"TC-{c['tc_no']} {c['title']}",
