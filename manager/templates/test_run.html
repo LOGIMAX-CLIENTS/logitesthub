@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% import '_tr_macros.html' as m with context %}
 {% block title %}{{ tr.name }}{% endblock %}
-{% block head %}{% if any_running or fixing or (pre and pre.status == 'running') %}<meta http-equiv="refresh" content="6">{% endif %}{% endblock %}
+{% block head %}{% if any_running or fixing or (pre and pre.status == 'running') %}<meta http-equiv="refresh" content="6; url={{ request.full_path }}">{% endif %}{% endblock %}
 {% block crumbs %}<span class="tm-crumbs"><a href="{{ url_for('testruns.index') }}">Test Runs</a> <span>/</span> <b>{{ tr.name }}</b></span>{% endblock %}
 {% block content %}
 {% set s = summ.get(sel) %}
