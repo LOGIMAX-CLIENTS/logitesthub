@@ -2170,6 +2170,8 @@ with db.connect() as _c:
 import precheck   # noqa: E402  (Test Runs / schedules: will the cases find their data on the environment, before the run)
 with db.connect() as _c:
     precheck.init(_c)
+    import precheck_fix
+    precheck_fix.init(_c)
 
 import sqlexplain   # noqa: E402  (plain English for SQL steps on the case page; the query behind a button)
 with db.connect() as _c:

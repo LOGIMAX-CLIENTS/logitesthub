@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% import '_tr_macros.html' as m with context %}
 {% block title %}{{ tr.name }}{% endblock %}
-{% block head %}{% if any_running or (pre and pre.status == 'running') %}<meta http-equiv="refresh" content="6">{% endif %}{% endblock %}
+{% block head %}{% if any_running or fixing or (pre and pre.status == 'running') %}<meta http-equiv="refresh" content="6">{% endif %}{% endblock %}
 {% block crumbs %}<span class="tm-crumbs"><a href="{{ url_for('testruns.index') }}">Test Runs</a> <span>/</span> <b>{{ tr.name }}</b></span>{% endblock %}
 {% block content %}
 {% set s = summ.get(sel) %}
@@ -70,6 +70,27 @@
     {% for c in bad %}
     <div class="pre-case"><a href="{{ url_for('case', cid=c.case_id) }}"><b>TC-{{ c.tc }}</b> {{ c.title }}</a>
       {% for i in c['items'] if i.level == 'fail' %}<div class="pre-item"><span class="pre-x">✕</span><span><span class="pre-step">{{ i.step or 'Environment' }}</span>{{ i.text }}</span></div>{% endfor %}
+      {% set f = fixes.get(c.case_id) %}
+      {% if f and f.status == 'working' %}
+      <div class="pre-fix small">💡 Looking at the data on {{ f.env_name }} for a change that keeps what the test checks… this page refreshes by itself.</div>
+      {% elif f and f.status == 'suggested' %}
+      <div class="pre-fix">
+        <div><b>💡 Suggested change</b> <span class="small text-secondary">· checked again on {{ f.env_name }}: it finds its data now</span></div>
+        {% if f.why %}<div class="small mt-1">{{ f.why }}</div>{% endif %}
+        {% for e in f.edits %}
+        <div class="pre-diff"><div class="pre-old">L{{ e.line }} − {{ e.old }}</div><div class="pre-new">{% if e.new %}L{{ e.line }} + {{ e.new }}{% else %}(step removed){% endif %}</div></div>
+        {% endfor %}
+        <div class="d-flex gap-2 mt-2">
+          <form method="post" action="{{ url_for('testruns.precheck_fix_action', tid=tr.id, fid=f.id, action='apply') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn btn-success btn-sm">OK, change the test case</button></form>
+          <form method="post" action="{{ url_for('testruns.precheck_fix_action', tid=tr.id, fid=f.id, action='dismiss') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn btn-link btn-sm">No</button></form>
+        </div>
+      </div>
+      {% elif f and f.status == 'applied' %}
+      <div class="pre-fix small"><b class="pre-ok">✓ Test case changed</b> by {{ f.applied_by }} {{ f.applied_at|ago }}. Run it to see it pass on {{ f.env_name }}.</div>
+      {% else %}
+      {% if f and f.status in ('nofix', 'error') %}<div class="pre-fix small"><b>💡 {{ 'No change found' if f.status == 'nofix' else 'Could not suggest' }}:</b> {{ f.why }}</div>{% endif %}
+      <form method="post" action="{{ url_for('testruns.precheck_suggest', tid=tr.id, pid=pre.id, cid=c.case_id) }}" class="mt-2"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn btn-outline-secondary btn-sm" title="AI looks at the data on {{ pre.env_name }} (read-only) and suggests steps that use data it has. Nothing changes until you press OK.">💡 {{ 'Try again' if f else 'Suggest a fix' }}</button></form>
+      {% endif %}
     </div>
     {% endfor %}
     {% if pr.cases %}
