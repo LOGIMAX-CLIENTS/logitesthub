@@ -19,6 +19,7 @@ from flask import Blueprint, abort, flash, redirect, render_template, request, u
 import db
 import envs
 import precheck
+import precheck_fix
 
 TASK_CODE_RE = re.compile(r'^[A-Z0-9][A-Z0-9.-]{2,39}$')   # a PM task code, e.g. PM-LMX-0042 or PM-LMX-0042.1
 
@@ -328,12 +329,13 @@ def make_blueprint(deps):
         overall = {'passed': sum(1 for x in cases if (latest.get(x['id']) or {}).get('status') == 'PASSED'), 'total': len(cases)}
         # before the run: the check made for the run shown (a schedule's), else the newest one; after it: what auto-heal changed
         pre = (precheck.for_exec(c, sel) if sel else None) or precheck.latest(c, tid)
+        fixes = precheck_fix.of_check(c, pre['id']) if pre else {}
         heals = c.execute('SELECT h.*, cs.tc_no, cs.title FROM case_heals h JOIN runs r ON r.id=h.run_id JOIN cases cs ON '
                           'cs.id=h.case_id WHERE r.exec_id=? ORDER BY h.id', (sel,)).fetchall() if sel else []
         folders = c.execute('SELECT id, name FROM folders WHERE project_id=? AND archived=0 ORDER BY name', (tr['project_id'],)).fetchall()
         picker = {**picker_data(c, tr['project_id'], me=current_user()['username']),
                   'selected': [x['id'] for x in cases] if tr['mode'] == 'fixed' else [x['id'] for x in cases if x['id'] not in skip_ids]}
-        return render_template('test_run.html', tr=tr, latest=latest, pre=pre, heals=heals, newest=newest, overall=overall, folders=folders, picker=picker, skip_ids=skip_ids, n_run=n_run, cases=cases, execs=execs, summ=summ, sel=sel, results=results,
+        return render_template('test_run.html', tr=tr, latest=latest, pre=pre, fixes=fixes, fixing=any(f['status'] == 'working' for f in fixes.values()), heals=heals, newest=newest, overall=overall, folders=folders, picker=picker, skip_ids=skip_ids, n_run=n_run, cases=cases, execs=execs, summ=summ, sel=sel, results=results,
                                scheds=scheds, describe=describe, any_running=any_running, days=DAYS,
                                today=date.today().isoformat())
 
@@ -468,7 +470,35 @@ def make_blueprint(deps):
         else:
             precheck.start(tid, cases, env, current_user()['username'])
             flash(f'Checking {len(cases)} test case(s) on {env["name"]}: the result shows here in a minute.', 'info')
-        return redirect(url_for('testruns.detail', tid=tid) + '#precheck')
+        return redirect(url_for('testruns.detail', tid=tid))
+
+    @bp.route('/test-runs/<int:tid>/precheck/<int:pid>/fix/<int:cid>', methods=['POST'])
+    @login_required
+    def precheck_suggest(tid, pid, cid):
+        """Suggest a fix: AI finds data the environment has for this case's failed checks (background)."""
+        c = con()
+        pre = precheck.load(c, c.execute('SELECT * FROM prechecks WHERE id=? AND test_run_id=?', (pid, tid)).fetchone()) or abort(404)
+        case = c.execute('SELECT * FROM cases WHERE id=?', (cid,)).fetchone() or abort(404)
+        env = envs.get(c, pre['env_id'], current_user()) if pre['env_id'] else None
+        if not env:
+            flash('The environment of this check is not available to you.', 'warning')
+        else:
+            precheck_fix.start(pre, case, env, current_user()['username'])
+            flash(f'Looking for data on {env["name"]} for TC-{case["tc_no"]}: the suggestion shows here in a minute or two.', 'info')
+        return redirect(url_for('testruns.detail', tid=tid))
+
+    @bp.route('/test-runs/<int:tid>/precheck-fix/<int:fid>/<action>', methods=['POST'])
+    @login_required
+    def precheck_fix_action(tid, fid, action):
+        c = con()
+        if action == 'apply':
+            ok, msg, _ = precheck_fix.apply(c, fid, current_user()['username'])
+            flash(msg, 'success' if ok else 'warning')
+        elif action == 'dismiss':
+            precheck_fix.dismiss(c, fid)
+        else:
+            abort(404)
+        return redirect(url_for('testruns.detail', tid=tid))
 
     # ---- schedules ----
     @bp.route('/schedules/new', methods=['POST'])

@@ -1705,3 +1705,7 @@ html:has(main.as-page), body:has(main.as-page) { overflow: hidden; }
 .pre-step { display: block; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .8rem; color: var(--muted); }
 .pre-all { margin-top: 8px; }
 .pre-all summary { cursor: pointer; color: var(--muted); }
+.pre-fix { margin-top: 8px; padding: 8px 12px; border-radius: 8px; background: var(--brand-tint, #f1ecff); }
+.pre-diff { margin-top: 6px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .8rem; overflow-wrap: anywhere; }
+.pre-old { color: var(--fail); text-decoration: line-through; opacity: .8; }
+.pre-new { color: var(--pass); }

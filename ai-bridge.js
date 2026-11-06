@@ -5,7 +5,7 @@
 //   {"op":"sql","steps":["Remember SQL \"...\" as bill.", ...]}   (plain English for SQL steps)
 // Reply: {"ok":true,"data":{actions,verdict,reason},"usage":{...},"model":"..."} or {"ok":false,"error":"..."}
 //   {"op":"precheck","title":"...","steps":[...],"picks":[...],"tables":{...}}   (pre-run check of dropdown values)
-const { decideStep, chatTest, explainSql, precheckValues, explain, MODEL } = require('./lib/ai');
+const { decideStep, chatTest, explainSql, precheckValues, precheckFix, explain, MODEL } = require('./lib/ai');
 
 let input = '';
 process.stdin.setEncoding('utf8');
@@ -14,7 +14,7 @@ process.stdin.on('end', async () => {
   let req;
   try { req = JSON.parse(input); } catch (_) { return reply({ ok: false, error: 'Bad JSON request' }); }
   try {
-    const OPS = { step: decideStep, chat: chatTest, sql: explainSql, precheck: precheckValues };   // chat: Test Assistant; sql: plain English for SQL steps
+    const OPS = { step: decideStep, chat: chatTest, sql: explainSql, precheck: precheckValues, precheckfix: precheckFix };   // chat: Test Assistant; sql: plain English for SQL steps
     if (!OPS[req.op]) return reply({ ok: false, error: 'Unknown op' });
     // what the AI is doing (a file read, a search), one "STEP <text>" line on stderr: the Test Assistant shows it live
     const { data, usage } = await OPS[req.op](req, t => process.stderr.write(`STEP ${String(t).replace(/\s+/g, ' ')}\n`));
