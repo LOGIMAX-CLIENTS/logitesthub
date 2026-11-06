@@ -1688,3 +1688,20 @@ html:has(main.as-page), body:has(main.as-page) { overflow: hidden; }
 .trd-pick { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--bs-border-color, #e3e6ec); }
 .trd-pick-cb { flex: none; margin: 0; }
 .trd-overall { padding: 8px 16px; font-size: .86rem; border-bottom: 1px solid var(--bs-border-color, #e3e6ec); }
+/* Test Run: pre-run check on the environment, and what auto-heal changed */
+.pre-box { border-left: 4px solid var(--line); }
+.pre-box.pre-bad { border-left-color: var(--fail); }
+.pre-box.pre-good { border-left-color: var(--pass); }
+.pre-box.pre-heal { border-left-color: var(--ai); }
+.pre-body { padding: 10px 16px 12px; }
+.pre-sum { margin-bottom: 6px; }
+.pre-fail { color: var(--fail); }
+.pre-ok { color: var(--pass); }
+.pre-case { padding: 8px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.pre-item { display: flex; gap: 8px; margin-top: 4px; font-size: .88rem; }
+.pre-x { color: var(--fail); font-weight: 700; flex: none; }
+.pre-v { color: var(--pass); flex: none; }
+.pre-s { color: var(--muted); flex: none; }
+.pre-step { display: block; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .8rem; color: var(--muted); }
+.pre-all { margin-top: 8px; }
+.pre-all summary { cursor: pointer; color: var(--muted); }
