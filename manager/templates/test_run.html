@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% import '_tr_macros.html' as m with context %}
 {% block title %}{{ tr.name }}{% endblock %}
-{% block head %}{% if any_running %}<meta http-equiv="refresh" content="6">{% endif %}{% endblock %}
+{% block head %}{% if any_running or (pre and pre.status == 'running') %}<meta http-equiv="refresh" content="6">{% endif %}{% endblock %}
 {% block crumbs %}<span class="tm-crumbs"><a href="{{ url_for('testruns.index') }}">Test Runs</a> <span>/</span> <b>{{ tr.name }}</b></span>{% endblock %}
 {% block content %}
 {% set s = summ.get(sel) %}
@@ -27,6 +27,10 @@
         {% for e in env_list %}<li><button class="dropdown-item" type="submit" onclick="document.getElementById('trRunEnv').value='{{ e.id }}'"><b>{{ e.name }}</b><div class="small text-secondary env-dd-url">{{ e.base_url }}</div></button></li>{% endfor %}</ul>
       {% endif %}
     </form>
+    <form method="post" action="{{ url_for('testruns.run_precheck', tid=tr.id) }}">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="env_id" value="{{ tr.env_id or '' }}">
+      <button class="btn btn-outline-secondary btn-sm" {{ 'disabled' if (pre and pre.status == 'running') or not cases }} title="Before running: does each case find its test data and the dropdown values it picks on {{ tr.env_name or 'the environment' }}? Read-only: nothing is changed, no screen is opened.">🔎 {{ 'Checking…' if pre and pre.status == 'running' else 'Check on ' ~ (tr.env_name or 'environment') }}</button>
+    </form>
     <button class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#casePicker">☑ Select test cases</button>
     <button class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#newSched">⏰ Schedule</button>
     <button class="btn btn-outline-secondary btn-sm" data-bs-toggle="collapse" data-bs-target="#trEdit">Edit</button>
@@ -50,6 +54,51 @@
     <button class="btn btn-primary btn-sm mt-3">Save</button>
   </form>
 </div>
+
+{% if pre %}{% set pr = pre.result or {} %}{% set bad = (pr.cases or [])|selectattr('level', 'equalto', 'fail')|list %}
+<section class="panel p-0 mb-3 pre-box {{ 'pre-bad' if bad else 'pre-good' if pre.status == 'done' and not pr.error }}" id="precheck">
+  <div class="au-head"><b>🔎 Before the run: check on {{ pre.env_name or 'the environment' }}</b>
+    <span class="small text-secondary">{{ ('for Run #' ~ pre.exec_id ~ ' · ') if pre.exec_id }}{{ 'by ' ~ pre.started_by if pre.started_by }} · {{ pre.at|ago }}</span></div>
+  <div class="pre-body">
+  {% if pre.status == 'running' %}
+    <div class="small">Checking each case's test data and dropdown values on {{ pre.env_name }}… this page refreshes by itself.</div>
+  {% elif pr.error %}
+    <div class="small t-warn">The check could not run: {{ pr.error }}</div>
+  {% else %}
+    <div class="pre-sum">{% if bad %}<b class="pre-fail">{{ bad|length }} of {{ pr.cases|length }} test case{{ 's' if pr.cases|length != 1 }} will likely fail on {{ pre.env_name }}</b> · why, below. Fix the case or the data before the run.{% elif pr.partial %}<b>Nothing missing found on {{ pre.env_name }}</b>, but {{ pr.partial }} of {{ pr.cases|length }} case{{ 's' if pr.cases|length != 1 }} could not be checked fully (see Every check).{% else %}<b class="pre-ok">All {{ pr.cases|length }} test case{{ 's' if pr.cases|length != 1 }} found their data on {{ pre.env_name }}</b>{% endif %}
+      <span class="small text-secondary d-block">Read-only check of the database: SQL test data and the master values picked in dropdowns. Screens are not opened: a changed screen is handled by auto-heal during the run.</span></div>
+    {% for c in bad %}
+    <div class="pre-case"><a href="{{ url_for('case', cid=c.case_id) }}"><b>TC-{{ c.tc }}</b> {{ c.title }}</a>
+      {% for i in c['items'] if i.level == 'fail' %}<div class="pre-item"><span class="pre-x">✕</span><span><span class="pre-step">{{ i.step or 'Environment' }}</span>{{ i.text }}</span></div>{% endfor %}
+    </div>
+    {% endfor %}
+    {% if pr.cases %}
+    <details class="pre-all"><summary class="small">Every check ({{ pr.cases|length }} cases)</summary>
+      {% for c in pr.cases %}
+      <div class="pre-case"><b>{{ '✕' if c.level == 'fail' else '✓' if c.level == 'ok' else '–' }} TC-{{ c.tc }}</b> {{ c.title }}
+        {% for i in c['items'] %}<div class="pre-item small"><span class="pre-{{ 'x' if i.level == 'fail' else 'v' if i.level == 'ok' else 's' }}">{{ '✕' if i.level == 'fail' else '✓' if i.level == 'ok' else '–' }}</span><span><span class="pre-step">{{ i.step }}</span>{{ i.text }}</span></div>{% endfor %}
+        {% for n in c.notes %}<div class="pre-item small text-secondary"><span class="pre-s">–</span><span>{{ n }}</span></div>{% endfor %}
+        {% if not c['items'] and not c.notes %}<div class="pre-item small text-secondary"><span class="pre-s">–</span><span>No database steps or picked master values to check.</span></div>{% endif %}
+      </div>
+      {% endfor %}
+    </details>
+    {% endif %}
+  {% endif %}
+  </div>
+</section>
+{% endif %}
+
+{% if heals %}
+<section class="panel p-0 mb-3 pre-box pre-heal" id="healed">
+  <div class="au-head"><b>✚ Changed by auto-heal in Run #{{ sel }}</b><span class="small text-secondary">{{ heals|length }} case{{ 's' if heals|length != 1 }}</span></div>
+  <div class="pre-body">
+    {% for h in heals %}
+    <div class="pre-case"><a href="{{ url_for('case', cid=h.case_id, run=h.run_id) }}"><b>TC-{{ h.tc_no }}</b> {{ h.title }}</a>{% if h.case_updated %} <span class="qa-tag">test case updated</span>{% else %} <span class="skip-tag">case not changed</span>{% endif %}
+      <div class="small mt-1">{{ h.message }}</div></div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
 
 <div class="trd-grid">
   <section class="panel p-0">

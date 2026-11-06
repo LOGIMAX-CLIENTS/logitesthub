@@ -2167,6 +2167,10 @@ import heal   # noqa: E402  (Test Runs: a changed screen is healed during the ru
 with db.connect() as _c:
     heal.init(_c)
 
+import precheck   # noqa: E402  (Test Runs / schedules: will the cases find their data on the environment, before the run)
+with db.connect() as _c:
+    precheck.init(_c)
+
 import sqlexplain   # noqa: E402  (plain English for SQL steps on the case page; the query behind a button)
 with db.connect() as _c:
     sqlexplain.init(_c)

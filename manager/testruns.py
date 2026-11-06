@@ -18,6 +18,7 @@ from flask import Blueprint, abort, flash, redirect, render_template, request, u
 
 import db
 import envs
+import precheck
 
 TASK_CODE_RE = re.compile(r'^[A-Z0-9][A-Z0-9.-]{2,39}$')   # a PM task code, e.g. PM-LMX-0042 or PM-LMX-0042.1
 
@@ -325,10 +326,14 @@ def make_blueprint(deps):
         # the newest execution of a part of the list: the other cases keep showing their last result, so a pass stays
         newest = bool(execs) and sel == execs[0]['id']
         overall = {'passed': sum(1 for x in cases if (latest.get(x['id']) or {}).get('status') == 'PASSED'), 'total': len(cases)}
+        # before the run: the check made for the run shown (a schedule's), else the newest one; after it: what auto-heal changed
+        pre = (precheck.for_exec(c, sel) if sel else None) or precheck.latest(c, tid)
+        heals = c.execute('SELECT h.*, cs.tc_no, cs.title FROM case_heals h JOIN runs r ON r.id=h.run_id JOIN cases cs ON '
+                          'cs.id=h.case_id WHERE r.exec_id=? ORDER BY h.id', (sel,)).fetchall() if sel else []
         folders = c.execute('SELECT id, name FROM folders WHERE project_id=? AND archived=0 ORDER BY name', (tr['project_id'],)).fetchall()
         picker = {**picker_data(c, tr['project_id'], me=current_user()['username']),
                   'selected': [x['id'] for x in cases] if tr['mode'] == 'fixed' else [x['id'] for x in cases if x['id'] not in skip_ids]}
-        return render_template('test_run.html', tr=tr, latest=latest, newest=newest, overall=overall, folders=folders, picker=picker, skip_ids=skip_ids, n_run=n_run, cases=cases, execs=execs, summ=summ, sel=sel, results=results,
+        return render_template('test_run.html', tr=tr, latest=latest, pre=pre, heals=heals, newest=newest, overall=overall, folders=folders, picker=picker, skip_ids=skip_ids, n_run=n_run, cases=cases, execs=execs, summ=summ, sel=sel, results=results,
                                scheds=scheds, describe=describe, any_running=any_running, days=DAYS,
                                today=date.today().isoformat())
 
@@ -447,6 +452,23 @@ def make_blueprint(deps):
         eid, msg = execute(con(), tr, current_user()['username'], env['id'] if env else None, only_ids=only)
         flash(msg, 'info' if eid else 'warning')
         return redirect(url_for('testruns.detail', tid=tid, exec=eid) if eid else url_for('testruns.detail', tid=tid))
+
+    @bp.route('/test-runs/<int:tid>/precheck', methods=['POST'])
+    @login_required
+    def run_precheck(tid):
+        """Check on <env>: will the cases find their data there? Read-only, in the background."""
+        tr = tr_or_404(tid)
+        want = request.form.get('env_id', type=int) or tr['env_id']
+        env = envs.get(con(), want, current_user()) if want else None
+        cases = resolve_cases(con(), tr)
+        if not env:
+            flash('Pick the environment to check on (Edit -> Environment).', 'warning')
+        elif not cases:
+            flash('No test cases to check.', 'warning')
+        else:
+            precheck.start(tid, cases, env, current_user()['username'])
+            flash(f'Checking {len(cases)} test case(s) on {env["name"]}: the result shows here in a minute.', 'info')
+        return redirect(url_for('testruns.detail', tid=tid) + '#precheck')
 
     # ---- schedules ----
     @bp.route('/schedules/new', methods=['POST'])
@@ -571,10 +593,36 @@ def make_blueprint(deps):
                 elif late > MISSED_AFTER:
                     c.execute('UPDATE schedules SET last_note=? WHERE id=?',
                               (f'Missed {s["next_run_at"][:16]}: server was off', s['id']))
-                else:
-                    eid, msg = execute(c, tr, s['created_by'] or 'schedule', s['env_id'], s['id'])
-                    c.execute('UPDATE schedules SET last_exec_id=COALESCE(?, last_exec_id), last_note=? WHERE id=?',
-                              (eid, msg[:255], s['id']))
+                else:   # its own thread: the pre-run check reads the database (and may ask AI) before the run starts
+                    threading.Thread(target=scheduled, args=(dict(s), dict(tr)), name=f'lth-sched-{s["id"]}', daemon=True).start()
+        finally:
+            c.close()
+
+    def scheduled(s, tr):
+        """A due schedule: check the cases on the environment first (read-only), then run them. The check does not stop
+        the run: it says before the results come in which cases are expected to fail there, and why."""
+        c = db.connect()
+        try:
+            env = envs.get(c, s['env_id'] or tr['env_id'])
+            cases = resolve_cases(c, tr)
+            pid = None
+            if env and cases:
+                with c:
+                    pid = c.execute("INSERT INTO prechecks(test_run_id, env_id, env_name, started_by, at, status) "
+                                    "VALUES (?,?,?,?,?,'running')", (tr['id'], env['id'], env['name'], 'schedule', db.now())).lastrowid
+                try:
+                    precheck.run(c, tr['id'], [dict(x) for x in cases], env, s['created_by'], pid=pid)
+                except Exception as e:   # noqa: BLE001 - a broken check must never stop the scheduled run
+                    print(' * pre-run check error:', e)
+            eid, msg = execute(c, tr, s['created_by'] or 'schedule', s['env_id'], s['id'])
+            if pid and eid:
+                with c:
+                    c.execute('UPDATE prechecks SET exec_id=? WHERE id=?', (eid, pid))
+            with c:
+                c.execute('UPDATE schedules SET last_exec_id=COALESCE(?, last_exec_id), last_note=? WHERE id=?',
+                          (eid, msg[:255], s['id']))
+        except Exception as e:   # noqa: BLE001
+            print(' * scheduled run error:', e)
         finally:
             c.close()
 
