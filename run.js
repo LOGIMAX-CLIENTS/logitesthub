@@ -81,6 +81,19 @@ function parseArgs(argv) {
     if (m) return `PHP ${m[1]}: ${m[2]} (${m[3]} line ${m[4]})`.slice(0, 300);
     return t.slice(0, 200);
   };
+  // What the page itself said during a step: script errors, and the warnings it showed (toaster / alert boxes). A step
+  // that "passed" but did nothing (a row that never appeared, a popup that did not save) then says why on the run page.
+  const pageErrors = [];
+  page.on('pageerror', e => pageErrors.push(String(e.message || e).split('\n')[0].slice(0, 300)));
+  page.on('console', m => {   // a missing image / font (404) is noise; server errors come from the responses below
+    if (m.type() === 'error' && !/^Failed to load resource/.test(m.text())) pageErrors.push(m.text().split('\n')[0].slice(0, 300));
+  });
+  const MESSAGE_BOXES = '#toaster .alert, .toast-message, .jq-toast-single, .swal2-html-container, .alert-danger, .alert-warning, .help-block.with-errors';
+  const pageMessages = () => page.evaluate(sel => [...document.querySelectorAll(sel)]
+    .filter(e => e.offsetParent !== null && e.innerText.trim())
+    .map(e => e.innerText.replace(/\s+/g, ' ').replace(/^\W*Close\s+/, '').trim().slice(0, 200)), MESSAGE_BOXES).catch(() => []);
+  let seenMessages = new Set();
+
   page.on('response', resp => {
     const type = resp.request().resourceType();
     if (!['xhr', 'fetch', 'document'].includes(type)) return;
@@ -174,7 +187,7 @@ function parseArgs(argv) {
     const action = parseStep(fill(s.text, vars));
     curStep = i + 1;
     if (action.kind === 'navigate') sinceNav = curStep;   // a new page: older server errors are not this page's
-    const errFrom = serverErrors.length;
+    const errFrom = serverErrors.length, pageErrFrom = pageErrors.length;
     const t0 = Date.now();
     r.at = Math.max(0, (t0 - videoStart) / 1000);
     if (action.needsAI) {
@@ -253,6 +266,10 @@ function parseArgs(argv) {
     }
     await Promise.race([Promise.all(pendingBodies), new Promise(res => setTimeout(res, 1500))]);
     serverErrors.slice(errFrom).forEach(x => r.warnings.push(`Server error ${x.status} on ${x.url}: ${x.text}`));
+    [...new Set(pageErrors.slice(pageErrFrom))].slice(0, 3).forEach(x => r.warnings.push(`Page script error: ${mask(x)}`));
+    const shownNow = await pageMessages();
+    shownNow.filter(x => !seenMessages.has(x)).slice(0, 3).forEach(x => r.warnings.push(`Page says: ${mask(x)}`));
+    seenMessages = new Set(shownNow);
     if (r.status === 'failed') {   // the cause is often a server error a few steps before (the Search click)
       // errors while a page loads (Navigate step) are its background calls (dashboard alerts ...), not this failure
       const cause = serverErrors.filter(x => x.step > sinceNav && x.step <= r.n).pop();
