@@ -246,6 +246,7 @@ function parseArgs(argv) {
     } else {
       try {
         await runAction(page, action);
+        if (action.trace) r.warnings.push(mask(action.trace));
         r.status = 'passed';
         const bad = await uiRuleCheck(page);
         if (bad.length) r.warnings.push(`Page shows ${bad.join(', ')}`);
