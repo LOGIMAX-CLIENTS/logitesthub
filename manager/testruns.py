@@ -468,7 +468,7 @@ def make_blueprint(deps):
         else:
             precheck.start(tid, cases, env, current_user()['username'])
             flash(f'Checking {len(cases)} test case(s) on {env["name"]}: the result shows here in a minute.', 'info')
-        return redirect(url_for('testruns.detail', tid=tid) + '#precheck')
+        return redirect(url_for('testruns.detail', tid=tid))
 
     # ---- schedules ----
     @bp.route('/schedules/new', methods=['POST'])
