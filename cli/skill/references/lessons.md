@@ -105,3 +105,21 @@ the server: `tester lessons <project> --json` (read them too - they are newer an
 42. **`tester run show 1875` ran as a test** (server #225) and saved two new cases. Fixed for short words like this, longer
     ones still run. Avoid: check a subcommand in `tester help` first. Server run details are on the run page.
 43. **A click on the hidden input of a Bootstrap toggle button timed out** (server #220). Fixed: the click goes to its label.
+
+## From Test Run 7 on Dev (PM-LMX-2070, 2026-11-04 .. 11-06)
+
+44. **Data made only on one PC was hard-coded** (server #218). Cases written on a local DB picked the uom
+    'ZT CARAT' and a purity whose rate was active only there. Dev has 'carat' (uom_id 6) and that purity's rate is
+    inactive, so 15 scheduled cases failed on Dev. Avoid: pick master values the test needs with `Remember SQL`
+    (active rows only) or use values every environment has. Before a scheduled run, press **Check on <env>** on the
+    Test Run page: it lists the cases whose data is missing there, and **Suggest a fix** proposes data that env has.
+45. **Causes guessed before the screen was compared** (server #250, agent_mistake). Four server-only failures got
+    timing / Escape / AJAX guesses one after another. The real clue (Chargeable Wt empty) was on the failed step's
+    screenshot. Avoid: put the failing screenshot next to the manual screen and compare field by field; until a cause
+    is shown, say "not known yet" instead of naming one.
+46. **A click passed but did nothing** (server #251). On the Linux server the popup Save "passed", nothing was saved,
+    and the next assert failed (L.Wt 0.000). The field typed in last still had focus; its blur handler moved the
+    layout on the press, so the release and the click landed on the parent `div.modal-footer`. Fixed in
+    `lib/actions.js`: blur and wait before the press, and click again when the click trace shows a miss. Avoid: when a
+    step after a click fails, read the step's **Click trace** warning (mousedown / mouseup / click targets) first; a
+    Windows PC may not reproduce it.
