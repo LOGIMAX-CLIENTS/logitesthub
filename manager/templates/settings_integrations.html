@@ -74,5 +74,46 @@
       </ol>
     </div>
   </div>
+
+  <div class="col-lg-7">
+    <form class="panel h-100" method="post" action="{{ url_for('settings.integrations_wb_save') }}" autocomplete="off">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <h2 class="h6 mb-1">WinBrain (knowledge base)</h2>
+      <div class="small text-secondary mb-3">A tester with no PM task gets <b>Send to Brain</b> on a failed run the assistant found to
+        be an app bug. It becomes a triage in WinBrain under the account with the same email, with the steps the run executed.
+        The tester reviews it there and raises the PM task.</div>
+
+      <div class="mb-3">
+        <label class="form-label fw-semibold mb-1" for="wb_url">WinBrain address</label>
+        <input class="form-control form-control-sm" id="wb_url" name="wb_url" value="{{ wb.url }}" spellcheck="false" placeholder="https://winbrain.example.com">
+      </div>
+      <div class="mb-3">
+        <label class="form-label fw-semibold mb-1" for="wb_secret">Integration key</label>
+        <input class="form-control form-control-sm" id="wb_secret" name="wb_secret" type="password" value="" spellcheck="false"
+               placeholder="{{ 'Saved. Paste a new key to replace it.' if wb.has_secret else 'The value of INTEGRATION_LTH_SECRET_CURRENT in WinBrain' }}">
+        {% if wb.has_secret %}<label class="form-check-label small mt-1"><input class="form-check-input me-1" type="checkbox" name="wb_remove_secret">Remove the key</label>{% endif %}
+      </div>
+      <div class="mb-3">
+        <div class="form-label fw-semibold mb-1">Project → WinBrain product</div>
+        {% for p in projects %}
+        <div class="input-group input-group-sm mb-1"><span class="input-group-text w-50 text-truncate">{{ p.name }}</span>
+          <input class="form-control" name="wb_project_{{ p.id }}" value="{{ wb.projects.get(p.id|string, '') }}" spellcheck="false" placeholder="product slug"></div>
+        {% endfor %}
+        <div class="form-text">Empty: no Send to Brain in that project. <b>Test connection</b> lists the slugs.</div>
+      </div>
+      <div class="mb-3">
+        <div class="form-label fw-semibold mb-1">Environment → WinBrain client (optional)</div>
+        {% for e in environments %}
+        <div class="input-group input-group-sm mb-1"><span class="input-group-text w-50 text-truncate">{{ e.name }}</span>
+          <input class="form-control" name="wb_env_{{ e.id }}" value="{{ wb.envs.get(e.id|string, '') }}" spellcheck="false" placeholder="client slug"></div>
+        {% endfor %}
+        <div class="form-text">Decides the client on the triage. Empty: the triage names no client.</div>
+      </div>
+      <div class="d-flex gap-2">
+        <button class="btn btn-primary btn-sm">Save</button>
+        <button class="btn btn-outline-secondary btn-sm" formaction="{{ url_for('settings.integrations_wb_test') }}">Test connection</button>
+      </div>
+    </form>
+  </div>
 </div>
 {% endblock %}

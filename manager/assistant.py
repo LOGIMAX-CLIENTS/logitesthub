@@ -508,7 +508,9 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
         review_block = pmtasks.review_check(con(), me['username'], thread['task_code']) \
             if thread and thread['task_code'] and not readonly else None
         thread_case = con().execute('SELECT id, tc_no FROM cases WHERE id=?', (thread['case_id'],)).fetchone()             if thread and thread['case_id'] else None
+        import winbrain
         return render_template('assistant.html', p=p, threads=threads, thread=thread, readonly=readonly, who=who, users=users,
+                               brain_on=winbrain.enabled(con(), pid),
                                elsewhere=elsewhere,
                                thread_case=thread_case, review_task=thread['task_code'] if thread else None, review_block=review_block,
                                msgs=messages_of(thread['id']) if thread else [], folders=folders,
@@ -920,6 +922,7 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
     @login_required
     def run_status(pid, rid):
         project_or_404(pid)
+        import winbrain
         r = con().execute('SELECT r.id, r.case_id, r.status, r.passed, r.failed, r.needs_ai, r.skipped, r.total, r.error, r.duration_ms, '
                           'r.env_name, r.fail_step, r.fail_text, r.fail_reason '
                           'FROM runs r JOIN cases c ON c.id=r.case_id WHERE r.id=? AND c.project_id=?', (rid, pid)).fetchone()
@@ -928,7 +931,8 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
         import pmtasks
         # why it did not pass, in the chat: the failing step and its reason (filled when the run finishes)
         return jsonify({'ok': True, **r, 'done': r['status'] not in ('running', 'queued'),
-                        'url': url_for('case', cid=r['case_id'], run=rid), 'pm': pmtasks.run_pm(con(), rid)})
+                        'url': url_for('case', cid=r['case_id'], run=rid), 'pm': pmtasks.run_pm(con(), rid),
+                        'brain': winbrain.run_link(con(), rid)})
 
     @bp.route('/projects/<int:pid>/assistant/<int:tid>/pm-send', methods=['POST'])
     @login_required
@@ -945,6 +949,26 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
         ok, msg = pmtasks.push_run(int(body.get('run_id') or 0), me['username'], bug)
         if ok:
             add_message(tid, 'system', f'Run #{body.get("run_id")} sent to PM ({t["task_code"]})' + (' as an app bug.' if bug else '.'))
+        return jsonify({'ok': ok, 'message': msg})
+
+    @bp.route('/projects/<int:pid>/assistant/<int:tid>/brain-send', methods=['POST'])
+    @login_required
+    def brain_send(pid, tid):
+        """A tester's "Send to Brain" on a run card, in a chat with no PM task: a failure the assistant found to be an app
+        bug becomes a triage in WinBrain. A chat for a PM task has Send to PM instead."""
+        import pmtasks
+        import winbrain
+        project_or_404(pid)
+        t = thread_or_404(pid, tid)
+        me = current_user()
+        if t['created_by'] != me['username'] or t['task_code']:
+            abort(403)
+        body = _payload()
+        bug = re.sub(r'\s+', ' ', str(body.get('bug') or '')).strip()[:1500] or None
+        rid = int(body.get('run_id') or 0)
+        ok, msg = winbrain.start(con(), pid, rid, me['username'], bug, pmtasks.public_base())
+        if ok:
+            add_message(tid, 'system', f'Run #{rid} sent to WinBrain as an app bug.')
         return jsonify({'ok': ok, 'message': msg})
 
     @bp.route('/projects/<int:pid>/assistant/<int:tid>/delete', methods=['POST'])

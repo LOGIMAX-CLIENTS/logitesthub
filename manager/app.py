@@ -1410,6 +1410,8 @@ def _run_case(run_id, content, no_ai=False, base_dir=None, env_id=None, project_
                 print(f' * auto-heal of run {run_id}: {ex}')
         import pmtasks
         pmtasks.run_finished(run_id)   # the run's PM task (if it had one) gets this run's link
+        import winbrain
+        winbrain.run_finished(run_id)   # a run WinBrain asked for: the verdicts go back to its triage
         s3store.offload_later(run_id)   # screenshots / video to S3 when it is set up
 
 
@@ -2155,6 +2157,11 @@ import brain_gaps   # noqa: E402  (what the app's knowledge_brain was missing wh
 brain_gaps.register(app, con, login_required, current_user, project_or_404)
 import coverage_page   # noqa: E402  (per module: test cases and their latest results; modules with no tests)
 coverage_page.register(app, con, login_required, project_or_404)
+
+import winbrain   # noqa: E402  (Send to Brain: a tester's app bug becomes a triage in WinBrain)
+with db.connect() as _c:
+    winbrain.init(_c)
+winbrain.register(app, start_case_runs)
 
 import pmtasks   # noqa: E402  (PM task codes on test cases: Start / Stop testing, task page, link attached to PM)
 pmtasks.register(app, con, login_required, current_user)

@@ -951,7 +951,65 @@ def register(app, con, admin_required, current_user):
     @admin_required
     def integrations():
         import pmtasks
-        return render_template('settings_integrations.html', pm=_pm_vals(con()), need=pmtasks.NEEDED_TOOLS)
+        import envs
+        import winbrain
+        c = con()
+        wb = winbrain.settings(c)
+        return render_template('settings_integrations.html', pm=_pm_vals(c), need=pmtasks.NEEDED_TOOLS,
+                               wb={'url': wb['url'], 'has_secret': bool(wb['secret']), 'projects': wb['projects'], 'envs': wb['envs']},
+                               projects=c.execute('SELECT id, name FROM projects ORDER BY name').fetchall(),
+                               environments=envs.all_envs(c))
+
+    @bp.route('/integrations/winbrain', methods=['POST'])
+    @super_required
+    def integrations_wb_save():
+        import budget
+        import envs
+        c = con()
+        f = request.form
+        url, secret = f.get('wb_url', '').strip().rstrip('/'), f.get('wb_secret', '').strip()
+        errors = [m for bad, m in [
+            (url and not _http_url(url), 'WinBrain address: an http:// or https:// address.'),
+            (secret and (' ' in secret or len(secret) < 32), 'WinBrain key: paste the whole key (32 characters or more).'),
+        ] if bad]
+        if errors:
+            for e in errors:
+                flash(e, 'danger')
+            return redirect(url_for('settings.integrations'))
+        def kept(prefix):
+            return {k[len(prefix):]: v.strip() for k, v in f.items() if k.startswith(prefix) and v.strip()}
+        mapping = {'projects': kept('wb_project_'), 'envs': kept('wb_env_')}
+        with c:
+            budget.set_setting(c, 'wb.url', url)
+            budget.set_setting(c, 'wb.map', json.dumps(mapping))
+            if secret:
+                budget.set_setting(c, 'wb.secret', envs.encrypt(secret))
+            elif f.get('wb_remove_secret'):
+                budget.set_setting(c, 'wb.secret', '')
+        write_audit(current_user()['username'], 'integrations_save', 'settings', None, 'ok', 'WinBrain integration saved',
+                    {'wb.url': url, 'wb.map': mapping, **({'wb.secret': 'replaced'} if secret else {})}, request.remote_addr)
+        flash('WinBrain integration saved. It is used straight away.', 'success')
+        return redirect(url_for('settings.integrations'))
+
+    @bp.route('/integrations/winbrain/test', methods=['POST'])
+    @admin_required
+    def integrations_wb_test():
+        """Connects with what is in the boxes (a typed key, else the saved one) without saving: lists WinBrain's products."""
+        import winbrain
+        f = request.form
+        saved = winbrain.settings(con())
+        url, secret = f.get('wb_url', '').strip().rstrip('/') or saved['url'], f.get('wb_secret', '').strip() or saved['secret']
+        if not _http_url(url) or not secret:
+            flash('WinBrain: fill in the address and the key.', 'danger')
+            return redirect(url_for('settings.integrations'))
+        try:
+            products = winbrain.catalog(url, secret)
+        except winbrain.WinbrainError as e:
+            flash(f'Could not connect to {url}: {e}', 'danger')
+            return redirect(url_for('settings.integrations'))
+        names = '; '.join(p['slug'] + (' (clients: ' + ', '.join(x['slug'] for x in p['clients']) + ')' if p['clients'] else '') for p in products)
+        flash(f'Connected to WinBrain. Products: {names or "none"}.', 'success')
+        return redirect(url_for('settings.integrations'))
 
     @bp.route('/integrations', methods=['POST'])
     @super_required
