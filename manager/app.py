@@ -117,7 +117,14 @@ def _globals():
     env_list = envs.all_envs(con(), me) if me else []
     my_key = con().execute('SELECT key_hint FROM api_keys WHERE user_id=?', (me['id'],)).fetchone() if me else None
     return {'csrf': session['csrf'], 'me': me, 'nav_projects': nav_projects, 'my_key': my_key, 'env_list': env_list,
-            'credit_chip': credit_chip(me) if me else None}
+            'credit_chip': credit_chip(me) if me else None,
+            's3_alert': s3_alert(me)}   # red banner while run screenshots cannot load
+
+
+def s3_alert(me):
+    """The red S3 banner (base.html) while run screenshots cannot load; admins also see why and how to fix it."""
+    h = s3store.health(con()) if me else None
+    return {**h, 'admin': settings.is_admin(me['role'])} if h else None
 
 
 def credit_chip(me):
