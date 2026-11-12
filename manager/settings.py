@@ -541,10 +541,11 @@ def _s3_info(con):
     import s3store
     c = s3store.config()
     if not c:
-        return f'The disk of this server (Amazon S3 not set: {s3store.ENV_FILE})'
+        return 'The disk of this server (Amazon S3 not set: add the S3 access key below)'
     n = con.execute("SELECT COUNT(*) AS n FROM runs WHERE s3_files IS NOT NULL AND s3_files<>''").fetchone()['n']
     state = 'on' if s3store.switched_on(con) else 'off: new runs stay on this disk'
-    return f"Amazon S3 ({state}): s3://{c['bucket']}/{c['prefix']}/ ({c['region']}) · {n} runs there"
+    return (f"Amazon S3 ({state}): s3://{c['bucket']}/{c['prefix']}/ ({c['region']}) · {n} runs there · "
+            f"key {c['key'][:4]}…{c['key'][-4:]} from {c['source']}")
 
 
 
@@ -822,7 +823,14 @@ def register(app, con, admin_required, current_user):
                                info=_system_info(c), auto=_auto_paths(c), auto_keys=AUTO_KEYS,
                                saved={n: bool(budget.get_setting(c, n)) for n in SECRETS},
                                in_use={n: secret_source(c, n) for n in SECRETS},
-                               checks={n: _check(c, n) for n in SECRETS})
+                               checks={n: _check(c, n) for n in SECRETS}, **_s3_form())
+
+    def _s3_form():
+        """The S3 access key box: what is in use and what is saved here, never the secret itself."""
+        import s3store
+        now, ui = s3store.config(), s3store._ui_vals()
+        return {'s3_now': {k: now[k] for k in ('key', 'source', 'region', 'bucket')} if now else None,
+                's3_ui': {'key': ui.get('key'), 'region': ui.get('region'), 'bucket': ui.get('bucket'), 'secret': bool(ui.get('secret'))}}
 
     @bp.route('/system', methods=['POST'])
     @super_required
@@ -925,11 +933,68 @@ def register(app, con, admin_required, current_user):
         flash(msg + (' Saved: it is in use now.' if ok and (v or keep_model) else ' Not saved.' if v else ''), 'success' if ok else 'danger')
         return redirect(url_for('settings.system'))
 
+    @bp.route('/system/s3-key', methods=['POST'])
+    @super_required
+    def system_s3_key():
+        """S3 access key typed here: tested (write, read, delete a small file) BEFORE it is saved, so a wrong key never
+        replaces a working one; the secret is stored encrypted and never shown again. Clear: back to aws.env / the role."""
+        import budget
+        import envs
+        import s3store
+        f, c = request.form, db.connect()
+        me = current_user()['username']
+        try:
+            if f.get('action') == 'clear':
+                with c:
+                    for name in s3store.UI_KEYS.values():
+                        budget.set_setting(c, name, '')
+                s3store.forget_ui()
+                ok, msg = s3store.check_health()
+                write_audit(me, 'settings.s3_key', 'setting', None, 'ok', 'S3 access key removed from Settings')
+                flash('S3 access key removed from Settings. ' + (f'Now in use: {s3store.config()["source"]}. ' if s3store.config() else '')
+                      + msg, 'success' if ok else 'warning')
+                return redirect(url_for('settings.system'))
+            saved = s3store._ui_vals()
+            key = f.get('key_id', '').strip()
+            secret = f.get('secret', '').strip() or (saved.get('secret') if key == saved.get('key') else '')
+            region = f.get('region', '').strip()
+            bucket = f.get('bucket', '').strip()
+            if not re.fullmatch(r'(AKIA|ASIA)[A-Z0-9]{16}', key):
+                flash('Access Key ID looks wrong: 20 letters / digits starting with AKIA (IAM user key).', 'danger')
+                return redirect(url_for('settings.system'))
+            if not re.fullmatch(r'[A-Za-z0-9/+=]{40}', secret or ''):
+                flash('Paste the Secret Access Key of this access key (40 characters). It is shown only once, when the '
+                      'key is created in IAM.', 'danger')
+                return redirect(url_for('settings.system'))
+            if not re.fullmatch(r'[a-z]{2}(-[a-z]+)+-\d', region) or not re.fullmatch(r'[a-z0-9][a-z0-9.\-]{1,61}[a-z0-9]', bucket):
+                flash('Region (e.g. ap-south-1) and bucket name are needed.', 'danger')
+                return redirect(url_for('settings.system'))
+            cur = s3store.config() or {}
+            cand = {'key': key, 'secret': secret, 'token': '', 'region': region, 'bucket': bucket,
+                    'prefix': cur.get('prefix') or os.path.basename(db.RUNNER_DIR.rstrip('\\/')) or 'lth'}
+            ok, msg = s3store.test(cand)
+            if not ok:
+                write_audit(me, 'settings.s3_key', 'setting', None, 'failed', f'S3 key {key[:4]}…{key[-4:]} not saved: {msg}'[:500])
+                flash(f'Not saved: the key did not work. {msg}', 'danger')
+                return redirect(url_for('settings.system'))
+            with c:
+                budget.set_setting(c, s3store.UI_KEYS['key'], key)
+                budget.set_setting(c, s3store.UI_KEYS['secret'], envs.encrypt(secret))
+                budget.set_setting(c, s3store.UI_KEYS['region'], region)
+                budget.set_setting(c, s3store.UI_KEYS['bucket'], bucket)
+            s3store.forget_ui()
+            s3store.note_health(True)
+            write_audit(me, 'settings.s3_key', 'setting', None, 'ok', f'S3 key {key[:4]}…{key[-4:]} saved (bucket {bucket}, {region})')
+            flash(f'Saved and working: {msg} Run screenshots and videos load with this key now.', 'success')
+            return redirect(url_for('settings.system'))
+        finally:
+            c.close()
+
     @bp.route('/system/s3-test', methods=['POST'])
     @super_required
     def system_s3_test():
         import s3store
-        ok, msg = s3store.test()
+        ok, msg = s3store.check_health()   # a pass clears the red S3 banner at once, a fail shows it
         flash(msg, 'success' if ok else 'danger')
         return redirect(url_for('settings.system'))
 
