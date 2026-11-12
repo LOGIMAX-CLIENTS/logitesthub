@@ -185,6 +185,69 @@ def test():
     return True, f"Connected: wrote, read and deleted a test file in s3://{c['bucket']}/{c['prefix']}/."
 
 
+# ---------------------------------------------------------------- health: a red banner while S3 does not work
+# Run screenshots / videos load from S3 through signed links, so a key deleted in AWS breaks every run page at once,
+# and nobody sees why (2026-11-12: InvalidAccessKeyId). The sweep tests S3 every EVERY_S seconds and a failed upload
+# is noted too; the problem and since when are kept in settings, and base.html shows them until S3 works again.
+ERR, SINCE = 's3.health_error', 's3.health_since'
+FIXES = {
+    'InvalidAccessKeyId': 'the AWS access key in manager/data/aws.env no longer exists in AWS (deleted or made '
+                          'inactive in IAM). Activate it, or create a new access key and put it in aws.env.',
+    'SignatureDoesNotMatch': 'the AWS secret key in manager/data/aws.env is wrong. Put the secret of that access key '
+                             'in aws.env.',
+    'RequestTimeTooSkewed': "this server's clock is wrong. Fix the time (timedatectl / NTP).",
+    'AccessDenied': "the AWS key has no permission on the bucket any more. Check the IAM user's policy (s3:PutObject, "
+                    's3:GetObject, s3:DeleteObject on the bucket).',
+    'NoSuchBucket': 'the bucket in manager/data/aws.env (LTH_S3_BUCKET) does not exist.',
+    'AccountProblem': 'AWS reports a problem with the account (billing or a suspended account).',
+}
+
+
+def note_health(ok, message='', con=None):
+    """Keeps S3's state for the banner: a problem keeps its first time ("since"), a working S3 clears it."""
+    import budget
+    own = con is None
+    con = con or db.connect()
+    try:
+        with con:
+            if ok:
+                if budget.get_setting(con, ERR):
+                    budget.set_setting(con, ERR, '')
+                    budget.set_setting(con, SINCE, '')
+                    print(' * S3: working again')
+            else:
+                if not budget.get_setting(con, SINCE):
+                    budget.set_setting(con, SINCE, db.now())
+                budget.set_setting(con, ERR, message[:500])
+    finally:
+        if own:
+            con.close()
+
+
+def check_health():
+    """test() (write, read, delete a small file) while S3 is set up, also when switched off: the files already on S3
+    still load through this key. Not set up: no banner."""
+    if not enabled():
+        note_health(True)
+        return True, ''
+    ok, msg = test()
+    note_health(ok, msg)
+    return ok, msg
+
+
+def health(con):
+    """None while S3 works, else {'message', 'since', 'fix'} for the banner."""
+    import budget
+    import re
+    err = budget.get_setting(con, ERR)
+    if not err:
+        return None
+    code = re.search(r': (\w+) -', err)
+    fix = FIXES.get(code.group(1)) if code else None
+    return {'message': err, 'since': (budget.get_setting(con, SINCE) or '')[:16],
+            'fix': fix or 'see the message; Settings > System > Test S3 checks it again.'}
+
+
 # ---------------------------------------------------------------- run files
 def key_of(c, run_dir, name):
     return f"{c['prefix']}/runs/{os.path.basename(run_dir.rstrip(chr(92) + '/'))}/{name}"
@@ -240,7 +303,8 @@ def offload(run_id):
                 put_file(c, key_of(c, run['run_dir'], n), p)
             except (OSError, urllib.error.URLError) as e:
                 print(f' * S3: run {run_id} {n} stays on disk ({getattr(e, "reason", e)})')
-                continue
+                note_health(False, f'Upload failed. {getattr(e, "reason", e)}')
+                break   # the next file would fail the same way; the next sweep tries again
             if n not in done:
                 done.append(n)
             with db.connect() as con, con:   # recorded before the file goes, so the page never points at nothing
@@ -332,7 +396,10 @@ def start():
         time.sleep(60)
         while True:
             try:
-                moved, freed, gone, more = sweep()
+                ok, msg = check_health()
+                if not ok:
+                    print(' * S3 not working:', msg)
+                moved, freed, gone, more = sweep() if ok else (0, 0, 0, False)
                 if moved or gone:
                     print(f' * S3: moved {moved} run files ({freed / 1e6:.0f} MB freed), deleted {gone} past their days'
                           + (' - more to move' if more else ''))

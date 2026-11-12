@@ -929,7 +929,7 @@ def register(app, con, admin_required, current_user):
     @super_required
     def system_s3_test():
         import s3store
-        ok, msg = s3store.test()
+        ok, msg = s3store.check_health()   # a pass clears the red S3 banner at once, a fail shows it
         flash(msg, 'success' if ok else 'danger')
         return redirect(url_for('settings.system'))
 

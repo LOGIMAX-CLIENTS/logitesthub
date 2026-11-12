@@ -194,6 +194,17 @@
   {% endif %}
 </nav>
 <main class="{% block mainclass %}container-xl{% endblock %} py-4">
+  {% if s3_alert %}
+  <div class="alert alert-danger py-2 s3-alert" role="alert">
+    <b>Run screenshots and videos cannot load{% if s3_alert.since %} since {{ s3_alert.since }}{% endif %}:</b> Amazon S3 is not working.
+    New runs keep their files on this server until it works again.
+    {% if me and s3_alert.admin %}
+    <div class="small mt-1"><b>Why:</b> {{ s3_alert.fix }}</div>
+    <div class="small text-break"><b>S3 said:</b> {{ s3_alert.message }}</div>
+    <div class="small">After fixing it, press <a href="{{ url_for('settings.system') }}">Settings &gt; System &gt; Test S3</a>: this banner goes away when the test passes (or within 5 minutes by itself).</div>
+    {% else %}<div class="small mt-1">An admin has to fix it (Settings &gt; System).</div>{% endif %}
+  </div>
+  {% endif %}
   {% with msgs = get_flashed_messages(with_categories=true) %}
   {% for cat, m in msgs %}<div class="alert alert-{{ cat }} py-2">{{ m }}</div>{% endfor %}
   {% endwith %}
