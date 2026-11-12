@@ -2,14 +2,20 @@
 only events.ndjson (the steps, a few KB) stays, so the run page, Fail reason and history read as before. The browser
 loads a file straight from S3 through a signed link (the bucket stays private). Older runs move over in the background.
 
-Switched on by manager/data/aws.env (or the same environment variables), written by hand on the server:
-  AWS_ACCESS_KEY_ID=...  AWS_SECRET_ACCESS_KEY=...  AWS_DEFAULT_REGION=ap-south-1  LTH_S3_BUCKET=...
-  LTH_S3_PREFIX=prod     (optional; default: this install's folder name, so staging and prod never mix)
+Where the AWS access comes from, first found wins:
+  1. Settings > System > S3 access key (a superadmin pastes it; tested before it is saved, the secret encrypted);
+  2. manager/data/aws.env (or the same environment variables), written by hand on the server:
+       AWS_ACCESS_KEY_ID=...  AWS_SECRET_ACCESS_KEY=...  AWS_DEFAULT_REGION=ap-south-1  LTH_S3_BUCKET=...
+  3. the EC2 instance's IAM role (instance profile): AWS hands out short-lived keys itself, so there is no key that
+     someone can delete or forget to rotate (2026-11-12: the aws.env key was deleted in IAM and every run page broke).
+  Region and bucket come from Settings, else aws.env (the region also from the instance). LTH_S3_PREFIX=prod is
+  optional; default: this install's folder name, so staging and prod never mix.
 Without it everything stays on the disk, as before. Signing is AWS Signature V4 with the standard library: no boto3.
 A file whose upload fails stays on the disk and is tried again by the next sweep.
 """
 import hashlib
 import hmac
+import json
 import mimetypes
 import os
 import threading
@@ -52,13 +58,85 @@ def _file_vals():
     return _cfg['vals']
 
 
+UI_KEYS = {'key': 's3.key_id', 'secret': 's3.secret', 'region': 's3.region', 'bucket': 's3.bucket'}
+_ui = {'at': 0.0, 'vals': {}}
+UI_TTL = 30          # Settings values are read again after this many seconds (a save resets it at once)
+_role = {'creds': None, 'exp': 0.0, 'miss': 0.0}
+IMDS = 'http://169.254.169.254'
+ROLE_RETRY_S = 600   # not on EC2 / no role attached: look again after 10 minutes, so pages never wait for it
+
+
+def _ui_vals():
+    """S3 access saved in Settings > System (secret decrypted), cached UI_TTL seconds."""
+    if time.time() - _ui['at'] > UI_TTL:
+        import budget
+        import envs
+        vals = {}
+        try:
+            with db.connect() as con:
+                for k, name in UI_KEYS.items():
+                    v = budget.get_setting(con, name) or ''
+                    vals[k] = envs.decrypt(v) if k == 'secret' and v else v
+        except Exception:   # noqa: BLE001 - no database yet: fall back to aws.env / the role
+            vals = {}
+        _ui.update(at=time.time(), vals=vals)
+    return _ui['vals']
+
+
+def forget_ui():
+    _ui['at'] = 0.0
+
+
+def _imds(path, token, method='GET', headers=None, timeout=1.0):
+    h = {'X-aws-ec2-metadata-token': token} if token else {}
+    h.update(headers or {})
+    req = urllib.request.Request(IMDS + path, method=method, headers=h, data=b'' if method == 'PUT' else None)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read().decode('utf-8')
+
+
+def _role_creds():
+    """Short-lived keys of the EC2 instance's IAM role (IMDSv2), cached until 5 minutes before they expire.
+    -> {'key', 'secret', 'token', 'role', 'region'} or None (not on EC2, or no role attached)."""
+    now = time.time()
+    if _role['creds'] and now < _role['exp'] - 300:
+        return _role['creds']
+    if now - _role['miss'] < ROLE_RETRY_S:
+        return None
+    try:
+        tok = _imds('/latest/api/token', None, 'PUT', {'X-aws-ec2-metadata-token-ttl-seconds': '21600'})
+        role = _imds('/latest/meta-data/iam/security-credentials/', tok).strip().splitlines()[0]
+        j = json.loads(_imds('/latest/meta-data/iam/security-credentials/' + role, tok))
+        try:
+            region = _imds('/latest/meta-data/placement/region', tok).strip()
+        except (OSError, urllib.error.URLError):
+            region = ''
+        exp = datetime.strptime(j['Expiration'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc).timestamp()
+    except (OSError, urllib.error.URLError, ValueError, KeyError, IndexError):
+        _role.update(creds=None, miss=now)
+        return None
+    _role.update(creds={'key': j['AccessKeyId'], 'secret': j['SecretAccessKey'], 'token': j['Token'], 'role': role,
+                        'region': region}, exp=exp, miss=0.0)
+    return _role['creds']
+
+
 def config():
-    """{'key', 'secret', 'region', 'bucket', 'prefix'} or None when S3 is not set up."""
+    """{'key', 'secret', 'token', 'region', 'bucket', 'prefix', 'source'} or None when S3 is not set up."""
     f = _file_vals()
     get = lambda k: os.environ.get(k) or f.get(k) or ''   # noqa: E731
-    c = {'key': get('AWS_ACCESS_KEY_ID'), 'secret': get('AWS_SECRET_ACCESS_KEY'), 'region': get('AWS_DEFAULT_REGION'),
-         'bucket': get('LTH_S3_BUCKET'),
-         'prefix': (get('LTH_S3_PREFIX') or os.path.basename(db.RUNNER_DIR.rstrip('\\/')) or 'lth').strip('/')}
+    ui = _ui_vals()
+    c = {'region': ui.get('region') or get('AWS_DEFAULT_REGION'), 'bucket': ui.get('bucket') or get('LTH_S3_BUCKET'),
+         'prefix': (get('LTH_S3_PREFIX') or os.path.basename(db.RUNNER_DIR.rstrip('\\/')) or 'lth').strip('/'),
+         'token': ''}
+    if ui.get('key') and ui.get('secret'):
+        c.update(key=ui['key'], secret=ui['secret'], source='Settings > System')
+    elif get('AWS_ACCESS_KEY_ID') and get('AWS_SECRET_ACCESS_KEY'):
+        c.update(key=get('AWS_ACCESS_KEY_ID'), secret=get('AWS_SECRET_ACCESS_KEY'), source=os.path.basename(ENV_FILE))
+    elif c['bucket'] and (r := _role_creds()):   # only looked for once a bucket is set
+        c.update(key=r['key'], secret=r['secret'], token=r['token'], source=f"EC2 IAM role {r['role']}")
+        c['region'] = c['region'] or r['region']
+    else:
+        return None
     return c if all(c[k] for k in ('key', 'secret', 'region', 'bucket')) else None
 
 
@@ -112,6 +190,8 @@ def presign(c, key, expires=LINK_S, now=None, host=None):
     path = _object_path(key)
     params = {'X-Amz-Algorithm': 'AWS4-HMAC-SHA256', 'X-Amz-Credential': f"{c['key']}/{scope}", 'X-Amz-Date': amz,
               'X-Amz-Expires': str(expires), 'X-Amz-SignedHeaders': 'host'}
+    if c.get('token'):   # the IAM role's short-lived keys need their session token in the link
+        params['X-Amz-Security-Token'] = c['token']
     query = '&'.join(f'{_q(k)}={_q(v)}' for k, v in sorted(params.items()))
     canonical = f'GET\n{path}\n{query}\nhost:{host}\n\nhost\nUNSIGNED-PAYLOAD'
     to_sign = f'AWS4-HMAC-SHA256\n{amz}\n{scope}\n' + hashlib.sha256(canonical.encode('utf-8')).hexdigest()
@@ -126,13 +206,17 @@ def _request(c, method, key, body=b'', content_type=None, timeout=120):
     scope = f"{day}/{c['region']}/s3/aws4_request"
     host, path = _host(c), _object_path(key)
     payload = hashlib.sha256(body).hexdigest()
-    canonical = (f'{method}\n{path}\n\nhost:{host}\nx-amz-content-sha256:{payload}\nx-amz-date:{amz}\n\n'
-                 f'host;x-amz-content-sha256;x-amz-date\n{payload}')
+    tok = c.get('token') or ''
+    signed = 'host;x-amz-content-sha256;x-amz-date' + (';x-amz-security-token' if tok else '')
+    canonical = (f'{method}\n{path}\n\nhost:{host}\nx-amz-content-sha256:{payload}\nx-amz-date:{amz}\n'
+                 + (f'x-amz-security-token:{tok}\n' if tok else '') + f'\n{signed}\n{payload}')
     to_sign = f'AWS4-HMAC-SHA256\n{amz}\n{scope}\n' + hashlib.sha256(canonical.encode('utf-8')).hexdigest()
     sig = hmac.new(_signing_key(c['secret'], day, c['region']), to_sign.encode('utf-8'), hashlib.sha256).hexdigest()
     headers = {'x-amz-date': amz, 'x-amz-content-sha256': payload,
                'Authorization': f"AWS4-HMAC-SHA256 Credential={c['key']}/{scope}, "
-                                f"SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature={sig}"}
+                                f"SignedHeaders={signed}, Signature={sig}"}
+    if tok:
+        headers['x-amz-security-token'] = tok
     if content_type:
         headers['Content-Type'] = content_type
     req = urllib.request.Request(f'https://{host}{path}', data=body if method == 'PUT' else None, method=method,
@@ -165,11 +249,14 @@ def delete(c, key):
         raise OSError(_aws_error(status, out))
 
 
-def test():
-    """Settings > System 'Test S3': writes, reads back and deletes a small file. Returns (ok, message)."""
-    c = config()
+def test(c=None):
+    """Settings > System 'Test S3': writes, reads back and deletes a small file. Returns (ok, message).
+    c: a key typed in Settings, tested before it is saved; default the one in use."""
+    c = c or config()
     if not c:
-        return False, f'Not set up: {ENV_FILE} needs AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION and LTH_S3_BUCKET.'
+        return False, ('Not set up: put the access key in Settings > System > S3 access key, or in '
+                       f'{ENV_FILE} (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION, LTH_S3_BUCKET), '
+                       'or attach an IAM role to this EC2 instance and set the bucket.')
     key = f"{c['prefix']}/_lth_test.txt"
     body = f'LogiTestHub S3 test {datetime.now():%Y-%m-%d %H:%M:%S}'.encode()
     try:
@@ -191,10 +278,12 @@ def test():
 # is noted too; the problem and since when are kept in settings, and base.html shows them until S3 works again.
 ERR, SINCE = 's3.health_error', 's3.health_since'
 FIXES = {
-    'InvalidAccessKeyId': 'the AWS access key in manager/data/aws.env no longer exists in AWS (deleted or made '
-                          'inactive in IAM). Activate it, or create a new access key and put it in aws.env.',
-    'SignatureDoesNotMatch': 'the AWS secret key in manager/data/aws.env is wrong. Put the secret of that access key '
-                             'in aws.env.',
+    'InvalidAccessKeyId': 'the AWS access key in use no longer exists in AWS (deleted or made inactive in IAM). '
+                          'Activate it in IAM, or create a new access key and paste it in Settings > System > '
+                          'S3 access key.',
+    'SignatureDoesNotMatch': 'the AWS secret key in use is wrong. Paste the access key and its secret again in '
+                             'Settings > System > S3 access key.',
+    'ExpiredToken': "the EC2 IAM role's keys expired and were not renewed. Restart LogiTestHub; check the role.",
     'RequestTimeTooSkewed': "this server's clock is wrong. Fix the time (timedatectl / NTP).",
     'AccessDenied': "the AWS key has no permission on the bucket any more. Check the IAM user's policy (s3:PutObject, "
                     's3:GetObject, s3:DeleteObject on the bucket).',
