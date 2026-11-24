@@ -1012,6 +1012,13 @@ button.set-cell:focus-visible { outline: 2px solid var(--gold); outline-offset: 
 .as-chip.on { background: var(--brand); border-color: var(--brand); color: #fff; }
 .as-chip:disabled { cursor: default; opacity: .7; }
 .as-draft { border-left: 4px solid var(--pass); }
+.as-sqlbox { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; background: var(--surface-2); }
+.as-sqlbox summary { cursor: pointer; color: var(--ink-2); }
+.as-sqlrow { padding: 5px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.as-sqlrow:first-of-type { border-top: 0; }
+.as-sqltag { display: inline-block; min-width: 92px; margin-right: 8px; font-weight: 700; color: var(--ink-2);
+  font-variant-numeric: tabular-nums; }
+.as-sqlrow .sql-q { margin-top: 4px; }
 .as-runcard { border-left: 4px solid var(--brand); display: flex; flex-direction: column; gap: 6px; }
 .as-runwhy { border-radius: 8px; padding: 8px 10px; background: rgba(220, 53, 69, .08); border: 1px solid rgba(220, 53, 69, .25); font-size: 13.5px; }
 .as-runwhy-step { font-weight: 600; color: var(--ink); word-break: break-word; }
