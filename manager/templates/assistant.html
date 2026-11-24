@@ -558,6 +558,11 @@
             : '✅ Checked on ' + d.preflight.env + ': the test data is there (' + d.preflight.checks.length + ' database step' + (d.preflight.checks.length > 1 ? 's' : '') + ').');
       row.appendChild(pf);
     }
+    if (d.draft && d.lint && d.lint.length) {   // still there after the assistant was asked to fix it: say so before a run
+      row.appendChild(el('div', 'small t-fail', '⚠️ Step ' + d.lint.map(function (x) { return x.n; }).join(', ') +
+        ' checks a dropdown / hidden value against a number guessed from the database. It will likely fail: ' +
+        'ask the assistant to check the visible text instead, or remove ' + (d.lint.length > 1 ? 'those steps' : 'that step') + '.'));
+    }
     if (d.draft) row.appendChild(draftCard(d, m.id));
     scrollDown();
   }
