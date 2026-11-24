@@ -19,6 +19,7 @@ MAX_WORKED = 30        # steps that worked, per page
 MAX_FAILED = 6         # steps that never passed, per page
 MAX_CHARS = 12000
 SKIP = re.compile(r'^(navigate to|wait\b|remember sql|assert sql|set\s*up sql)', re.I)
+SHAKY = re.compile(r'at the point: [^|]*\boverlay\b|landed on another element', re.I)
 WORD = re.compile(r'[a-z]{3,}')
 STOP = set('the and into from for with field button box key type press click assert shows show contains visible text '
            'option first wait seconds item list select selected value page this that not are was has panni pannu '
@@ -43,7 +44,10 @@ def _steps(run_id, run_dir):
         text = str(s.get('text') or '').strip()
         if not text or not s.get('url') or SKIP.match(text):
             continue
-        out.append((page_of(s['url']), text, s.get('status'), str(s.get('error') or '')))
+        st = s.get('status')
+        if st == 'passed' and any(SHAKY.search(str(w)) for w in s.get('warnings') or []):
+            st = 'shaky'   # "passed", but the click hit a loading overlay / another element: not proof it works
+        out.append((page_of(s['url']), text, st, str(s.get('error') or '')))
     with _LOCK:
         if len(_CACHE) > 2000:
             _CACHE.clear()
