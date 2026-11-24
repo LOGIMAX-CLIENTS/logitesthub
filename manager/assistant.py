@@ -85,6 +85,8 @@ def failed_run_brief(c, pid, text):
         if st == 'failed':
             failed = failed or s
             line += f"\n   -> {str(s.get('error') or '')[:400]}"
+        for w in (s.get('warnings') or [])[:2]:   # e.g. a click that landed on a loading overlay: why the NEXT step failed
+            line += f"\n   ! {str(w)[:300]}"
         lines.append(line)
     log = '\n'.join(lines)
     if len(log) > MAX_LOG:
