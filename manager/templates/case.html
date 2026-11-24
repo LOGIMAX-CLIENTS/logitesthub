@@ -69,7 +69,13 @@
   <ol class="tc-steps">
   {% for s in gen.steps %}
     {% if s.section and s.section != ns.sec %}<li class="tc-section">{{ s.section }}</li>{% set ns.sec = s.section %}{% endif %}
+    {% if is_sql is defined and is_sql(s.text) %}
+    <li class="tc-step tc-sql"><span class="tc-num">{{ loop.index }}</span><span class="tc-text"><span class="sql-en" data-sql="{{ s.text }}">{{ sql_simple(s.text) }}</span>
+      <button type="button" class="sql-btn" aria-expanded="false" title="Show the database query">SQL</button>
+      <pre class="sql-q" hidden>{{ s.text }}</pre></span>
+    {% else %}
     <li class="tc-step"><span class="tc-num">{{ loop.index }}</span><span class="tc-text">{{ s.text|varchips }}</span>
+    {% endif %}
       {% if s.kind == 'unknown' %}<span class="tc-ai" title="Not a standard step sentence: the AI agent performs or checks it from the screen">AI step</span>{% endif %}</li>
   {% endfor %}
   </ol>
@@ -474,7 +480,7 @@ document.getElementById('copyCode').addEventListener('click', function () {
   document.querySelectorAll('.sql-btn').forEach(function (b) {
     b.addEventListener('click', function (e) {
       e.stopPropagation();
-      var q = b.closest('.sr-main').querySelector('.sql-q'), open = q.hidden;
+      var q = b.closest('.sr-main, .tc-step').querySelector('.sql-q'), open = q.hidden;
       q.hidden = !open; b.setAttribute('aria-expanded', open); b.textContent = open ? 'Hide SQL' : 'SQL';
     });
   });

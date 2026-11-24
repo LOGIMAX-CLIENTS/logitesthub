@@ -58,6 +58,49 @@ def _save_shot(tid, data_url):
     with open(os.path.join(SHOTS_DIR, fname), 'wb') as f:
         f.write(raw)
     return fname, {'media_type': f'image/{kind}', 'data': b64}
+
+
+RUN_REF = re.compile(r'^Run #(\d+) (?!PASSED\b)\w+')   # the "Fix this with the assistant" message of a run that did not pass
+MAX_LOG = 9000          # characters of a run's step log given to the AI
+
+
+def failed_run_brief(c, pid, text):
+    """For a message about a run that did not pass: (the run's whole step log as text, the failed step's screenshot for
+    the AI or None). With only the failed line, the AI fixed that one step and the next run failed on the next copy of
+    the same mistake; with every step and the screen it can fix the cause everywhere at once. ('', None) otherwise."""
+    m = RUN_REF.match(text or '')
+    if not m:
+        return '', None
+    r = c.execute('SELECT r.run_dir FROM runs r JOIN cases cs ON cs.id=r.case_id WHERE r.id=? AND cs.project_id=?',
+                  (int(m.group(1)), pid)).fetchone()
+    if not r or not r['run_dir'] or not os.path.isdir(r['run_dir']):
+        return '', None
+    _summary, steps = db.read_run_events(r['run_dir'])
+    if not steps:
+        return '', None
+    lines, failed = [], None
+    for s in steps:
+        st = s.get('status') or '?'
+        line = f"{s.get('n')} [{st}] {str(s.get('text') or '')[:240]}"
+        if st == 'failed':
+            failed = failed or s
+            line += f"\n   -> {str(s.get('error') or '')[:400]}"
+        lines.append(line)
+    log = '\n'.join(lines)
+    if len(log) > MAX_LOG:
+        log = log[:MAX_LOG] + '\n... (more steps)'
+    out = f'Run #{m.group(1)} step log (values already filled in, passwords masked):\n{log}'
+    shot = None
+    name = str((failed or {}).get('shot') or '')
+    if _SAFE_SHOT.match(name) and name.lower().endswith(('.png', '.jpg', '.jpeg')):
+        path = os.path.join(r['run_dir'], name)
+        if os.path.isfile(path) and os.path.getsize(path) <= MAX_IMG_BYTES:
+            with open(path, 'rb') as f:
+                shot = {'media_type': 'image/png' if name.lower().endswith('.png') else 'image/jpeg',
+                        'data': base64.b64encode(f.read()).decode()}
+    return out, shot
+
+
 HISTORY = 14            # messages sent to the AI (latest)
 
 
@@ -610,6 +653,14 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
         if edited and hist and hist[-1]['role'] == 'user':
             hist.insert(len(hist) - 1, {'role': 'user', 'text': 'My current version of the draft (edited by me):\n'
                                         + str(body.get('draft_title') or '') + '\n' + str(edited)[:12000]})
+        run_log, run_shot = failed_run_brief(con(), pid, text)   # "Fix this": the whole run + the failed screen
+        if run_log and hist and hist[-1]['role'] == 'user':
+            hist[-1]['text'] += '\n\n' + run_log
+            # an image sends the request to the API instead of Claude Code (which reads the app's code): there, keep the
+            # fix on Claude Code with the log alone - it has the error and the value the page really had
+            if run_shot and len(shots_for_ai) < MAX_IMGS and os.environ.get('LTH_AI_PROVIDER') != 'claude-code':
+                shots_for_ai.append(run_shot)
+                hist[-1]['text'] += '\nThe last screenshot attached is the screen at the failed step.'
         import coderepo
         import envs
         key = f"{me['username']}:{str(body.get('req') or '')[:40]}"
@@ -748,6 +799,20 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
         if not os.path.isfile(path):
             abort(404)
         return send_file(path, max_age=86400)
+
+    @bp.route('/projects/<int:pid>/assistant/sql-explain', methods=['POST'])
+    @login_required
+    def sql_explain(pid):
+        """The draft's SQL steps in plain words (payload: steps = [text], title, sections) -> {english: {text: sentence}}.
+        Same cache as the case page, so a step explained here costs nothing there after it is saved."""
+        import sqlexplain
+        p = project_or_404(pid)
+        d = _payload()
+        texts = [str(t) for t in (d.get('steps') or []) if isinstance(t, str)][:200]
+        secs = [str(s) for s in (d.get('sections') or []) if isinstance(s, str)][:30]
+        context = f"Test: {str(d.get('title') or '')[:300]}\nSections: " + ' | '.join(secs)
+        out = sqlexplain.explain(con(), texts, username=current_user()['username'], project_id=p['id'], context=context)
+        return jsonify({'ok': True, 'english': {t: v['english'] for t, v in out.items()}})
 
     @bp.route('/projects/<int:pid>/assistant/progress', methods=['POST'])
     @login_required

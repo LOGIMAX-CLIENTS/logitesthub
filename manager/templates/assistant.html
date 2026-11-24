@@ -139,6 +139,7 @@
   var CASE_TC = {{ (thread_case.tc_no if thread_case else none)|tojson }};   // the test case this chat saved: Save updates it
   var URL_SEND = {{ url_for('assistant.send', pid=p.id)|tojson }}, URL_BASE = {{ url_for('assistant.page', pid=p.id)|tojson }};
   var URL_LESSONS = {{ url_for('lessons.page', pid=p.id)|tojson }};
+  var URL_SQL = {{ url_for('assistant.sql_explain', pid=p.id)|tojson }};
   var URL_BRAIN_GAPS = {{ (url_for('brain_gaps.page', pid=p.id) if is_super else '')|tojson }};
   var MSGS = {{ msgs|tojson }};
   var box = document.getElementById('asMsgs'), empty = document.getElementById('asEmpty');
@@ -235,6 +236,50 @@
     return card;
   }
 
+  // The draft's database steps (Remember / Assert / Set up SQL) in plain words, the query behind an "SQL" button.
+  // Sentences come from the same cache as the case page (AI once per step); redrawn when the steps are edited.
+  var SQL_LINE = /^(remember|assert|set\s*up) sql\s+"/i;
+  function sqlPlainBox(steps, title) {
+    var box = el('details', 'as-sqlbox mb-2'), seq = 0;
+    function draw() {
+      var items = [], secs = [], mine = ++seq;
+      steps.value.split('\n').forEach(function (l) {
+        var t = l.trim();
+        if (/^##/.test(t)) { secs.push(t.replace(/^#+\s*/, '')); return; }
+        if (SQL_LINE.test(t)) items.push(t);
+      });
+      box.innerHTML = '';
+      box.hidden = !items.length;
+      if (!items.length) return;
+      box.appendChild(el('summary', 'small fw-semibold', '📦 Test data in plain words (' + items.length + ' database step' + (items.length > 1 ? 's' : '') + ')'));
+      var spans = {};
+      items.forEach(function (t) {
+        var row = el('div', 'as-sqlrow'), kind = t.match(SQL_LINE)[1].toLowerCase();
+        var name = kind === 'remember' && (t.match(/"\s+as\s+(\w+)\.?\s*$/i) || [])[1];
+        row.appendChild(el('span', 'as-sqltag', name ? '→ ' + name : (kind === 'assert' ? '✔ check' : '✎ setup')));
+        var en = el('span', 'as-sqlen text-secondary', 'Reading the query…');
+        (spans[t] = spans[t] || []).push(en);
+        row.appendChild(en);
+        var b = el('button', 'sql-btn', 'SQL'); b.type = 'button'; b.setAttribute('aria-expanded', 'false');
+        var q = el('pre', 'sql-q', t); q.hidden = true;
+        b.addEventListener('click', function () { q.hidden = !q.hidden; b.setAttribute('aria-expanded', !q.hidden); b.textContent = q.hidden ? 'SQL' : 'Hide SQL'; });
+        row.appendChild(b); row.appendChild(q);
+        box.appendChild(row);
+      });
+      post(URL_SQL, { steps: Object.keys(spans), title: title.value, sections: secs }).then(function (d) {
+        if (mine !== seq) return;   // the steps changed meanwhile: a newer draw owns the box
+        Object.keys(spans).forEach(function (t) {
+          var s = d && d.english && d.english[t];
+          spans[t].forEach(function (sp) { sp.textContent = s || 'Database step (open SQL to see it).'; sp.classList.toggle('text-secondary', !s); });
+        });
+      });
+    }
+    box.open = true;
+    draw();
+    steps.addEventListener('change', draw);   // after an edit (on leaving the box), not on every key
+    return box;
+  }
+
   function draftCard(d, mid) {
     var card = el('div', 'as-card as-draft');
     card.appendChild(el('div', 'as-card-title', 'Draft test case'));
@@ -252,7 +297,8 @@
     acts.appendChild(bSave); acts.appendChild(bRun); acts.appendChild(bNew); acts.appendChild(note);
     if (READONLY) { acts.hidden = true; hint.hidden = true; title.readOnly = true; steps.readOnly = true; folder.disabled = true; }
     var lbl = el('label', 'form-label small text-secondary mb-1', 'Module / sub-module');
-    [title, lbl, folder, steps, hint, acts].forEach(function (x) { card.appendChild(x); });
+    var sqlBox = sqlPlainBox(steps, title);
+    [title, lbl, folder, sqlBox, steps, hint, acts].forEach(function (x) { card.appendChild(x); });
     function save(run, asNew) {
       if (!THREAD) return;
       var envSel = document.getElementById('asEnv');
