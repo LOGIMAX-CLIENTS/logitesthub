@@ -709,11 +709,15 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
             if draft and code_root:
                 set_progress(key, 'Checking that the field ids are in the code')
             return checks, elementcheck.check(draft, code_root)
+        import draftlint   # step shapes that keep failing (a dropdown / hidden id guessed with SQL)
         checks, elems = check(draft)
+        lint = draftlint.check(draft)
         for _round in range(2):   # auto-heal: what the database / the code says goes back to the assistant, up to 2 times
             notes = []
             if checks and not checks[-1]['ok']:
                 notes.append(preflight_note(checks, run_env['name']))
+            if lint:
+                notes.append(draftlint.note(lint))
             bad_el = [e for e in elems if not e['ok']]
             if bad_el:
                 notes.append('ELEMENT CHECK (looked up in the application code just now): ' + '; '.join(
@@ -724,7 +728,8 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
             if not notes or not draft:
                 break
             set_progress(key, 'Fixing the draft: ' + ' and '.join(w for w, bad in [
-                ('a database check failed', checks and not checks[-1]['ok']), ('a field id is not in the code', bad_el)] if bad))
+                ('a database check failed', checks and not checks[-1]['ok']), ('a field id is not in the code', bad_el),
+                ('a step checks a guessed id', lint)] if bad))
             hist2 = hist + [{'role': 'assistant', 'text': (data.get('reply') or '') + '\nDRAFT: ' + draft.get('title', '') + '\n' +
                              draft_to_text(draft)}, {'role': 'user', 'text': '\n'.join(notes)}]
             data2, usage2, model2, err2 = ask_ai(hist2, context, code, key)
@@ -735,9 +740,11 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
             data, draft = data2, data2.get('draft') or draft
             hist = hist2
             checks, elems = check(draft)
+            lint = draftlint.check(draft)
         PROGRESS.pop(key, None)
         u = data.get('understanding') or {}
         out = {'preflight': {'env': run_env['name'] if run_env else None, 'checks': checks} if checks else None,
+               'lint': lint or None,
                'elements': {'checked': len(elems), 'missing': [e for e in elems if not e['ok']]} if elems else None,
                'readiness': data.get('readiness') if isinstance(data.get('readiness'), dict) else None,
                'understanding': u, 'questions': data.get('questions') or [], 'choices': data.get('choices') or [], 'draft': draft,
