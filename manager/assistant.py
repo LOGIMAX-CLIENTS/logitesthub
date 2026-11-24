@@ -682,6 +682,11 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
         if live:
             flows = (flows + '\n' if flows else '') + live
         context = project_context(con(), p, env_id, code_env if code else None, me) + ('\n' + flows if flows else '')
+        import provensteps   # what already worked / never worked on these pages in this project's runs
+        trow = con().execute('SELECT case_id FROM chat_threads WHERE id=?', (tid,)).fetchone()
+        proven = provensteps.proven_text(con(), p['id'], talk, trow['case_id'] if trow else None)
+        if proven:
+            context += '\n' + proven
         tc = con().execute('SELECT task_code FROM chat_threads WHERE id=?', (tid,)).fetchone()
         if tc and tc['task_code']:   # opened from a PM task (reviewer's button): the tests are for that task
             context += (f"\nThis chat writes test cases for PM task {tc['task_code']} (they are linked to it when saved). "
