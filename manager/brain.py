@@ -99,7 +99,7 @@ def owned_files(brain, module):
 def _git(repo, *args):
     try:
         r = subprocess.run(['git', '-C', repo, *args], capture_output=True, text=True, encoding='utf-8', errors='replace',
-                           timeout=20)
+                           timeout=20, env=dict(os.environ, GIT_OPTIONAL_LOCKS='0'))   # read-only: never leave index.lock
         return r.stdout if r.returncode == 0 else ''
     except (OSError, subprocess.TimeoutExpired):
         return ''
