@@ -147,9 +147,10 @@ def _clear_stale_locks(d):
 
 
 def sparse_patterns(paths):
-    """The copy's sparse-checkout patterns: the listed Paths (or everything), minus SKIP."""
+    """The copy's sparse-checkout patterns: the listed Paths (or everything), minus SKIP. The app's knowledge_brain/
+    (brain.py: the Test Assistant reads it) is always kept whole, whatever Paths lists: the last matching pattern wins."""
     keep = [f'/{x}/' if '.' not in os.path.basename(x) else f'/{x}' for x in paths] or ['/*']
-    return keep + SKIP
+    return keep + SKIP + ['/knowledge_brain/']
 
 
 def _update(d, url, branch, paths, token):

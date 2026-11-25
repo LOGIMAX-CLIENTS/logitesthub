@@ -81,7 +81,7 @@ document.querySelectorAll('.db-test').forEach(function (b) {
           <input class="form-control form-control-sm" id="{{ pre }}RUrl" name="repo_url" value="{{ e.repo_url or '' if e else '' }}" maxlength="300" spellcheck="false" placeholder="https://github.com/Logimax-Technologies/etail_development_src.git"></div>
         <div class="col-md-4"><label class="form-label" for="{{ pre }}RBr">Branch</label>
           <input class="form-control form-control-sm" id="{{ pre }}RBr" name="repo_branch" value="{{ e.repo_branch or '' if e else '' }}" maxlength="100" spellcheck="false" placeholder="e.g. development / PRODUCTION"></div>
-        <div class="col-md-8"><label class="form-label" for="{{ pre }}RPaths">Paths <span class="text-secondary">(one per line; blank = whole repository, without images, archives, logs, uploads, vendor and backup folders)</span></label>
+        <div class="col-md-8"><label class="form-label" for="{{ pre }}RPaths">Paths <span class="text-secondary">(one per line; blank = whole repository, without images, archives, logs, uploads, vendor and backup folders; knowledge_brain/ is always kept)</span></label>
           <textarea class="form-control form-control-sm font-monospace" id="{{ pre }}RPaths" name="repo_paths" rows="3" spellcheck="false"
             placeholder="admin/application/controllers&#10;admin/application/views&#10;admin/assets/js">{{ e.repo_paths or '' if e else '' }}</textarea></div>
         <div class="col-md-4"><label class="form-label" for="{{ pre }}RTok">Read-only access token</label>
