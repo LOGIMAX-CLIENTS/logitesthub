@@ -8,7 +8,9 @@ its "Run on" box.
 
 - LogiTestHub keeps its OWN copy in data/repos/e<environment id>: the last HISTORY commits (file contents fetched only
   when read: --filter=blob:none; auto-heal reads who changed a field from them), and only the folders
-  listed in "Paths" (sparse checkout) - never the developer's working folder.
+  listed in "Paths" (sparse checkout) - never the developer's working folder. Files the Assistant never reads
+  (images, fonts, archives, media, logs, uploads, vendor and dated backup folders: SKIP) are left out even when Paths
+  is blank, so one client's repository cannot fill the server's disk.
 - Sign-in to GitHub: the git credentials of this server (git credential manager / gh), or a read-only token stored
   encrypted (sent per command as a header, never written into the copy's git config).
 - Sync = fetch the branch tip and reset the copy to it. Nothing is ever pushed.
@@ -43,6 +45,20 @@ _TRIED = {}           # environment id -> time.time() of the last automatic sync
 CHAT_AGE = 3600       # the Test Assistant brings a copy older than this up to date before reading it
 RUN_AGE = 300         # a server run brings a copy older than this up to date first, so it records the branch's latest commit
 DAILY_AGE = 86400     # every copy is synced at least this often
+
+# Left out of every copy (sparse-checkout patterns; with --filter=blob:none their contents are never even downloaded):
+# the Assistant reads controllers / models / views / scripts, never pictures, archives or a client's uploaded files.
+_SKIP_EXT = ('png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'ico', 'tif', 'tiff', 'psd', 'ai', 'eps', 'svgz',
+             'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'csv',
+             'zip', 'rar', '7z', 'gz', 'tgz', 'tar', 'bz2', 'sql', 'bak', 'log', 'db',
+             'mp4', 'mov', 'avi', 'mkv', 'webm', 'mp3', 'wav', 'swf', 'flv',
+             'woff', 'woff2', 'ttf', 'otf', 'eot', 'exe', 'dll', 'jar', 'apk', 'aab', 'ipa', 'map')
+SKIP = ([f'!*.{x}' for x in _SKIP_EXT] + [f'!*.{x.upper()}' for x in _SKIP_EXT]
+        + ['!*.min.js', '!*.min.css', '!Thumbs.db',
+           '!logs/', '!log/', '!cache/', '!uploads/', '!upload/', '!vendor/', '!node_modules/',
+           '!*backup*/', '!*Backup*/', '!*bkp*/', '!*-old/', '!*_old/',
+           '!*[0-9][0-9]-[0-9][0-9]-[0-9][0-9][0-9][0-9]*/'])   # dated copies, e.g. 04-10-2023models/
+_STALE_COPY = re.compile(r'promisor remote|not our ref|unadvertised object|did not send all necessary objects')
 
 COLUMNS = [('repo_url', 'VARCHAR(300) NULL'), ('repo_branch', 'VARCHAR(100) NULL'), ('repo_paths', 'TEXT NULL'),
            ('repo_token_enc', 'TEXT NULL'), ('repo_commit', 'VARCHAR(64) NULL'), ('repo_synced_at', 'VARCHAR(32) NULL'),
@@ -113,6 +129,47 @@ def _git(args, cwd=None, token=None, timeout=900):
     return p.stdout.strip()
 
 
+def _clear_stale_locks(d):
+    """Remove git *.lock files left in the copy by a git that was stopped mid-way (the 15-minute limit, a server
+    restart, a full disk). Otherwise every later sync fails with "... .lock': File exists ... remove the file manually
+    to continue". Safe here: only one sync per environment runs at a time (_RUNNING), and the other readers of the copy
+    (brain.py) run git without optional locks."""
+    gd = os.path.join(d, '.git')
+    for root, _dirs, files in os.walk(gd):
+        if os.path.relpath(root, gd).split(os.sep)[0] == 'objects':
+            continue
+        for f in files:
+            if f.endswith('.lock'):
+                try:
+                    os.remove(os.path.join(root, f))
+                except OSError:
+                    pass
+
+
+def sparse_patterns(paths):
+    """The copy's sparse-checkout patterns: the listed Paths (or everything), minus SKIP. The app's knowledge_brain/
+    (brain.py: the Test Assistant reads it) is always kept whole, whatever Paths lists: the last matching pattern wins."""
+    keep = [f'/{x}/' if '.' not in os.path.basename(x) else f'/{x}' for x in paths] or ['/*']
+    return keep + SKIP + ['/knowledge_brain/']
+
+
+def _update(d, url, branch, paths, token):
+    """Clone the copy if there is none, then bring it to the tip of the branch. Returns the commit."""
+    fresh = not os.path.isdir(os.path.join(d, '.git'))
+    if not fresh:
+        _clear_stale_locks(d)
+        if _git(['remote', 'get-url', 'origin'], cwd=d) != url:   # the URL was changed: start a new copy
+            shutil.rmtree(d, ignore_errors=True)
+            fresh = True
+    if fresh:
+        _git(['clone', '--depth', HISTORY, '--single-branch', '--branch', branch, '--filter=blob:none', '--no-checkout',
+              url, d], token=token)
+    _git(['sparse-checkout', 'set', '--no-cone', *sparse_patterns(paths)], cwd=d, token=token)
+    _git(['fetch', '--depth', HISTORY, 'origin', branch], cwd=d, token=token)
+    _git(['checkout', '-f', '-B', branch, 'FETCH_HEAD'], cwd=d, token=token)
+    return _git(['rev-parse', 'HEAD'], cwd=d)
+
+
 def _set_status(eid, **kw):
     c = db.connect()
     try:
@@ -143,25 +200,18 @@ def sync(eid):
     branch = e['repo_branch'] or 'main'
     paths = [x.strip().strip('/') for x in (e['repo_paths'] or '').splitlines() if x.strip()]
     d = repo_dir(eid)
+    had_copy = os.path.isdir(os.path.join(d, '.git'))
     try:
         os.makedirs(REPOS, exist_ok=True)
-        fresh = not os.path.isdir(os.path.join(d, '.git'))
-        if not fresh:
-            current = _git(['remote', 'get-url', 'origin'], cwd=d)
-            if current != e['repo_url']:   # the URL was changed: start a new copy
-                shutil.rmtree(d, ignore_errors=True)
-                fresh = True
-        if fresh:
-            _git(['clone', '--depth', HISTORY, '--single-branch', '--branch', branch, '--filter=blob:none', '--no-checkout',
-                  e['repo_url'], d], token=token)
-        if paths:
-            _git(['sparse-checkout', 'set', '--no-cone', *[f'/{x}/' if '.' not in os.path.basename(x) else f'/{x}' for x in paths]],
-                 cwd=d, token=token)
-        else:
-            _git(['sparse-checkout', 'disable'], cwd=d, token=token)
-        _git(['fetch', '--depth', HISTORY, 'origin', branch], cwd=d, token=token)
-        _git(['checkout', '-f', '-B', branch, 'FETCH_HEAD'], cwd=d, token=token)
-        commit = _git(['rev-parse', 'HEAD'], cwd=d)
+        try:
+            commit = _update(d, e['repo_url'], branch, paths, token)
+        except RuntimeError as ex:
+            # the copy points at commits GitHub no longer has (the branch was force-pushed / rebased): every later
+            # sync would fail the same way, so start a new copy once
+            if not had_copy or not _STALE_COPY.search(str(ex)):
+                raise
+            shutil.rmtree(d, ignore_errors=True)
+            commit = _update(d, e['repo_url'], branch, paths, token)
         _set_status(eid, repo_commit=commit, repo_synced_at=db.now(), repo_status='ok', repo_error=None)
     except subprocess.TimeoutExpired:
         _set_status(eid, repo_status='error', repo_error='The copy took longer than 15 minutes and was stopped.')
@@ -169,6 +219,11 @@ def sync(eid):
         msg = str(ex)
         if re.search(r'Authentication failed|could not read Username|403|Repository not found', msg):
             msg += ' - check the URL, and that this server (or the token) has read access to the repository.'
+        elif 'No space left on device' in msg:
+            msg = ("The LogiTestHub server's disk is full. Free some space (or list only the code folders under Paths) "
+                   "and press Sync now.")
+        if not had_copy:   # a half-made first copy is of no use and only takes disk space
+            shutil.rmtree(d, ignore_errors=True)
         _set_status(eid, repo_status='error', repo_error=msg[:500])
     finally:
         with _LOCK:
