@@ -1771,7 +1771,22 @@ def environments_import():
     if len(raw) > 2 * 1024 * 1024:
         flash('The CSV is larger than 2 MB: is it the right file?', 'danger')
         return redirect(url_for('environments'))
-    rows, err = envimport.parse(raw, con().execute('SELECT id, name FROM projects').fetchall(), coderepo.default_branch)
+    # a read-only GitHub token already saved on an environment of the same GitHub org: this server's own sign-in
+    # often cannot read client repositories, so the branch lookup and the new copy use that token (stored encrypted)
+    saved = {}
+    for e in con().execute('SELECT name, repo_url, repo_token_enc FROM environments WHERE repo_token_enc IS NOT NULL '
+                           'ORDER BY id DESC').fetchall():
+        m = re.match(r'https://github\.com/([^/]+)/', e['repo_url'] or '', re.I)
+        if m:
+            saved.setdefault(m.group(1).lower(), (e['repo_token_enc'], e['name']))
+
+    def token_for(url):
+        m = re.match(r'https://github\.com/([^/]+)/', url or '', re.I)
+        enc, src = saved.get(m.group(1).lower(), (None, None)) if m else (None, None)
+        tok = envs.decrypt(enc) if enc else None
+        return (tok, src) if tok else (None, None)
+    rows, err = envimport.parse(raw, con().execute('SELECT id, name FROM projects').fetchall(), coderepo.default_branch,
+                                token_for)
     if err:
         flash(err, 'danger')
         return redirect(url_for('environments'))
@@ -1785,16 +1800,9 @@ def environments_import():
             err = f'"{f["name"]}" is in the file twice.'
         if not err and not rerr and coderepo.is_local(rv.get('repo_url')):
             rerr = 'Code repository: only an https address can be imported.'
-        err = err or rerr
+        err = r['error'] or err or rerr   # the parser's own first: a cell it could not read is never saved
         seen.add(f['name'].lower())
-        parts = [f['base_url'] or 'no URL']
-        if f['username']:
-            parts.append(f'login {f["username"]}' + (' + password' if f['password'] else ', no password'))
-        if f['db_host']:
-            parts.append(f'database {f["db_name"] or "?"} as {f["db_user"] or "?"} on {f["db_host"]}')
-        if f['repo_url']:
-            parts.append(f'code {f["repo_url"].rsplit("/", 1)[-1]}' + (f' ({f["repo_branch"]})' if f['repo_branch'] else ''))
-        item = {'line': r['line'], 'name': r['name'], 'what': ' · '.join(parts), 'notes': r['notes'], 'error': err,
+        item = {'line': r['line'], 'name': r['name'], 'what': envimport.summary(f), 'notes': r['notes'], 'error': err,
                 'status': 'error' if err else ('added' if adding else 'ready')}
         if not err and adding:
             eid = _env_insert(v, rv, None, me)
