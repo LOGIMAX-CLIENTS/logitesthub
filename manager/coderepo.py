@@ -240,6 +240,34 @@ def start_sync(eid):
     return True
 
 
+def sync_in_turn(eids):
+    """Copy several environments' code one after another (an import of many): all at once would load the server's
+    disk, CPU and GitHub together."""
+    todo = []
+    with _LOCK:
+        for eid in eids:
+            if eid not in _RUNNING:
+                _RUNNING.add(eid)
+                todo.append(eid)
+    for eid in todo:
+        _set_status(eid, repo_status='syncing', repo_error=None)
+
+    def run():
+        for eid in todo:
+            sync(eid)
+    threading.Thread(target=run, name='lth-code-import', daemon=True).start()
+
+
+def default_branch(url, token=None):
+    """The repository's default branch on GitHub (this server's sign-in, or the token), or None when it cannot be read."""
+    try:
+        out = _git(['ls-remote', '--symref', url, 'HEAD'], token=token, timeout=30)
+    except Exception:
+        return None
+    m = re.search(r'^ref: refs/heads/(\S+)\s+HEAD', out, re.M)
+    return m.group(1) if m else None
+
+
 def _age(env):
     try:
         return time.time() - datetime.strptime(str(env['repo_synced_at'])[:19], '%Y-%m-%d %H:%M:%S').timestamp()
