@@ -1754,12 +1754,14 @@ def _environments_page(me, **extra):
                            access_roles=[(r, settings.ROLE_LABEL.get(r, r)) for r in settings.EDITABLE_ROLES], **extra)
 
 
-@app.route('/admin/environments/import', methods=['POST'])
+@app.route('/admin/environments/import', methods=['GET', 'POST'])
 @login_required
 def environments_import():
     """Many shared environments at once from a CSV (the client sheet, downloaded as CSV). "Check" shows what each row
     would become; "Import" adds the rows that pass. Same rules as the Add form; the file is read in memory only."""
     import envimport
+    if request.method == 'GET':   # the result page reloaded / its address opened: back to the list
+        return redirect(url_for('environments'))
     me = current_user()
     if not _is_admin(me):
         abort(403)
@@ -1786,7 +1788,8 @@ def environments_import():
         tok = envs.decrypt(enc) if enc else None
         return (tok, src) if tok else (None, None)
     rows, err = envimport.parse(raw, con().execute('SELECT id, name FROM projects').fetchall(), coderepo.default_branch,
-                                token_for)
+                                token_for, token=request.form.get('repo_token', '').strip() or None,
+                                sql_same_user=bool(request.form.get('sql_same_user')))
     if err:
         flash(err, 'danger')
         return redirect(url_for('environments'))
