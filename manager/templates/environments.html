@@ -40,6 +40,16 @@ document.querySelectorAll('.db-test').forEach(function (b) {
       a <b>db</b> column (<code>Host : …</code>, <code>username - …</code>, <code>password - …</code>, <code>DB : …</code>; port 3306 unless given),
       <b>Git repo</b> (the repository's default branch unless a <b>Branch</b> column says otherwise). A project named like the client is linked.
       Every row is checked with the same rules as the Add form. The file is read in memory only and never saved; passwords are stored encrypted.</div>
+    <div class="small text-secondary mb-2">Optional columns: <b>Branch</b>, <b>git token</b> (a read-only GitHub token for that row),
+      <b>SQL</b> (<code>ON</code> / <code>OFF</code>: "Set up SQL" with the row's database user). A token typed below is safer than one kept in the sheet.</div>
+    <div class="row g-2 mb-2 small">
+      <div class="col-md-5"><label class="form-label mb-0" for="impTok">GitHub token for every row (optional)</label>
+        <input class="form-control form-control-sm" id="impTok" name="repo_token" type="password" autocomplete="new-password"
+               placeholder="Blank = a token saved on an environment of the same GitHub org">
+        <div class="form-text">Read-only (Contents: Read) with access to every repository in the sheet; stored encrypted.</div></div>
+      <div class="col-md-7 d-flex align-items-start pt-3"><label><input class="form-check-input me-1" type="checkbox" name="sql_same_user" value="1">
+        Turn on <b>"Set up SQL"</b> with each row's database user (rows without a SQL column). Only for a user that can write to the <b>staging</b> database alone.</label></div>
+    </div>
     <div class="d-flex flex-wrap gap-2 align-items-center">
       <input class="form-control form-control-sm" style="max-width:360px" type="file" name="file" accept=".csv,text/csv" required aria-label="CSV file">
       <button class="btn btn-sm btn-outline-primary" name="action" value="check">Check</button>
