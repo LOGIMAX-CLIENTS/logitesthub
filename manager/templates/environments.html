@@ -24,8 +24,45 @@ document.querySelectorAll('.db-test').forEach(function (b) {
   <div><h1 class="h4 mb-0">Environments</h1>
     <div class="text-secondary small">Where tests run. Test cases use <code>{{ '{{' }}base_url{{ '}}' }}</code>, <code>{{ '{{' }}username{{ '}}' }}</code>, <code>{{ '{{' }}password{{ '}}' }}</code>, <code>{{ '{{' }}branch{{ '}}' }}</code>; the environment picked for a run fills them in.
       <b>Shared</b> ones (Dev, QA, Live) are added by admins for everyone; <b>My</b> ones (e.g. Local = the site on your own PC) are seen and used only by you.</div></div>
-  <button class="btn btn-success" type="button" data-bs-toggle="collapse" data-bs-target="#newEnv" aria-expanded="false">+ Add Environment</button>
+  <div class="d-flex gap-2">
+    {% if can_shared %}<button class="btn btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#importEnv" aria-expanded="{{ 'true' if import_report else 'false' }}">Import from CSV</button>{% endif %}
+    <button class="btn btn-success" type="button" data-bs-toggle="collapse" data-bs-target="#newEnv" aria-expanded="false">+ Add Environment</button>
+  </div>
 </div>
+
+{% if can_shared %}
+<div class="collapse mb-3 {{ 'show' if import_report }}" id="importEnv">
+  <form method="post" action="{{ url_for('environments_import') }}" enctype="multipart/form-data" class="panel">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="fw-semibold mb-1">Add many shared environments from the client sheet</div>
+    <div class="small text-secondary mb-2">In Google Sheets / Excel: <b>File → Download → CSV</b>, then pick that file here. The sheet is read as it is:
+      <b>client_name</b> (environment name), a <b>Staging URL</b> column (<code>https://site/admin/ - user | password</code>),
+      a <b>db</b> column (<code>Host : …</code>, <code>username - …</code>, <code>password - …</code>, <code>DB : …</code>; port 3306 unless given),
+      <b>Git repo</b> (the repository's default branch unless a <b>Branch</b> column says otherwise). A project named like the client is linked.
+      Every row is checked with the same rules as the Add form. The file is read in memory only and never saved; passwords are stored encrypted.</div>
+    <div class="d-flex flex-wrap gap-2 align-items-center">
+      <input class="form-control form-control-sm" style="max-width:360px" type="file" name="file" accept=".csv,text/csv" required aria-label="CSV file">
+      <button class="btn btn-sm btn-outline-primary" name="action" value="check">Check</button>
+      <button class="btn btn-sm btn-primary" name="action" value="import" onclick="return confirm('Add every row that passes the check as a shared environment?')">Import</button>
+      <span class="small text-secondary">Check first: nothing is saved until you press Import (pick the file again for it).</span>
+    </div>
+  </form>
+  {% if import_report %}
+  <div class="panel mt-2">
+    <div class="fw-semibold mb-2">{{ 'Imported' if import_added else 'Check' }}: {{ import_report|selectattr('status', 'ne', 'error')|list|length }} of {{ import_report|length }} row(s) {{ 'added' if import_added else 'ready to add' }}</div>
+    <div class="table-responsive"><table class="table table-sm small align-middle mb-0">
+      <thead><tr><th>Row</th><th>Environment</th><th>Result</th><th>What it holds</th></tr></thead>
+      <tbody>{% for r in import_report %}
+        <tr><td>{{ r.line }}</td><td class="fw-semibold">{{ r.name }}</td>
+          <td>{% if r.status == 'error' %}<span class="text-danger">{{ r.error }}</span>
+              {% elif r.status == 'added' %}<span class="badge text-bg-success">ADDED</span>
+              {% else %}<span class="badge text-bg-primary">READY</span>{% endif %}</td>
+          <td>{{ r.what }}{% for n in r.notes %}<div class="text-secondary">{{ n }}</div>{% endfor %}</td></tr>
+      {% endfor %}</tbody></table></div>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
 
 {% macro env_fields(e=None, pre='n') %}
   <div class="row g-2">
