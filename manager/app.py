@@ -1643,8 +1643,8 @@ def _env_editable(e, me):
     return bool(e) and envs.can_manage(con(), e, me)
 
 
-def _env_form(existing=None, owner=None):
-    f = request.form
+def _env_form(existing=None, owner=None, f=None):
+    f = request.form if f is None else f   # f: a row of an import (envimport.parse), checked by the same rules
     name, url = f.get('name', '').strip(), envs.normalise_url(f.get('base_url'))
     if not envs.NAME_RE.match(name):
         return None, 'Name: 2-40 letters, numbers, space, dot, dash or underscore (e.g. QA, Dev, Local).'
@@ -1716,24 +1716,34 @@ def environments():
         if err:
             flash(err, 'danger')
         else:
-            with con():
-                first = owner is None and not con().execute(
-                    'SELECT COUNT(*) AS n FROM environments WHERE owner IS NULL').fetchone()['n']
-                eid = con().execute('INSERT INTO environments(name, base_url, username, password_enc, branch, note, is_default, '
-                                    'created_by, updated_at, login_steps, menu_url, db_host, db_port, db_name, db_user, '
-                                    'db_password_enc, db_write_user, db_write_password_enc, db_allow_write, owner, project_id) '
-                                    'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                                    (v['name'], v['base_url'], v['username'], v['password_enc'], v['branch'], v['note'],
-                                     1 if first else 0, me['username'], db.now(), v['login_steps'], v['menu_url'],
-                                     v['db_host'], v['db_port'], v['db_name'], v['db_user'], v['db_password_enc'],
-                                     v['db_write_user'], v['db_write_password_enc'], v['db_allow_write'], owner, v['project_id'])).lastrowid
-                coderepo.save(con(), eid, rv)
+            eid = _env_insert(v, rv, owner, me)
             if rv['repo_url']:
                 coderepo.start_sync(eid)   # after the save is committed, so the copy reads the new settings
             flash(f'Environment "{v["name"]}" added' + (' (only you see it)' if owner else ' (shared with everyone)') + '.'
                   + (' Copying its code repository now.' if rv['repo_url'] and not coderepo.is_local(rv['repo_url']) else ''),
                   'success')
         return redirect(url_for('environments'))
+    return _environments_page(me)
+
+
+def _env_insert(v, rv, owner, me):
+    """Store a checked new environment (v = _env_form values, rv = its code repository); returns its id."""
+    with con():
+        first = owner is None and not con().execute(
+            'SELECT COUNT(*) AS n FROM environments WHERE owner IS NULL').fetchone()['n']
+        eid = con().execute('INSERT INTO environments(name, base_url, username, password_enc, branch, note, is_default, '
+                            'created_by, updated_at, login_steps, menu_url, db_host, db_port, db_name, db_user, '
+                            'db_password_enc, db_write_user, db_write_password_enc, db_allow_write, owner, project_id) '
+                            'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                            (v['name'], v['base_url'], v['username'], v['password_enc'], v['branch'], v['note'],
+                             1 if first else 0, me['username'], db.now(), v['login_steps'], v['menu_url'],
+                             v['db_host'], v['db_port'], v['db_name'], v['db_user'], v['db_password_enc'],
+                             v['db_write_user'], v['db_write_password_enc'], v['db_allow_write'], owner, v['project_id'])).lastrowid
+        coderepo.save(con(), eid, rv)
+    return eid
+
+
+def _environments_page(me, **extra):
     import settings
     me_envs = envs.all_envs(con(), me)
     manage_ids = {e['id'] for e in me_envs if envs.can_manage(con(), e, me)}
@@ -1741,7 +1751,63 @@ def environments():
     return render_template('environments.html', envs=me_envs, can_shared=_is_admin(me), env_access=access,
                            manage_ids=manage_ids,
                            projects=con().execute('SELECT id, name FROM projects ORDER BY name').fetchall(),
-                           access_roles=[(r, settings.ROLE_LABEL.get(r, r)) for r in settings.EDITABLE_ROLES])
+                           access_roles=[(r, settings.ROLE_LABEL.get(r, r)) for r in settings.EDITABLE_ROLES], **extra)
+
+
+@app.route('/admin/environments/import', methods=['POST'])
+@login_required
+def environments_import():
+    """Many shared environments at once from a CSV (the client sheet, downloaded as CSV). "Check" shows what each row
+    would become; "Import" adds the rows that pass. Same rules as the Add form; the file is read in memory only."""
+    import envimport
+    me = current_user()
+    if not _is_admin(me):
+        abort(403)
+    up = request.files.get('file')
+    raw = up.read(2 * 1024 * 1024 + 1) if up and up.filename else b''
+    if not raw:
+        flash('Pick the CSV file first (Google Sheets / Excel: File -> Download -> CSV).', 'danger')
+        return redirect(url_for('environments'))
+    if len(raw) > 2 * 1024 * 1024:
+        flash('The CSV is larger than 2 MB: is it the right file?', 'danger')
+        return redirect(url_for('environments'))
+    rows, err = envimport.parse(raw, con().execute('SELECT id, name FROM projects').fetchall(), coderepo.default_branch)
+    if err:
+        flash(err, 'danger')
+        return redirect(url_for('environments'))
+    adding = request.form.get('action') == 'import'
+    report, new_ids, seen = [], [], set()
+    for r in rows:
+        f = r['form']
+        v, err = _env_form(owner=None, f=f)
+        rv, rerr = coderepo.form_values(f)
+        if not err and f['name'].lower() in seen:
+            err = f'"{f["name"]}" is in the file twice.'
+        if not err and not rerr and coderepo.is_local(rv.get('repo_url')):
+            rerr = 'Code repository: only an https address can be imported.'
+        err = err or rerr
+        seen.add(f['name'].lower())
+        parts = [f['base_url'] or 'no URL']
+        if f['username']:
+            parts.append(f'login {f["username"]}' + (' + password' if f['password'] else ', no password'))
+        if f['db_host']:
+            parts.append(f'database {f["db_name"] or "?"} as {f["db_user"] or "?"} on {f["db_host"]}')
+        if f['repo_url']:
+            parts.append(f'code {f["repo_url"].rsplit("/", 1)[-1]}' + (f' ({f["repo_branch"]})' if f['repo_branch'] else ''))
+        item = {'line': r['line'], 'name': r['name'], 'what': ' · '.join(parts), 'notes': r['notes'], 'error': err,
+                'status': 'error' if err else ('added' if adding else 'ready')}
+        if not err and adding:
+            eid = _env_insert(v, rv, None, me)
+            if rv['repo_url']:
+                new_ids.append(eid)
+        report.append(item)
+    if new_ids:
+        coderepo.sync_in_turn(new_ids)   # after the saves are committed; one copy at a time
+    if adding:
+        n = sum(1 for x in report if x['status'] == 'added')
+        flash(f'{n} environment(s) added (shared with everyone).' + (' Their code is being copied one after another.' if new_ids else '')
+              + (f' {len(report) - n} row(s) skipped: see below.' if n < len(report) else ''), 'success' if n else 'warning')
+    return _environments_page(me, import_report=report, import_added=adding)
 
 
 @app.route('/admin/environments/<int:eid>', methods=['POST'])
