@@ -241,6 +241,7 @@ def parse(raw, projects, default_branch, token_for=None, token=None, sql_same_us
         if got.get('project') and not pid:
             notes.append(f'project "{got["project"]}" not found: Any project')
         rows.append({'line': n, 'name': form['name'] or '(no name)', 'form': form, 'notes': notes,
+                     'client': re.sub(r'\s+', ' ', got.get('name', '')).strip()[:191],   # a new project's name
                      'error': ' '.join(problems) or None})
     if not rows:
         return [], 'The CSV has headings but no rows.'

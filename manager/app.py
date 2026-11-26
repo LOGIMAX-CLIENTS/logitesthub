@@ -1794,9 +1794,44 @@ def environments_import():
         flash(err, 'danger')
         return redirect(url_for('environments'))
     adding = request.form.get('action') == 'import'
+    make_proj = bool(request.form.get('create_projects'))
+    projects = {p['name'].strip().lower(): p['id'] for p in con().execute('SELECT id, name FROM projects').fetchall()}
+
+    def project_id(name):
+        """The project named so, created on the way (Import only) when there is none."""
+        pid = projects.get(name.lower())
+        if not pid:
+            try:
+                with con():
+                    pid = con().execute('INSERT INTO projects(name, description, created_by, created_at) VALUES (?,?,?,?)',
+                                        (name, 'Created by the environment import.', me['username'], db.now())).lastrowid
+            except Exception:   # made meanwhile under the same name
+                pid = con().execute('SELECT id FROM projects WHERE name=?', (name,)).fetchone()['id']
+            projects[name.lower()] = pid
+        return pid
     report, new_ids, seen = [], [], set()
     for r in rows:
         f = r['form']
+        # already added (an earlier import) and still without a project: only the project is created / linked
+        old = con().execute('SELECT id, project_id FROM environments WHERE name=? AND owner IS NULL', (f['name'],)).fetchone()
+        if old and make_proj and not old['project_id'] and r['client'] and f['name'].lower() not in seen:
+            seen.add(f['name'].lower())
+            exists = r['client'].lower() in projects
+            if adding:
+                with con():
+                    con().execute('UPDATE environments SET project_id=? WHERE id=?', (project_id(r['client']), old['id']))
+            report.append({'line': r['line'], 'name': r['name'], 'notes': [], 'error': None,
+                           'status': 'linked' if adding else 'link',
+                           'what': f'already added: linked to {"the" if exists else "a new"} project "{r["client"]}"'
+                                   + ('' if adding else ' on Import') + '; nothing else changes'})
+            continue
+        if old and f['name'].lower() not in seen:   # a re-import of the same sheet: say so plainly, change nothing
+            seen.add(f['name'].lower())
+            report.append({'line': r['line'], 'name': r['name'], 'notes': [], 'status': 'error', 'what': '',
+                           'error': 'Already added (nothing changed).'
+                                    + ('' if old['project_id'] or make_proj else ' Tick "Create a project" to give it one.')})
+            continue
+        new_proj = make_proj and not f['project_id'] and r['client']
         v, err = _env_form(owner=None, f=f)
         rv, rerr = coderepo.form_values(f)
         if not err and f['name'].lower() in seen:
@@ -1805,9 +1840,15 @@ def environments_import():
             rerr = 'Code repository: only an https address can be imported.'
         err = r['error'] or err or rerr   # the parser's own first: a cell it could not read is never saved
         seen.add(f['name'].lower())
-        item = {'line': r['line'], 'name': r['name'], 'what': envimport.summary(f), 'notes': r['notes'], 'error': err,
+        notes = list(r['notes'])
+        if new_proj and not err:
+            notes.append(f'project "{r["client"]}": ' + ('linked' if r['client'].lower() in projects else
+                                                        'created' if adding else 'will be created on Import'))
+        item = {'line': r['line'], 'name': r['name'], 'what': envimport.summary(f), 'notes': notes, 'error': err,
                 'status': 'error' if err else ('added' if adding else 'ready')}
         if not err and adding:
+            if new_proj:   # only for a row that passed, so a skipped row leaves no empty project behind
+                v['project_id'] = project_id(r['client'])
             eid = _env_insert(v, rv, None, me)
             if rv['repo_url']:
                 new_ids.append(eid)
@@ -1816,8 +1857,11 @@ def environments_import():
         coderepo.sync_in_turn(new_ids)   # after the saves are committed; one copy at a time
     if adding:
         n = sum(1 for x in report if x['status'] == 'added')
-        flash(f'{n} environment(s) added (shared with everyone).' + (' Their code is being copied one after another.' if new_ids else '')
-              + (f' {len(report) - n} row(s) skipped: see below.' if n < len(report) else ''), 'success' if n else 'warning')
+        ln = sum(1 for x in report if x['status'] == 'linked')
+        skipped = len(report) - n - ln
+        flash(f'{n} environment(s) added (shared with everyone).' + (f' {ln} already added one(s) linked to a project.' if ln else '')
+              + (' Their code is being copied one after another.' if new_ids else '')
+              + (f' {skipped} row(s) skipped: see below.' if skipped else ''), 'success' if n or ln else 'warning')
     return _environments_page(me, import_report=report, import_added=adding)
 
 

@@ -49,6 +49,8 @@ document.querySelectorAll('.db-test').forEach(function (b) {
         <div class="form-text">Read-only (Contents: Read) with access to every repository in the sheet; stored encrypted.</div></div>
       <div class="col-md-7 d-flex align-items-start pt-3"><label><input class="form-check-input me-1" type="checkbox" name="sql_same_user" value="1">
         Turn on <b>"Set up SQL"</b> with each row's database user (rows without a SQL column). Only for a user that can write to the <b>staging</b> database alone.</label></div>
+      <div class="col-12"><label><input class="form-check-input me-1" type="checkbox" name="create_projects" value="1" checked>
+        <b>Create a project</b> named after the client when none matches (on Import). Environments already added with no project get linked to it too; nothing else of theirs changes.</label></div>
     </div>
     <div class="d-flex flex-wrap gap-2 align-items-center">
       <input class="form-control form-control-sm" style="max-width:360px" type="file" name="file" accept=".csv,text/csv" required aria-label="CSV file">
@@ -66,6 +68,8 @@ document.querySelectorAll('.db-test').forEach(function (b) {
         <tr><td>{{ r.line }}</td><td class="fw-semibold">{{ r.name }}</td>
           <td>{% if r.status == 'error' %}<span class="text-danger">{{ r.error }}</span>
               {% elif r.status == 'added' %}<span class="badge text-bg-success">ADDED</span>
+              {% elif r.status == 'linked' %}<span class="badge text-bg-success">PROJECT LINKED</span>
+              {% elif r.status == 'link' %}<span class="badge text-bg-info">WILL LINK PROJECT</span>
               {% else %}<span class="badge text-bg-primary">READY</span>{% endif %}</td>
           <td>{{ r.what }}{% for n in r.notes %}<div class="text-secondary">{{ n }}</div>{% endfor %}</td></tr>
       {% endfor %}</tbody></table></div>
