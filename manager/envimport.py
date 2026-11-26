@@ -7,7 +7,8 @@ Columns are found by their heading, so the sheet needs no reshaping:
 - URL + login: a "... URL ..." column: "https://site/admin/ - user | password", "https://site/admin/ - user password",
   "... user / password", "... username: u password: p", or just the URL
 - database: a "... db ..." column: "Host : x", "port - 3306", "username - u", "password - p", "DB : name" - one per
-  line, or on one line split by "|" / ","; or the five values "host, port, db name, db user, db password"
+  line, or on one line split by "|" / ","; "IP :" for the host; or the five values "host, port, db name, db user,
+  db password" in that order, split by "," or "|" or lines (cPanel sheets)
 - code:     "Git repo" (and an optional "Branch" / "Paths" column; no branch = the repository's default branch)
 - project:  a "Project" column, else a project named like the client name or client code
 - token:    a "git token" column (read-only GitHub token for that row), else the one typed on the import form, else one
@@ -31,9 +32,9 @@ USER_RE = re.compile(r'^\S{1,120}$')
 PLAIN = ('name', 'base url', 'username', 'password', 'db host', 'db port', 'db name', 'db user', 'db password',
          'db write user', 'db write password', 'repo url', 'repo branch', 'repo paths', 'repo token', 'project')
 _DB_FIELDS = ('db_host', 'db_port', 'db_name', 'db_user', 'db_password')
-DB_KEYS = [('db_host', r'host(?:\s*name)?|server'), ('db_port', r'port'), ('db_name', r'db(?:\s*name)?|database(?:\s*name)?'),
+DB_KEYS = [('db_host', r'host(?:\s*name)?|server|ip(?:\s*address)?'), ('db_port', r'port'), ('db_name', r'db(?:\s*name)?|database(?:\s*name)?'),
            ('db_user', r'(?:db\s*)?user(?:\s*name)?'), ('db_password', r'(?:db\s*)?pass(?:word)?|pwd')]
-_KEY_WORDS = r'(?:host|server|port|db|database|user|username|pass|password|pwd)\b(?:\s*name)?'
+_KEY_WORDS = r'(?:host|server|ip|port|db|database|user|username|pass|password|pwd)\b(?:\s*name)?'
 _SEP = r'\s*[:=\-–]\s*'
 # a "|" / "," / ";" splits the db cell only when a "key :" follows, so a password holding one stays whole
 _DB_SPLIT = re.compile(r'[\r\n]+|\s*[|,;]\s*(?=' + _KEY_WORDS + _SEP + ')', re.I)
@@ -98,8 +99,8 @@ def url_and_login(text):
         parts = rest.split()
         if len(parts) == 1:
             user, pw = _unquote(parts[0]), None
-        elif len(parts) == 2:
-            user, pw = _unquote(parts[0]), _unquote(parts[1])
+        elif len(parts) == 2:   # "user password", also written "user/ password"
+            user, pw = _unquote(parts[0]).rstrip('/'), _unquote(parts[1])
         else:
             return url, None, None, 'Login: could not tell the user from the password - write it as "url - user | password".'
     if user and not USER_RE.match(user):
@@ -126,9 +127,9 @@ def db_details(text):
         else:   # no "key :": the host written alone (first, before the keyed parts)
             if 'db_host' not in out and not out and re.match(r'^(?:[a-z]+://)?[A-Za-z0-9.-]+(?::\d+)?/?$', seg):
                 out['db_host'] = seg
-    if not out:
-        parts = [_unquote(p) for p in text.split(',')]
-        if len(parts) == 5:
+    if not out:   # "host, port, db name, db user, db password": split by "," or "|" or lines (cPanel sheets)
+        parts = [_unquote(p) for p in re.split(r'[,|\r\n]+', text) if p.strip()]
+        if len(parts) == 5 and parts[1].isdigit():
             out = dict(zip(_DB_FIELDS, parts))
     host = re.sub(r'^[a-z]+://', '', out.get('db_host') or '', flags=re.I).strip().rstrip('/')
     hm = re.match(r'^(.+):(\d{2,5})$', host)
