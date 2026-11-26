@@ -4,24 +4,37 @@ environment per row. app.py checks every row with the same rules as the Add form
 
 Columns are found by their heading, so the sheet needs no reshaping:
 - name:     "client_name" / "Name" / "Environment"
-- URL + login: a "... URL ..." column holding "https://site/admin/ - user | password" (or just the URL)
-- database: a "... db ..." column with "Host : x", "port - 3306", "username - u", "password - p", "DB : name"
-  lines, or the five values "host, port, db name, db user, db password" in that order
+- URL + login: a "... URL ..." column: "https://site/admin/ - user | password", "https://site/admin/ - user password",
+  "... user / password", "... username: u password: p", or just the URL
+- database: a "... db ..." column: "Host : x", "port - 3306", "username - u", "password - p", "DB : name" - one per
+  line, or on one line split by "|" / ","; or the five values "host, port, db name, db user, db password"
 - code:     "Git repo" (and an optional "Branch" / "Paths" column; no branch = the repository's default branch)
 - project:  a "Project" column, else a project named like the client name or client code
 Plain columns named like the form fields (base_url, username, password, db_host, db_port, db_name, db_user,
 db_password, repo_url, repo_branch, repo_paths) are used as they are.
+
+A password is never shown back: a cell that cannot be read cleanly makes its row an error that names the column,
+never its text (it may hold a password).
 """
 import csv
 import io
 import re
 
 NAME_BAD = re.compile(r'[^A-Za-z0-9 ._-]+')
+HOST_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$')
+IDENT_RE = re.compile(r'^[\w.$-]{1,64}$')
+USER_RE = re.compile(r'^\S{1,120}$')
 PLAIN = ('name', 'base url', 'username', 'password', 'db host', 'db port', 'db name', 'db user', 'db password',
-         'repo url', 'repo branch', 'repo paths', 'project')
+         'repo url', 'repo branch', 'repo paths', 'repo token', 'project')
+_DB_FIELDS = ('db_host', 'db_port', 'db_name', 'db_user', 'db_password')
 DB_KEYS = [('db_host', r'host(?:\s*name)?|server'), ('db_port', r'port'), ('db_name', r'db(?:\s*name)?|database(?:\s*name)?'),
            ('db_user', r'(?:db\s*)?user(?:\s*name)?'), ('db_password', r'(?:db\s*)?pass(?:word)?|pwd')]
+_KEY_WORDS = r'(?:host|server|port|db|database|user|username|pass|password|pwd)\b(?:\s*name)?'
 _SEP = r'\s*[:=\-–]\s*'
+# a "|" / "," / ";" splits the db cell only when a "key :" follows, so a password holding one stays whole
+_DB_SPLIT = re.compile(r'[\r\n]+|\s*[|,;]\s*(?=' + _KEY_WORDS + _SEP + ')', re.I)
+DB_HELP = ('write it as Host : … / DB : … / username - … / password - … (one per line, or split by "|"), '
+           'or "host, port, db name, db user, db password"')
 
 
 def _key(h):
@@ -52,54 +65,90 @@ def _columns(headers):
     return out
 
 
+def _unquote(v):
+    return (v or '').strip().strip('\'"`').strip()
+
+
 def url_and_login(text):
-    """'https://site/admin/ - user | password' -> (url, user, password); the login part is optional."""
+    """The URL cell -> (url, user, password, problem). problem: why the login part could not be read (never its text)."""
     text = (text or '').strip()
-    m = re.match(r'(https?://\S+)(.*)$', text, re.S)
+    m = re.match(r'(https?://[^\s|]+)(.*)$', text, re.S)
     if not m:
-        return None, None, None
+        return None, None, None, None
     url, rest = m.group(1), m.group(2).strip()
-    rest = re.sub(r'^[-–:,|]\s*', '', rest)
+    rest = re.sub(r'^[-–:,|&·/]+\s*', '', rest).strip()
     if not rest:
-        return url, None, None
-    keyed = {k: v for k, v in re.findall(r'(?im)\b(user(?:\s*name)?|pass(?:word)?)' + _SEP + r'(\S+)', rest)}
+        return url, None, None, None
+    keyed = re.findall(r'(?i)\b(user(?:\s*name)?|login|pass(?:word)?|pwd)' + _SEP + r'(\S+)', rest)
     if keyed:
-        user = next((v for k, v in keyed.items() if k.lower().startswith('user')), None)
-        pw = next((v for k, v in keyed.items() if k.lower().startswith('pass')), None)
-        return url, user, pw
-    user, _, pw = rest.partition('|') if '|' in rest else rest.partition(' / ')
-    return url, user.strip() or None, pw.strip() or None
+        user = next((_unquote(v) for k, v in keyed if not re.match(r'(?i)pass|pwd', k)), None)
+        pw = next((_unquote(v) for k, v in keyed if re.match(r'(?i)pass|pwd', k)), None)
+    elif '|' in rest or ' / ' in rest:
+        user, _, pw = rest.partition('|') if '|' in rest else rest.partition(' / ')
+        user, pw = _unquote(user), _unquote(pw)
+    else:
+        parts = rest.split()
+        if len(parts) == 1:
+            user, pw = _unquote(parts[0]), None
+        elif len(parts) == 2:
+            user, pw = _unquote(parts[0]), _unquote(parts[1])
+        else:
+            return url, None, None, 'Login: could not tell the user from the password - write it as "url - user | password".'
+    if user and not USER_RE.match(user):
+        return url, None, None, 'Login: could not tell the user from the password - write it as "url - user | password".'
+    return url, user or None, pw or None, None
 
 
 def db_details(text):
-    """The database cell -> {db_host, db_port, db_name, db_user, db_password} (only what it holds)."""
+    """The database cell -> ({db_host, db_port, db_name, db_user, db_password}, problem). problem names what is
+    missing, never the cell's text."""
     text = (text or '').strip()
+    if not text:
+        return {}, None
     out = {}
-    for line in re.split(r'[\r\n]+', text):
+    for seg in _DB_SPLIT.split(text):
+        seg = seg.strip().strip('|,;').strip()
+        if not seg:
+            continue
         for field, words in DB_KEYS:
-            m = re.match(r'\s*(?:' + words + r')' + _SEP + r'(.+?)\s*$', line, re.I)
-            if m and field not in out:
-                out[field] = m.group(1)
+            m = re.match(r'(?:' + words + r')' + _SEP + r'(.+?)\s*$', seg, re.I)
+            if m:
+                out.setdefault(field, _unquote(m.group(1)))
                 break
-    if not out:   # "host, port, db name, db user, db password"
-        parts = [p.strip() for p in text.split(',')]
+        else:   # no "key :": the host written alone (first, before the keyed parts)
+            if 'db_host' not in out and not out and re.match(r'^(?:[a-z]+://)?[A-Za-z0-9.-]+(?::\d+)?/?$', seg):
+                out['db_host'] = seg
+    if not out:
+        parts = [_unquote(p) for p in text.split(',')]
         if len(parts) == 5:
-            out = dict(zip(('db_host', 'db_port', 'db_name', 'db_user', 'db_password'), parts))
-    host = out.get('db_host') or ''
+            out = dict(zip(_DB_FIELDS, parts))
+    host = re.sub(r'^[a-z]+://', '', out.get('db_host') or '', flags=re.I).strip().rstrip('/')
     hm = re.match(r'^(.+):(\d{2,5})$', host)
-    if hm:   # host:port
-        out['db_host'] = hm.group(1)
+    if hm:
+        host = hm.group(1)
         out.setdefault('db_port', hm.group(2))
-    return {k: v for k, v in out.items() if v}
+    if host:
+        out['db_host'] = host
+    out = {k: v for k, v in out.items() if v}
+    missing = [label for f, label in (('db_host', 'host'), ('db_name', 'database name'), ('db_user', 'username'))
+               if not out.get(f)]
+    bad = (out.get('db_host') and not HOST_RE.match(out['db_host'])) or \
+          any(out.get(f) and not IDENT_RE.match(out[f]) for f in ('db_name', 'db_user')) or \
+          (out.get('db_port') and not out['db_port'].isdigit())
+    if missing or bad:
+        what = f'no {", ".join(missing)} found' if missing else 'a value could not be read'
+        return {}, f'Database column: {what} - {DB_HELP}.'
+    return out, None
 
 
 def clean_name(text):
     return re.sub(r'\s+', ' ', NAME_BAD.sub(' ', (text or '').replace('&', ' and '))).strip()[:40].strip()
 
 
-def parse(raw, projects, default_branch):
-    """CSV bytes -> ([{line, name, form, note}], error). form = the values the Add form would post (shared).
-    projects: rows with id / name; default_branch(url) -> branch name or None."""
+def parse(raw, projects, default_branch, token_for=None):
+    """CSV bytes -> ([{line, name, form, notes, error}], error). form = the values the Add form would post (shared).
+    projects: rows with id / name; default_branch(url, token) -> branch name or None;
+    token_for(url) -> (token, where it came from) or (None, None): a saved read-only token for that GitHub org."""
     try:
         text = raw.decode('utf-8-sig')
     except UnicodeDecodeError:
@@ -121,26 +170,41 @@ def parse(raw, projects, default_branch):
         if not any(got.values()):
             continue
         form = {'scope': 'shared', 'name': clean_name(got.get('name')), 'repo_paths': got.get('repo_paths', '')}
-        notes = []
-        url, user, pw = url_and_login(got.get('url'))
+        notes, problems = [], []
+        url, user, pw, lp = url_and_login(got.get('url'))
+        if lp and not got.get('username'):
+            problems.append(lp)
         form['base_url'] = got.get('base_url') or url or ''
         form['username'] = got.get('username') or user or ''
         form['password'] = got.get('password') or pw or ''
-        dbv = db_details(got.get('db'))
-        for f in ('db_host', 'db_port', 'db_name', 'db_user', 'db_password'):
+        dbv, dp = db_details(got.get('db'))
+        if dp and not got.get('db_host'):
+            problems.append(dp)
+        for f in _DB_FIELDS:
             form[f] = got.get(f) or dbv.get(f, '')
         if form['db_host'] and not form['db_port']:
             form['db_port'] = '3306'
         repo = got.get('repo_url', '')
         repo = repo.split()[0].rstrip('/') if repo else ''
         form['repo_url'] = repo
+        tok, src = got.get('repo_token') or '', None
+        if repo and not tok and token_for:
+            tok, src = token_for(repo)
         branch = got.get('repo_branch', '')
         if repo and not branch:
-            if repo not in branches:
-                branches[repo] = default_branch(repo)
-            branch = branches[repo] or ''
-            notes.append(f'branch {branch} (the repository\'s default)' if branch else
-                         'branch not found on GitHub (no access?): main is tried')
+            if repo not in branches:   # the token first; when it cannot read the repo, this server's own sign-in
+                b = default_branch(repo, tok or None)
+                if not b and tok:
+                    b2 = default_branch(repo, None)
+                    branches[repo] = (b2, None) if b2 else (None, tok)   # the token is kept only if it is not the problem
+                else:
+                    branches[repo] = (b, tok)
+            branch, tok = branches[repo][0] or '', branches[repo][1]
+            notes.append(f'branch {branch} (the repository\'s default: add a Branch column if staging runs another)' if branch
+                         else 'branch: the repository could not be read (no access?) - main is tried; add a Branch column')
+        if tok and src:
+            notes.append(f'GitHub token: the one saved on "{src}"')
+        form['repo_token'] = tok or ''
         form['repo_branch'] = branch
         pid = None
         for cand in (got.get('project'), got.get('name'), got.get('code')):
@@ -150,7 +214,23 @@ def parse(raw, projects, default_branch):
         form['project_id'] = str(pid) if pid else ''
         if got.get('project') and not pid:
             notes.append(f'project "{got["project"]}" not found: Any project')
-        rows.append({'line': n, 'name': form['name'] or '(no name)', 'form': form, 'notes': notes})
+        rows.append({'line': n, 'name': form['name'] or '(no name)', 'form': form, 'notes': notes,
+                     'error': ' '.join(problems) or None})
     if not rows:
         return [], 'The CSV has headings but no rows.'
     return rows, None
+
+
+def summary(f):
+    """What a row holds, for the result table: only values that cannot be a password (each matched a strict pattern)."""
+    parts = [f['base_url'] or 'no URL']
+    if f['username']:
+        parts.append(f'login {f["username"]}' + (' + password' if f['password'] else ', no password')
+                     if USER_RE.match(f['username']) else 'login set')
+    if f['db_host']:
+        safe = lambda v, rx: v if v and rx.match(v) else '?'
+        parts.append(f'database {safe(f["db_name"], IDENT_RE)} as {safe(f["db_user"], IDENT_RE)} on {safe(f["db_host"], HOST_RE)}'
+                     + (' + password' if f['db_password'] else ', no password'))
+    if f['repo_url']:
+        parts.append(f'code {f["repo_url"].rsplit("/", 1)[-1]}' + (f' ({f["repo_branch"]})' if f['repo_branch'] else ''))
+    return ' · '.join(parts)
