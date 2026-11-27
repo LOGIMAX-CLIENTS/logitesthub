@@ -61,7 +61,7 @@
           <input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn btn-sm btn-outline-secondary" title="Delete conversation">Delete</button></form>{% endif %}
       </div>
     </header>
-    {% if readonly %}<div class="as-banner as-ro">Viewing <b>{{ thread.created_by }}</b>'s conversation (read-only). Only the owner can send messages or save from it.</div>
+    {% if readonly %}<div class="as-banner as-ro">Viewing <b>{{ thread.created_by }}</b>'s conversation (read-only). {% if can_save %}Only the owner can send messages; as an admin you can still edit the draft and update / run its test case.{% else %}Only the owner can send messages or save from it.{% endif %}</div>
     {% elif not ai_ok %}<div class="as-banner">{{ ai_msg }}</div>{% endif %}
     {% if review_block %}<div class="as-banner" role="alert">⚠️ <b>Not the PM reviewer:</b> {{ review_block }} You can still write and run tests here.</div>{% endif %}
 
@@ -133,7 +133,7 @@
   });
 })();
 (function () {
-  var CSRF = {{ csrf|tojson }}, PID = {{ p.id }}, THREAD = {{ (thread.id if thread else none)|tojson }}, READONLY = {{ readonly|tojson }};
+  var CSRF = {{ csrf|tojson }}, PID = {{ p.id }}, THREAD = {{ (thread.id if thread else none)|tojson }}, READONLY = {{ readonly|tojson }}, CAN_SAVE = {{ can_save|tojson }};
   var TASK = {{ (thread.task_code if thread else none)|tojson }};   // PM task of a chat opened from PM's Test Assistant button
   var REVIEW_BLOCK = {{ (review_block is not none and review_block != '')|tojson }};   // signed in here as someone other than the PM reviewer
   var CASE_TC = {{ (thread_case.tc_no if thread_case else none)|tojson }};   // the test case this chat saved: Save updates it
@@ -295,7 +295,8 @@
     var bNew = el('button', 'btn btn-link btn-sm', 'Save as new test case'); bNew.type = 'button'; bNew.hidden = !CASE_TC;
     var note = el('span', 'small');
     acts.appendChild(bSave); acts.appendChild(bRun); acts.appendChild(bNew); acts.appendChild(note);
-    if (READONLY) { acts.hidden = true; hint.hidden = true; title.readOnly = true; steps.readOnly = true; folder.disabled = true; }
+    if (READONLY) hint.hidden = true;   // no messages to the assistant from someone else's chat
+    if (!CAN_SAVE) { acts.hidden = true; title.readOnly = true; steps.readOnly = true; folder.disabled = true; }
     var lbl = el('label', 'form-label small text-secondary mb-1', 'Module / sub-module');
     var sqlBox = sqlPlainBox(steps, title);
     [title, lbl, folder, sqlBox, steps, hint, acts].forEach(function (x) { card.appendChild(x); });
@@ -428,7 +429,7 @@
             if (live && !busy) { fix.textContent = 'Asking the assistant to fix it…'; ask(); }   // ran from this page: fix it by itself
           }
         }
-        if (!READONLY && j.case_id) {   // run the same test case again on the environment picked in "Run on"
+        if (CAN_SAVE && j.case_id) {   // run the same test case again on the environment picked in "Run on"
           var again = el('button', 'btn btn-sm btn-success align-self-start', '▶ Run again'); again.type = 'button';
           again.addEventListener('click', function () { rerun(j.case_id, again); });
           card.appendChild(again);

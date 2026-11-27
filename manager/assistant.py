@@ -543,7 +543,8 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
         thread = next((t for t in threads if t['id'] == tid), None)
         if tid and not thread and is_admin:   # an admin opening someone else's chat from a link
             thread = thread_or_404(pid, tid)
-        readonly = bool(thread and thread['created_by'] != me['username'])
+        readonly = bool(thread and thread['created_by'] != me['username'])   # someone else's chat: no messages from here
+        can_save = not readonly or is_admin   # admins may still update / run its test case
         users = [r['created_by'] for r in con().execute(
             'SELECT DISTINCT created_by FROM chat_threads WHERE project_id=? ORDER BY created_by', (pid,))] if is_admin else []
         folders = con().execute('SELECT * FROM folders WHERE project_id=? AND archived=0 ORDER BY sort, name', (pid,)).fetchall()
@@ -553,7 +554,8 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
         review_block = pmtasks.review_check(con(), me['username'], thread['task_code']) \
             if thread and thread['task_code'] and not readonly else None
         thread_case = con().execute('SELECT id, tc_no FROM cases WHERE id=?', (thread['case_id'],)).fetchone()             if thread and thread['case_id'] else None
-        return render_template('assistant.html', p=p, threads=threads, thread=thread, readonly=readonly, who=who, users=users,
+        return render_template('assistant.html', p=p, threads=threads, thread=thread, readonly=readonly, can_save=can_save,
+                               who=who, users=users,
                                elsewhere=elsewhere,
                                thread_case=thread_case, review_task=thread['task_code'] if thread else None, review_block=review_block,
                                msgs=messages_of(thread['id']) if thread else [], folders=folders,
@@ -869,7 +871,8 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
         p = project_or_404(pid)
         t = thread_or_404(pid, tid)
         me = current_user()
-        if t['created_by'] != me['username']:
+        owner = t['created_by'] == me['username']
+        if not owner and not settings.is_admin(me['role']):   # admins may save / run from anyone's chat
             abort(403)
         body = _payload()
         title = re.sub(r'\s+', ' ', str(body.get('title') or '')).strip()[:200]
@@ -905,7 +908,8 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
                 cid = db.add_case(c, pid, fid, title, content, me['username'])
             c.execute('UPDATE chat_threads SET case_id=? WHERE id=?', (cid, tid))
             import pmtasks   # a chat opened from a PM task links to that task; otherwise the user's active task
-            pmtasks.tag(c, cid, me['username'], 'assistant', t['task_code'] if t else None)
+            if owner or t['task_code']:   # an admin saving someone's chat: never tag it with the admin's own active task
+                pmtasks.tag(c, cid, me['username'], 'assistant', t['task_code'] if t else None)
             link_chat_usage(c, tid, cid)   # the chat's AI cost now counts for this test case
         case = con().execute('SELECT * FROM cases WHERE id=?', (cid,)).fetchone()
         run_id, note = None, ''
@@ -913,7 +917,8 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
             run_id, bud = start_case_run(case, body.get('env_id'))
             if not bud['ok']:
                 note = ' AI limit reached: AI steps are skipped, the other steps still run.'
-        add_message(tid, 'system', ('Updated' if own else 'Saved as') + f' TC-{case["tc_no"]}' + (' and started a run.' if run_id else '.') + note,
+        by = '' if owner else f' by {me["username"]}'
+        add_message(tid, 'system', ('Updated' if own else 'Saved as') + f' TC-{case["tc_no"]}{by}' + (' and started a run.' if run_id else '.') + note,
                     {'type': 'saved', 'case_id': cid, 'tc_no': case['tc_no'], 'run_id': run_id})
         return jsonify({'ok': True, 'case_id': cid, 'tc_no': case['tc_no'], 'run_id': run_id, 'note': note, 'updated': bool(own),
                         'case_url': url_for('case', cid=cid), 'run_url': url_for('case', cid=cid, run=run_id) if run_id else None})
@@ -926,7 +931,7 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
         import envs
         import settings
         project_or_404(pid)
-        thread_or_404(pid, tid)
+        t = thread_or_404(pid, tid)
         me = current_user()
         if not settings.can(con(), me['role'], 'runs.run'):
             return jsonify({'ok': False, 'error': 'Your role cannot run tests.'}), 403
@@ -945,7 +950,8 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
             if kept:
                 return jsonify({'ok': False, 'kept': cleanup.describe(kept)})
         run_id, _ = start_case_run(case, env['id'] if env else None, choice)
-        add_message(tid, 'system', f'Ran TC-{case["tc_no"]} again on {env["name"] if env else "the default environment"}.',
+        by = f' ({me["username"]})' if t['created_by'] != me['username'] else ''
+        add_message(tid, 'system', f'Ran TC-{case["tc_no"]} again{by} on {env["name"] if env else "the default environment"}.',
                     {'type': 'saved', 'case_id': case['id'], 'tc_no': case['tc_no'], 'run_id': run_id})
         return jsonify({'ok': True, 'run_id': run_id})
 
