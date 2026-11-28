@@ -61,7 +61,7 @@ def _save_shot(tid, data_url):
 
 
 RUN_REF = re.compile(r'^Run #(\d+) (?!PASSED\b)\w+')   # the "Fix this with the assistant" message of a run that did not pass
-MAX_LOG = 9000          # characters of a run's step log given to the AI
+MAX_LOG = 14000         # characters of a run's step log given to the AI
 
 
 def failed_run_brief(c, pid, text):
@@ -82,9 +82,15 @@ def failed_run_brief(c, pid, text):
     for s in steps:
         st = s.get('status') or '?'
         line = f"{s.get('n')} [{st}] {str(s.get('text') or '')[:240]}"
+        for w in [w for w in (s.get('warnings') or []) if str(w).startswith(('Page says', 'Server error'))][:2]:
+            line += f"\n   ! {str(w)[:200]}"   # a message the page showed after this step (e.g. "fill all mandatory fields")
         if st == 'failed':
             failed = failed or s
             line += f"\n   -> {str(s.get('error') or '')[:400]}"
+            if s.get('form'):   # every field of the screen (or its open popup) as the failed step left it, in screen order
+                pop = f" (popup: {s['form_popup']})" if s.get('form_popup') else ''
+                line += (f"\n   FORM ON SCREEN when it failed{pop}, in screen order (* = mandatory):\n"
+                         + '\n'.join(f'     {f}' for f in s['form'][:60]))
         lines.append(line)
     log = '\n'.join(lines)
     if len(log) > MAX_LOG:
@@ -99,6 +105,48 @@ def failed_run_brief(c, pid, text):
                 shot = {'media_type': 'image/png' if name.lower().endswith('.png') else 'image/jpeg',
                         'data': base64.b64encode(f.read()).decode()}
     return out, shot
+
+
+def repeated_failure(c, pid, text):
+    """A "Fix this" message whose failed step already failed the same way in 2+ earlier runs of that case ->
+    {'count', 'step', 'runs'}: the assistant must not guess it a fourth way. None otherwise."""
+    m = RUN_REF.match(text or '')
+    if not m:
+        return None
+    rid = int(m.group(1))
+    r = c.execute('SELECT r.case_id, r.fail_text FROM runs r JOIN cases cs ON cs.id=r.case_id WHERE r.id=? AND cs.project_id=?',
+                  (rid, pid)).fetchone()
+    if not r or not r['fail_text']:
+        return None
+    prev = c.execute("SELECT id FROM runs WHERE case_id=? AND status<>'PASSED' AND fail_text=? AND id<=? ORDER BY id",
+                     (r['case_id'], r['fail_text'], rid)).fetchall()
+    if len(prev) < 3:
+        return None
+    return {'count': len(prev), 'step': str(r['fail_text'])[:200], 'runs': [x['id'] for x in prev][-5:]}
+
+
+def rerun_block(c, tid, case, force=''):
+    """"Run again" from the chat: None when it may run, else {'kind', 'error'}. An app bug the assistant found waits for
+    the developer ('bug_fixed' overrides); a case not changed since its failed run fails the same way ('unchanged')."""
+    if force == 'bug_fixed':
+        return None
+    upd = case['updated_at'] or ''
+    for m in c.execute("SELECT data, at FROM chat_messages WHERE thread_id=? AND role='assistant' AND data LIKE ? "
+                       "ORDER BY id DESC LIMIT 1", (tid, '%"analysis": {%')).fetchall():
+        try:
+            an = (json.loads(m['data']) or {}).get('analysis') or {}
+        except ValueError:
+            an = {}
+        if an.get('verdict') == 'app_bug' and upd <= (m['at'] or ''):
+            return {'kind': 'app_bug', 'error': '🐞 This is an app bug, so the test waits for the developer\'s fix: '
+                    + str(an.get('root_cause') or '')[:300] + ' Run it again once the fix is on this environment.'}
+    if force == 'unchanged':
+        return None
+    last = c.execute('SELECT id, status, started_at FROM runs WHERE case_id=? ORDER BY id DESC LIMIT 1', (case['id'],)).fetchone()
+    if last and last['status'] not in ('PASSED', 'running', 'queued') and upd <= (last['started_at'] or ''):
+        return {'kind': 'unchanged', 'error': f'TC-{case["tc_no"]} has not changed since run #{last["id"]} {last["status"]}: '
+                'it will fail the same way. Ask the assistant to fix it first (Fix this with the assistant).'}
+    return None
 
 
 HISTORY = 14            # messages sent to the AI (latest)
@@ -663,6 +711,11 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
             if run_shot and len(shots_for_ai) < MAX_IMGS and os.environ.get('LTH_AI_PROVIDER') != 'claude-code':
                 shots_for_ai.append(run_shot)
                 hist[-1]['text'] += '\nThe last screenshot attached is the screen at the failed step.'
+        fixing = bool(RUN_REF.match(text or ''))   # a reply to a failed run: analysis first, no blind re-run
+        repeat = repeated_failure(con(), pid, text)
+        if repeat and hist and hist[-1]['role'] == 'user':
+            hist[-1]['text'] += (f"\n\nREPEATED FAILURE: step \"{repeat['step']}\" has now failed {repeat['count']} times "
+                                 f"(runs #{', #'.join(str(x) for x in repeat['runs'])}). The earlier fixes did not work.")
         import coderepo
         import envs
         key = f"{me['username']}:{str(body.get('req') or '')[:40]}"
@@ -716,6 +769,10 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
         lint = draftlint.check(draft)
         for _round in range(2):   # auto-heal: what the database / the code says goes back to the assistant, up to 2 times
             notes = []
+            an = data.get('analysis') if isinstance(data.get('analysis'), dict) else None
+            if fixing and not (an and str(an.get('root_cause') or '').strip() and an.get('evidence')):
+                notes.append('ANALYSIS MISSING: this answers a failed run. Fill "analysis" (verdict, root_cause, evidence '
+                             'with where each comes from, changed_steps, may_still_fail, confident) before any draft.')
             if checks and not checks[-1]['ok']:
                 notes.append(preflight_note(checks, run_env['name']))
             if lint:
@@ -727,13 +784,13 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
                     for e in bad_el[:8]) +
                     '. Take the real id / class from the view / JS of that screen (in a selector the runner reads), '
                     'or use the visible label without a hint.')
-            if not notes or not draft:
+            if not notes:
                 break
             set_progress(key, 'Fixing the draft: ' + ' and '.join(w for w, bad in [
                 ('a database check failed', checks and not checks[-1]['ok']), ('a field id is not in the code', bad_el),
                 ('a step checks a guessed id', lint)] if bad))
-            hist2 = hist + [{'role': 'assistant', 'text': (data.get('reply') or '') + '\nDRAFT: ' + draft.get('title', '') + '\n' +
-                             draft_to_text(draft)}, {'role': 'user', 'text': '\n'.join(notes)}]
+            said = (data.get('reply') or '') + ('\nDRAFT: ' + draft.get('title', '') + '\n' + draft_to_text(draft) if draft else '')
+            hist2 = hist + [{'role': 'assistant', 'text': said}, {'role': 'user', 'text': '\n'.join(notes)}]
             data2, usage2, model2, err2 = ask_ai(hist2, context, code, key)
             if err2 or not data2:
                 break
@@ -743,6 +800,12 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
             hist = hist2
             checks, elems = check(draft)
             lint = draftlint.check(draft)
+        analysis = data.get('analysis') if isinstance(data.get('analysis'), dict) else None
+        if not fixing:
+            analysis = None
+        elif analysis and (analysis.get('verdict') in ('app_bug', 'not_sure') or analysis.get('confident') is False):
+            # an app bug waits for the developer; an unproven cause is asked about - neither is sent to run as a guess
+            draft, checks, elems, lint = None, [], [], []
         PROGRESS.pop(key, None)
         u = data.get('understanding') or {}
         out = {'preflight': {'env': run_env['name'] if run_env else None, 'checks': checks} if checks else None,
@@ -751,6 +814,7 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
                'readiness': data.get('readiness') if isinstance(data.get('readiness'), dict) else None,
                'understanding': u, 'questions': data.get('questions') or [], 'choices': data.get('choices') or [], 'draft': draft,
                'lesson': data.get('lesson') if isinstance(data.get('lesson'), dict) else None,
+               'analysis': analysis, 'repeat': repeat,
                'draft_text': draft_to_text(draft) if draft else '',
                'folder_id': match_folder(con(), pid, u.get('module'), u.get('sub_module'))}
         if out['lesson']:   # saved by itself (nobody has to remember Save, testing never waits); the admin reviews it later
@@ -937,6 +1001,9 @@ def register(app, con, login_required, current_user, project_or_404, start_case_
         case = con().execute('SELECT * FROM cases WHERE id=? AND project_id=?', (body.get('case_id'), pid)).fetchone()
         if not case:
             return jsonify({'ok': False, 'error': 'Test case not found.'}), 404
+        block = rerun_block(con(), tid, case, str(body.get('force') or ''))
+        if block:   # an app bug waits for the developer; an unchanged failed case is fixed before it runs again
+            return jsonify({'ok': False, block['kind']: True, 'error': block['error']})
         if con().execute("SELECT 1 FROM runs WHERE case_id=? AND status IN ('running', 'queued')", (case['id'],)).fetchone():
             return jsonify({'ok': False, 'error': f'TC-{case["tc_no"]} is already running.'})
         env = envs.get(con(), body.get('env_id'), me)
