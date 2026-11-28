@@ -61,7 +61,7 @@ def _save_shot(tid, data_url):
 
 
 RUN_REF = re.compile(r'^Run #(\d+) (?!PASSED\b)\w+')   # the "Fix this with the assistant" message of a run that did not pass
-MAX_LOG = 9000          # characters of a run's step log given to the AI
+MAX_LOG = 14000         # characters of a run's step log given to the AI
 
 
 def failed_run_brief(c, pid, text):
@@ -82,9 +82,15 @@ def failed_run_brief(c, pid, text):
     for s in steps:
         st = s.get('status') or '?'
         line = f"{s.get('n')} [{st}] {str(s.get('text') or '')[:240]}"
+        for w in [w for w in (s.get('warnings') or []) if str(w).startswith(('Page says', 'Server error'))][:2]:
+            line += f"\n   ! {str(w)[:200]}"   # a message the page showed after this step (e.g. "fill all mandatory fields")
         if st == 'failed':
             failed = failed or s
             line += f"\n   -> {str(s.get('error') or '')[:400]}"
+            if s.get('form'):   # every field of the screen (or its open popup) as the failed step left it, in screen order
+                pop = f" (popup: {s['form_popup']})" if s.get('form_popup') else ''
+                line += (f"\n   FORM ON SCREEN when it failed{pop}, in screen order (* = mandatory):\n"
+                         + '\n'.join(f'     {f}' for f in s['form'][:60]))
         lines.append(line)
     log = '\n'.join(lines)
     if len(log) > MAX_LOG:
