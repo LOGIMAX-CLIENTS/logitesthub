@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright');
 const { loadVars, fill, makeMasker } = require('./lib/vars');
-const { parseStep, runAction, uiRuleCheck } = require('./lib/actions');
+const { parseStep, runAction, uiRuleCheck, formSnapshot } = require('./lib/actions');
 const { writeReport } = require('./lib/report');
 const { parseCase } = require('./lib/testcase');
 const { showIntro } = require('./lib/intro');
@@ -280,6 +280,10 @@ function parseArgs(argv) {
       cleanupFailed = true;
       failed = wasFailed;
       r.error = `Clean-up failed, test data may be left behind: ${r.error}`;
+    }
+    if (r.status === 'failed' && !cleanup) {   // the whole form as it stood, so a fix sees every empty mandatory field at once
+      const f = await formSnapshot(page);
+      if (f.fields.length) { r.form = f.fields.map(x => mask(x)); if (f.popup) r.form_popup = mask(f.popup); }
     }
     r.ms = Date.now() - t0;
     r.shot = `step-${String(r.n).padStart(2, '0')}.png`;
