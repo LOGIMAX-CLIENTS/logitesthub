@@ -331,12 +331,18 @@
     return card;
   }
 
-  function rerun(caseId, btn) {
+  function rerun(caseId, btn, force) {
     var envSel = document.getElementById('asEnv');
     var opt = envSel ? envSel.options[envSel.selectedIndex] : null;
     var envId = envSel ? envSel.value : null;
     btn.disabled = true;
-    post(URL_BASE + '/' + THREAD + '/rerun', { case_id: caseId, env_id: envId }).then(function (j) {
+    post(URL_BASE + '/' + THREAD + '/rerun', { case_id: caseId, env_id: envId, force: force || '' }).then(function (j) {
+      if (j.unchanged) {   // nothing changed since the failed run: it would fail the same way
+        btn.disabled = false;
+        if (confirm(j.error + '\n\nRun it anyway (e.g. the site or the data was fixed)?')) rerun(caseId, btn, 'unchanged');
+        return;
+      }
+      if (j.app_bug) { btn.disabled = false; bugWait = bugWait || j.error; updateAgain(); systemMessage({ text: j.error }); return; }
       if (j.need_db) {   // database steps but no database there: offer the environment that has one
         var withDb = envSel ? [].filter.call(envSel.options, function (o) { return o.getAttribute('data-db') === '1'; }) : [];
         if (withDb.length && confirm('This test has database steps, but "' + (opt ? opt.text : '') + '" has no database.\n\nRun it on "' + withDb[0].text + '" instead?')) {
@@ -361,6 +367,30 @@
   // chat opened from PM's Test Assistant button: a run's link goes to PM only by the reviewer's click - a passed run, or a
   // failure the assistant found to be an app bug (its lesson kind). A test-side failure is fixed and run again instead.
   var lastRun = null, bugFor = {}, bugShow = {};
+  var bugWait = null;   // the assistant's last analysis said "app bug": Run again stays hidden until the developer's fix
+  function updateAgain() {
+    document.querySelectorAll('.as-again').forEach(function (b) { b.hidden = !!bugWait; });
+    document.querySelectorAll('.as-bugwait').forEach(function (b) { b.hidden = !bugWait; });
+  }
+
+  // the assistant's analysis of a failed run, shown before any new run: cause, proof, what changed, what may still fail
+  var VERDICT = { test_issue: '🧪 Test issue', app_bug: '🐞 Development bug', environment: '🌐 Environment', flow_doc: '📘 Flow doc', not_sure: '🤔 Not sure yet' };
+  function analysisCard(a, rep) {
+    var card = el('div', 'as-card as-ready');
+    card.appendChild(el('div', 'as-card-title', '🔎 Analysis · ' + (VERDICT[a.verdict] || a.verdict) +
+      (a.confident ? '' : ' · not proven yet')));
+    if (rep) card.appendChild(el('div', 'small t-fail mb-1', '⚠️ This step has failed ' + rep.count + ' times (runs #' + rep.runs.join(', #') + ').'));
+    var dl = el('dl', 'as-dl');
+    [['Cause', a.root_cause], ['Proof', a.evidence], ['Changed', a.changed_steps], ['May still fail', a.may_still_fail]].forEach(function (r) {
+      var v = Array.isArray(r[1]) ? r[1].join(' · ') : (r[1] || '');
+      if (!v) return;
+      dl.appendChild(el('dt', null, r[0])); dl.appendChild(el('dd', r[0] === 'May still fail' ? 't-fail' : null, v));
+    });
+    card.appendChild(dl);
+    if (a.verdict === 'app_bug') card.appendChild(el('div', 'small text-secondary', 'The test is right: it runs again after the developer\'s fix.'));
+    else if (!a.confident || a.verdict === 'not_sure') card.appendChild(el('div', 'small text-secondary', 'Not sent to run: answer the questions first.'));
+    return card;
+  }
   function pmBox(card, rid, st, pm) {
     // hidden goes on a plain wrapper: Bootstrap's .d-flex is display:flex !important and would keep the row visible
     var line = el('div'), row = el('div', 'd-flex flex-wrap align-items-center gap-2'); line.appendChild(row);
@@ -430,9 +460,15 @@
           }
         }
         if (CAN_SAVE && j.case_id) {   // run the same test case again on the environment picked in "Run on"
-          var again = el('button', 'btn btn-sm btn-success align-self-start', '▶ Run again'); again.type = 'button';
+          var again = el('button', 'btn btn-sm btn-success align-self-start as-again', '▶ Run again'); again.type = 'button';
           again.addEventListener('click', function () { rerun(j.case_id, again); });
           card.appendChild(again);
+          // an app bug the assistant found: no "Run again" until the developer's fix (then this small link)
+          var wait = el('div', 'small text-secondary as-bugwait', '🐞 App bug: this test runs again after the developer fixes it. ');
+          var fixed = el('a', null, 'Developer fixed it? Run again'); fixed.href = '#';
+          fixed.addEventListener('click', function (e) { e.preventDefault(); rerun(j.case_id, again, 'bug_fixed'); bugWait = null; updateAgain(); });
+          wait.appendChild(fixed); card.appendChild(wait);
+          updateAgain();
         }
         if (TASK && j.pm && j.pm.via === 'assistant') pmBox(card, rid, st, j.pm);
         scrollDown();
@@ -518,6 +554,11 @@
       var ul = el('ul', 'mb-0'); d.questions.forEach(function (x) { ul.appendChild(el('li', null, x)); }); q.appendChild(ul); row.appendChild(q);
     }
     if (d.choices && d.choices.length) row.appendChild(choicesCard(d.choices));
+    if (d.analysis) {   // a reply to a failed run: its analysis, and whether Run again waits for a developer
+      row.appendChild(analysisCard(d.analysis, d.repeat));
+      bugWait = d.analysis.verdict === 'app_bug' ? (d.analysis.root_cause || 'app bug') : null;
+      updateAgain();
+    }
     if (d.lesson) row.appendChild(lessonCard(d, m.id));
     if (d.brain_gap && d.brain_gap_saved) {   // the knowledge brain lacked this: listed for the brain team
       var g = el('div', 'as-card as-lesson');
