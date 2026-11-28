@@ -423,7 +423,12 @@ def explain_step_error(text, error, status='failed'):
     if 'URL' in e and 'contain' in e:
         return f'The page address was not the expected one. {e}'
     if 'timeout' in e.lower():
-        return 'The page did not respond in time (waited 10 seconds) for this step.'
+        ms = re.search(r'(\d+)\s*ms', e, re.I)   # the real wait ("Timeout 30000ms exceeded"), not a fixed 10 s
+        waited = f'{int(ms.group(1)) // 1000} seconds' if ms else 'a while'
+        if 'click' in e.lower():
+            return (f'The element to click stayed hidden or covered (waited {waited}): a list or popup closed before the '
+                    'click, or something lay on top of it.')
+        return f'The page did not respond in time (waited {waited}) for this step.'
     if 'NaN' in e or 'undefined' in e:
         return f'The page shows an invalid value: {e}'
     return e or 'This step failed.'
