@@ -443,6 +443,9 @@ def run_failure(steps):
     reason = explain_step_error(s.get('text'), s.get('error') or s.get('ai'), s.get('status'))
     if s.get('server_error'):   # the app's server failed behind the page (500 / Database Error / PHP Error): that is the cause
         reason = f'The application server failed ({s["server_error"]}). So: {reason}'
+    empty = [re.sub(r'^\* |\s*\(.*$|\s*=.*$', '', f) for f in (s.get('form') or []) if 'MANDATORY EMPTY' in f]
+    if empty:   # mandatory fields the test never filled are the usual cause of a Save that did nothing
+        reason = f'{reason} Mandatory fields still empty on the screen: {", ".join(empty[:8])}.'
     return {'step': s.get('n'), 'text': (s.get('text') or '')[:500], 'reason': reason[:500]}
 
 
